@@ -329,7 +329,6 @@ export function useVectorDocument(
   const [selectedPathKeys, setSelectedPathKeys] = useState<ReadonlySet<string>>(new Set());
 
   const abortControllerRef = useRef<AbortController | null>(null);
-  const requestedForRef = useRef<string | null>(null);
 
   useEffect(() => {
     return () => abortControllerRef.current?.abort();
@@ -446,12 +445,20 @@ export function useVectorDocument(
     });
   }, [projectId, imageId, paletteId, savedProjectId]);
 
+  // Bug real encontrado por QA (M2.1-S07, fix round 2): este efecto tenía un guard por
+  // "key" (`requestedForRef`) pensado para no disparar `load()` dos veces -- pero bajo React
+  // 18 StrictMode (SOLO dev) ese guard rompe la carga por completo. StrictMode invoca este
+  // efecto dos veces de forma sincrónica (mount → cleanup → mount) en el mismo commit: la
+  // primera invocación llama a `load()` (arranca el fetch, status pasa a "loading"), el
+  // cleanup del efecto de arriba (`abortControllerRef.current?.abort()`) aborta ESE fetch
+  // antes de que resuelva, y la segunda invocación encontraba el guard ya "consumido" (la key
+  // no cambió) y nunca reintentaba `load()` -- el Workspace quedaba en "Cargando..." para
+  // siempre. En producción (sin StrictMode) nunca se manifestaba. `load()` ya es seguro de
+  // llamar más de una vez (cancela su propio fetch anterior vía `abortControllerRef` antes de
+  // arrancar uno nuevo), así que el guard era puramente defensivo y nunca necesario: sin él,
+  // la segunda invocación de StrictMode simplemente vuelve a lanzar `load()` con un
+  // AbortController fresco, que esta vez sí completa.
   useEffect(() => {
-    const key = `${projectId}:${imageId}:${paletteId ?? ""}:${savedProjectId ?? ""}`;
-    if (requestedForRef.current === key) {
-      return;
-    }
-    requestedForRef.current = key;
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, imageId, paletteId, savedProjectId]);

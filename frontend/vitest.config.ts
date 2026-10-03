@@ -25,6 +25,11 @@ export default defineConfig({
     // fallar por timeout tests sin relación alguna con Konva (ver
     // comentario de `testTimeout`). Limitar el techo de threads reduce el
     // pico de contención sin serializar toda la suite.
-    maxWorkers: 8,
+    //
+    // Revisado en M2.1-S07 fix round 2 (QA reportó fallos intermitentes con
+    // paralelismo default incluso con el tope de 8 de arriba; 307/307
+    // estables solo con --maxWorkers=2 pasado a mano): se baja el tope acá
+    // para que `npm test` sea estable SIN tener que pasar la flag a mano.
+    maxWorkers: 2,
   },
 });

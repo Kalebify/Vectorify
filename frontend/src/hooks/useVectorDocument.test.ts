@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { useVectorDocument } from "./useVectorDocument";
 import type { VectorDocumentLayerResponse } from "../types/vectorDocument";
@@ -130,6 +131,68 @@ describe("useVectorDocument — proyecto multicolor (caso principal)", () => {
     });
     expect(result.current.document?.layers[0].svgUrl).toBe(`http://localhost:5080/vectors/${VECTOR_A_ID}`);
     expect(result.current.visibility).toEqual({ [GROUP_A_ID]: true, [GROUP_B_ID]: true });
+  });
+});
+
+/**
+ * A diferencia de `stubFetchSequence` (resuelve síncrono, nunca mira `init.signal`), este mock
+ * resuelve en un macrotask (`setTimeout`) y rechaza con un `AbortError` real si el signal se
+ * aborta antes de eso -- imprescindible para reproducir el bug de StrictMode de abajo: el
+ * doble-invoke de efectos de React es 100% SINCRÓNICO (corre antes de que cualquier microtask
+ * tenga chance de correr), así que un mock que resuelve via `Promise.resolve()` (microtask)
+ * nunca le da tiempo al `abort()` de la limpieza de StrictMode a "ganarle" a la respuesta --
+ * el bug nunca se manifestaría aunque el código tuviera el guard roto. Mismo criterio que un
+ * `fetch` real contra la red (SIEMPRE asíncrono de verdad, nunca síncrono).
+ */
+function stubAbortAwareFetchSequence(handlers: Array<(url: string) => Response>) {
+  const fetch = vi.fn((input: string | URL, init?: RequestInit) => {
+    const url = String(input);
+    return new Promise<Response>((resolve, reject) => {
+      const signal = init?.signal;
+      if (signal?.aborted) {
+        reject(new DOMException("La solicitud fue cancelada.", "AbortError"));
+        return;
+      }
+      const onAbort = () => reject(new DOMException("La solicitud fue cancelada.", "AbortError"));
+      signal?.addEventListener("abort", onAbort);
+      setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        for (const handler of handlers) {
+          const result = handler(url);
+          if (result) {
+            resolve(result);
+            return;
+          }
+        }
+        reject(new Error(`Unhandled fetch: ${url}`));
+      }, 0);
+    });
+  });
+  vi.stubGlobal("fetch", fetch);
+  return fetch;
+}
+
+describe("useVectorDocument — React StrictMode (M2.1-S07, fix round 2)", () => {
+  it("bajo StrictMode (doble-invoke de efectos, dev únicamente) igual llega a 'ready' -- nunca se queda en 'loading' para siempre", async () => {
+    // Bug real reportado por QA: en Vite dev (StrictMode activo en main.tsx), tras confirmar
+    // paleta y generar capas, el Workspace quedaba indefinidamente en "Cargando...". El
+    // doble-invoke SINCRÓNICO de efectos de StrictMode (mount -> cleanup -> mount, todo antes
+    // de que cualquier promesa resuelva) abortaba el fetch que arrancó la primera invocación, y
+    // el guard viejo (`requestedForRef`) impedía que la segunda invocación reintentara --
+    // `status` quedaba en "loading" para siempre. Con `stubAbortAwareFetchSequence` (abajo) este
+    // test reproduce la carrera real: FALLA (timeout) con el guard viejo, pasa sin él.
+    stubAbortAwareFetchSequence([
+      (url) => (url.includes("/layers/consolidated") ? jsonResponse(consolidatedResponse()) : undefined!),
+      (url) => (/\/layers$/.test(url) ? jsonResponse(layerSetResponse()) : undefined!),
+      (url) => (url.endsWith(`/color-palette/${PALETTE_ID}`) ? jsonResponse(paletteResponse()) : undefined!),
+    ]);
+
+    const { result } = renderHook(() => useVectorDocument(PROJECT_ID, IMAGE_ID, PALETTE_ID), {
+      wrapper: StrictMode,
+    });
+
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.document?.layers).toHaveLength(2);
   });
 });
 

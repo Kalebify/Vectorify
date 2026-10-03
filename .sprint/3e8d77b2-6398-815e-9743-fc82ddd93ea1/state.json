@@ -3,18 +3,19 @@
   "card_url": "https://app.notion.com/p/3e8d77b26398815e9743fc82ddd93ea1",
   "title": "M2.1-S07 · Layers + paleta interactiva del Editor",
   "stack": "Frontend, Vector, Laser -- persistencia real de order/visible/locked (nuevo sidecar backend recomendado, patron ManufacturingOperationService)",
-  "branch": "sprint/3e8d77b2-layers-fix-rename-operation",
+  "branch": "sprint/3e8d77b2-s07-strictmode-loading-fix",
   "column": "Done",
   "phase": "review",
-  "fix_rounds": 1,
+  "fix_rounds": 2,
   "preview_url": null,
-  "pr_url": "https://github.com/Kalebify/Vectorify/pull/31",
+  "pr_url": "https://github.com/Kalebify/Vectorify/pull/41",
   "started_at": "2026-09-30T00:00:00Z",
   "exceptions": [
     "Corrida en modo autonomo dentro del backlog MVP2.1 (mismo criterio de MVP2).",
     "Persistencia real de order/visible/locked explicitamente diferida por M2.1-S03 hasta esta tarjeta.",
     "Undo/Redo interpretados como NO requeridos como pila dedicada (quedaron como placeholders deshabilitados en M2.1-S06) -- 'cuando corresponda' se resuelve con reversion manual via la UI ya existente.",
     "FIX ROUND 1 (bloqueada por el usuario tras prueba real con 5 capas): Rename y cambio de operacion CUT/ENGRAVE/IGNORE no estaban conectados en el Workspace (EditorLayersPanel/InspectorPanel/PaletteBar solo mostraban texto de lectura), pese a estar listados en el 'Comportamiento' del spec original y a que IMPL.md original afirmaba incorrectamente 'reusar tal cual'. Los endpoints YA existian (M2-S01 rename, M2-S07/MVP2 useManufacturingOperations) -- faltaba solo la UI de edicion en los paneles nuevos del Workspace. Cambio de operacion: resuelto con solo wiring (useManufacturingOperations). Rename: wiring solo no alcanzaba -- ColorPaletteService.RenameAsync rechaza con 409 palette_confirmed, gate siempre activa en el Workspace.",
-    "FIX ROUND 1, PARTE 2 (decision confirmada con el usuario via AskUserQuestion: Camino B sobre Camino A): nombre editable del Workspace movido al sidecar LayerLayout (Name nullable en LayerLayoutEntry, endpoint POST .../layers/{groupId}/rename nuevo), sin tocar la gate de confirmacion de ColorPaletteService (que sigue protegiendo la inmutabilidad de la deteccion de color). Verificado de punta a punta con un test de integracion HTTP real."
+    "FIX ROUND 1, PARTE 2 (decision confirmada con el usuario via AskUserQuestion: Camino B sobre Camino A): nombre editable del Workspace movido al sidecar LayerLayout (Name nullable en LayerLayoutEntry, endpoint POST .../layers/{groupId}/rename nuevo), sin tocar la gate de confirmacion de ColorPaletteService (que sigue protegiendo la inmutabilidad de la deteccion de color). Verificado de punta a punta con un test de integracion HTTP real.",
+    "FIX ROUND 2 (bloqueada por QA del usuario, comentario de Vite dev): el Workspace quedaba indefinidamente en 'Cargando...' en modo dev de Vite (nunca en produccion). Causa raiz: React StrictMode (solo dev) duplica efectos sincronicamente al montar, y un guard (requestedForRef) en useVectorDocument.ts impedia que la segunda invocacion reintentara el fetch que la limpieza del primer efecto ya habia abortado. Eliminado el guard (innecesario, load() ya es seguro de llamar mas de una vez). Diagnostico confirmado reproduciendo el bug con un test real (fetch mock que respeta AbortSignal via macrotask) -- el primer intento de test con mock sincrono daba falso positivo. Ademas se bajo maxWorkers de vitest de 8 a 2 (valor que QA confirmo estable) para la flakiness intermitente reportada en npm test."
   ]
 }
