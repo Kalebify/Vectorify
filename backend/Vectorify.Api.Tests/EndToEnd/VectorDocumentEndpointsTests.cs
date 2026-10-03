@@ -192,6 +192,50 @@ public sealed class VectorDocumentEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Save_SecondSave_PreservesEditsMadeViaPatchSinceTheFirstSave_NeverRevertsToTheClassicSidecars()
+    {
+        // Bug real encontrado en revisión (M2.2-S05, ronda de fix 2): una vez que el frontend
+        // hace el cutover post-Save, los sidecars clásicos quedan CONGELADOS desde el primer
+        // Save -- el frontend ya nunca vuelve a escribirles. Antes de este fix, un segundo Save
+        // real releía esos sidecars congelados y revertía en silencio cualquier edición hecha
+        // vía PATCH v2. Este test reproduce exactamente ese escenario.
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        var layerId = classic.Layers[0].GroupId;
+
+        var firstSave = await client.PostAsJsonAsync("/api/v2/workspaces/save", new VectorDocumentSaveRequest(
+            null, "Proyecto con PATCH entre saves", classic.ProjectId, classic.ImageId, classic.PaletteId, classic.PaletteVersion, null));
+        var firstBody = await firstSave.Content.ReadFromJsonAsync<VectorDocumentSaveResponse>();
+
+        // Edición post-Save vía PATCH v2 (cutover, ronda de fix 1) -- NUNCA toca los sidecars
+        // clásicos (LayerLayout/ManufacturingOperation), que siguen reflejando el estado del
+        // primer Save.
+        var patchResponse = await client.PatchAsJsonAsync(
+            $"/api/v2/projects/{firstBody!.ProjectId}/layers/{layerId}",
+            new UpdateLayerRequest("Renombrado vía PATCH", null, false, true, "engrave"));
+        Assert.Equal(HttpStatusCode.OK, patchResponse.StatusCode);
+
+        // Segundo Save del MISMO Workspace -- antes de este fix, releía los sidecars clásicos
+        // (que nunca se tocaron) y la V2 resultante hubiera vuelto a mostrar el nombre/visible/
+        // locked/operación de ANTES del PATCH.
+        var secondSave = await client.PostAsJsonAsync("/api/v2/workspaces/save", new VectorDocumentSaveRequest(
+            firstBody.ProjectId, null, classic.ProjectId, classic.ImageId, classic.PaletteId, classic.PaletteVersion, null));
+        Assert.Equal(HttpStatusCode.OK, secondSave.StatusCode);
+
+        var document = await client.GetFromJsonAsync<VectorDocumentResponse>($"/api/v2/projects/{firstBody.ProjectId}/document");
+        Assert.Equal(2, document!.VersionNumber);
+        var layer = Assert.Single(document.Layers);
+        Assert.Equal("Renombrado vía PATCH", layer.Name);
+        Assert.False(layer.Visible);
+        Assert.True(layer.Locked);
+        Assert.Equal("engrave", layer.ManufacturingOperation);
+    }
+
+    [Fact]
     public async Task Save_WithDimensionId_UsesTheAppliedPhysicalDimensions()
     {
         await using var pythonServer = await FakePythonPreprocessServer.StartAsync(

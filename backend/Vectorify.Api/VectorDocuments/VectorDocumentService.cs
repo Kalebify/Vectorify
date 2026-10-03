@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Vectorify.Api.Assets;
 using Vectorify.Api.ColorPalette;
 using Vectorify.Api.Contracts;
+using Vectorify.Api.Data;
 using Vectorify.Api.Dimensioning;
 using Vectorify.Api.LayerLayout;
 using Vectorify.Api.ManufacturingOperations;
@@ -151,6 +152,21 @@ public sealed class VectorDocumentService : IVectorDocumentService
         var operationByGroupId = (operationsCurrent?.Assignments?.Assignments ?? Array.Empty<ManufacturingOperationAssignment>())
             .ToDictionary(a => a.GroupId, a => a.Operation);
 
+        // Bug real encontrado en revisión (M2.2-S05, ronda de fix 2): una vez que el frontend
+        // hace el cutover post-Save (ronda de fix 1) y empieza a mandar PATCH v2 directo contra
+        // Data.Layer, los sidecars clásicos (layoutCurrent/operationsCurrent de arriba) quedan
+        // CONGELADOS desde el primer Save -- el frontend ya nunca vuelve a escribirles. Sin
+        // esto, un segundo Save real leería esos valores congelados y "revertiría" en silencio
+        // cualquier edición hecha vía PATCH desde el primer Save. La versión YA PERSISTIDA de
+        // cada layer (si existe) es la fuente autoritativa real para
+        // Name/Order/Visible/Locked/ManufacturingOperation en un Save subsiguiente -- los
+        // sidecars clásicos solo se usan como fallback para un layer que todavía nunca se
+        // guardó (primer Save del proyecto, o un layer nuevo que el layer set clásico generó
+        // después del último Save).
+        var currentLayersByGroupId = (await _repository.FindCurrentDocumentAsync(projectId, ownerId, cancellationToken))
+            ?.Version.Layers.ToDictionary(l => l.GroupId)
+            ?? new Dictionary<Guid, Layer>();
+
         double widthMm;
         double heightMm;
         if (request.DimensionId is not null)
@@ -178,8 +194,13 @@ public sealed class VectorDocumentService : IVectorDocumentService
 
         // Orden de layout vigente (order/visible/locked/name) resuelto de a uno -- mismo
         // criterio que ConsolidatedVectorLayerEndpoints -- usado acá además para fijar el orden
-        // de iteración (y de Order/Order de paleta) de las capas a persistir.
-        var orderedLayers = layerSet.Layers.OrderBy(layer => layoutByGroupId[layer.GroupId].Order).ToList();
+        // de iteración (y de Order/Order de paleta) de las capas a persistir. Preferí el Order
+        // YA PERSISTIDO (ver comentario de arriba) sobre el del sidecar clásico cuando exista.
+        var orderedLayers = layerSet.Layers
+            .OrderBy(layer => currentLayersByGroupId.TryGetValue(layer.GroupId, out var currentLayer)
+                ? currentLayer.Order
+                : layoutByGroupId[layer.GroupId].Order)
+            .ToList();
 
         var layerSnapshots = new List<LayerSnapshot>(orderedLayers.Count);
         var colorOrder = 0;
@@ -229,19 +250,45 @@ public sealed class VectorDocumentService : IVectorDocumentService
                 return new VectorDocumentResult.UpstreamError(code, message);
             }
 
-            var layout = layoutByGroupId[layer.GroupId];
             groupsById.TryGetValue(layer.GroupId, out var group);
             var isBackground = group?.IsExcluded ?? false;
-            var operation = operationByGroupId.TryGetValue(layer.GroupId, out var kind)
-                ? (ManufacturingOperationKind?)kind
-                : null;
+
+            string name;
+            int order;
+            bool visible;
+            bool locked;
+            ManufacturingOperationKind? operation;
+            if (currentLayersByGroupId.TryGetValue(layer.GroupId, out var persistedLayer))
+            {
+                // Ya existe una fila persistida para este layer -- fuente autoritativa real,
+                // puede reflejar ediciones hechas vía PATCH v2 que los sidecars clásicos ya no
+                // ven (ver comentario de arriba sobre currentLayersByGroupId).
+                name = persistedLayer.Name;
+                order = persistedLayer.Order;
+                visible = persistedLayer.Visible;
+                locked = persistedLayer.Locked;
+                operation = persistedLayer.ManufacturingOperation;
+            }
+            else
+            {
+                // Layer nunca guardado antes -- usa el estado clásico vigente, mismo
+                // comportamiento que esta tarjeta tenía antes de este fix.
+                var layout = layoutByGroupId[layer.GroupId];
+                name = layout.Name ?? layer.Name;
+                order = layout.Order;
+                visible = layout.Visible;
+                locked = layout.Locked;
+                operation = operationByGroupId.TryGetValue(layer.GroupId, out var kind)
+                    ? (ManufacturingOperationKind?)kind
+                    : null;
+            }
 
             layerSnapshots.Add(new LayerSnapshot(
                 LayerId: layer.GroupId,
-                Name: layout.Name ?? layer.Name,
-                Order: layout.Order,
-                Visible: layout.Visible,
-                Locked: layout.Locked,
+                Name: name,
+                Order: order,
+                Visible: visible,
+                Locked: locked,
                 ManufacturingOperation: operation,
                 SvgAssetId: assetReady.Record.Id,
                 Color: new PaletteColorSnapshot(layer.ColorHex, layer.AreaPercent, isBackground, colorOrder),
