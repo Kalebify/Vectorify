@@ -8,7 +8,7 @@
   "phase": "review",
   "fix_rounds": 1,
   "preview_url": null,
-  "pr_url": "PENDING",
+  "pr_url": "https://github.com/Kalebify/Vectorify/pull/38",
   "started_at": "2026-10-01T00:00:00Z",
   "exceptions": [
     "Corrida en modo autonomo dentro del backlog MVP2.2 (confirmado explicitamente por el usuario para las 10 tarjetas del milestone).",
