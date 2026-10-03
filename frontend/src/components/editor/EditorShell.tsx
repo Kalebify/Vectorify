@@ -102,12 +102,14 @@ export function EditorShell({
   // `LayersPanel.tsx` (flujo clásico) para ofrecer la asignación real, ver
   // IMPL.md "Ronda de fix 1". `paletteId` viene confirmado por props (misma
   // precondición que abre el Workspace); `layerSetId` recién existe una vez
-  // que el documento cargó.
+  // que el documento cargó. `savedProjectId` (M2.2-S05, ronda de fix 1): con
+  // un Project.Id v2 activo, el hook bifurca a PATCH v2 (Data.Layer) en vez
+  // del sidecar clásico -- ver docstring de `useManufacturingOperations`.
   const {
     operations: manufacturingOperations,
     mutatingGroupId: manufacturingMutatingGroupId,
     assign: assignManufacturingOperation,
-  } = useManufacturingOperations(projectId, imageId, paletteId, document?.layerSetId ?? null);
+  } = useManufacturingOperations(projectId, imageId, paletteId, document?.layerSetId ?? null, savedProjectId);
 
   const { transform, zoomBy, panBy, fitToScreen } = useCanvasTransform();
   const [activeTool, setActiveTool] = useState<EditorTool>("select");

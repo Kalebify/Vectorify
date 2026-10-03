@@ -294,6 +294,80 @@ describe("EditorShell — operación de fabricación (fix round M2.1-S07, wiring
   });
 });
 
+describe("EditorShell — cutover post-Save (savedProjectId activo, M2.2-S05 ronda de fix 1)", () => {
+  const SAVED_PROJECT_ID = "99999999-9999-9999-9999-999999999999";
+
+  beforeEach(() => {
+    vi.stubGlobal("ResizeObserver", ImmediateResizeObserver);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  function savedDocumentResponse() {
+    return {
+      projectId: SAVED_PROJECT_ID,
+      schemaVersion: 1,
+      widthMm: 320,
+      heightMm: 240,
+      viewBox: "0 0 320 240",
+      versionNumber: 1,
+      createdAt: "2026-01-01T00:00:00Z",
+      layers: [
+        { id: GROUP_A_ID, name: "Rojo", order: 0, visible: true, locked: false, manufacturingOperation: "cut", colorHex: "#ff0000", coverage: 60, isBackground: false, svgAssetId: null, svgUrl: `/assets/${GROUP_A_ID}`, pathCount: 3 },
+        { id: GROUP_B_ID, name: "Azul", order: 1, visible: true, locked: false, manufacturingOperation: "unassigned", colorHex: "#0000ff", coverage: 40, isBackground: false, svgAssetId: null, svgUrl: `/assets/${GROUP_B_ID}`, pathCount: 2 },
+      ],
+    };
+  }
+
+  function renderSavedShell() {
+    return render(
+      <EditorShell
+        projectId={PROJECT_ID}
+        imageId={IMAGE_ID}
+        paletteId={PALETTE_ID}
+        projectName="mi-diseño.svg"
+        savedProjectId={SAVED_PROJECT_ID}
+        onClose={vi.fn()}
+      />,
+    );
+  }
+
+  it("cambiar la operación de fabricación llama al PATCH v2 por-layer, nunca al sidecar clásico ManufacturingOperationService", async () => {
+    const fetch = stubFetch((url) => {
+      if (url.includes(`/api/v2/projects/${SAVED_PROJECT_ID}/document`)) return jsonResponse(savedDocumentResponse());
+      if (url.includes("/assets/")) return new Response(SVG_TEXT, { status: 200 });
+      if (/\/layers\/[0-9a-f-]+$/.test(url)) {
+        return jsonResponse({
+          id: GROUP_A_ID, name: "Rojo", order: 0, visible: true, locked: false,
+          manufacturingOperation: "engrave", colorHex: "#ff0000", coverage: 60, isBackground: false,
+          svgAssetId: null, svgUrl: `/assets/${GROUP_A_ID}`, pathCount: 3,
+        });
+      }
+      return undefined;
+    });
+
+    renderSavedShell();
+    await waitFor(() => expect(screen.getByRole("application")).toBeInTheDocument());
+
+    const select = await screen.findByRole("combobox", { name: "Operación de fabricación de la capa Rojo" });
+    expect(select).toHaveValue("cut");
+
+    fireEvent.change(select, { target: { value: "engrave" } });
+
+    await waitFor(() => expect(select).toHaveValue("engrave"));
+
+    const patchCall = fetch.mock.calls.find(
+      ([input, init]) => /\/layers\/[0-9a-f-]+$/.test(String(input)) && (init as RequestInit | undefined)?.method === "PATCH",
+    );
+    expect(patchCall).toBeDefined();
+    expect(String(patchCall![0])).toContain(`/layers/${GROUP_A_ID}`);
+    expect(JSON.parse((patchCall![1] as RequestInit).body as string)).toEqual({ manufacturingOperation: "engrave" });
+
+    // NUNCA llama al conjunto clásico de operaciones ni a su endpoint de asignación por-color.
+    expect(fetch.mock.calls.some((call) => String(call[0]).includes("/layers/operations"))).toBe(false);
+    expect(fetch.mock.calls.some((call) => /\/operation$/.test(String(call[0])))).toBe(false);
+  });
+});
+
 describe("EditorShell — ← Projects", () => {
   beforeEach(() => {
     vi.stubGlobal("ResizeObserver", ImmediateResizeObserver);
