@@ -475,6 +475,73 @@ public sealed class VectorDocumentRepositoryTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task UpdateLayerAsync_CreatesANewVersion_NeverMutatesTheCheckpointItPatchedFrom()
+    {
+        // Prueba directa del fix de QA (fix round 1, M2.2-S06): UpdateLayerAsync mutaba la fila
+        // de Layer de la versión actual IN-PLACE, violando la misma garantía de inmutabilidad
+        // que el conflicto #1 de spec.md M2.2-S06 ya había resuelto para Save/Restore --
+        // consultar esa versión como histórica DESPUÉS de un PATCH devolvía contenido distinto
+        // del checkpoint original. Save (V1) -> PATCH un layer -> V1 debe seguir INTACTA
+        // (FindVersionAsync con versionNumber=1 devuelve el contenido ORIGINAL, sin el patch),
+        // una V2 nueva debe existir con el patch aplicado, y Project.CurrentVersionId debe
+        // apuntar a V2.
+        await using var dbContext = await CreateMigratedDbContextAsync();
+        var ownerId = await SeedUserAsync(dbContext);
+        var project = await new ProjectRepository(dbContext).CreateAsync(ownerId, "Proyecto a patchear sin mutar V1", null, CancellationToken.None);
+        var repository = new VectorDocumentRepository(dbContext);
+
+        var patchedGroupId = Guid.NewGuid();
+        var otherGroupId = Guid.NewGuid();
+        var assetId1 = await SeedAssetAsync(dbContext, project.Id, "layer-svg");
+        var assetId2 = await SeedAssetAsync(dbContext, project.Id, "layer-svg");
+
+        var v1 = await repository.SaveAsync(
+            project.Id, ownerId,
+            new DocumentSnapshot(10, 10, "0 0 10 10", 1, DocumentVersionOrigin.ManualEdit, "{}",
+            [
+                new LayerSnapshot(patchedGroupId, "Nombre original", 0, true, false, null, assetId1, new PaletteColorSnapshot("#111111", 50, false, 0), PathCount: 1),
+                new LayerSnapshot(otherGroupId, "Otra capa", 1, true, false, null, assetId2, new PaletteColorSnapshot("#222222", 50, false, 1), PathCount: 2),
+            ]),
+            CancellationToken.None);
+        Assert.Equal(1, v1!.VersionNumber);
+
+        var patched = await repository.UpdateLayerAsync(
+            project.Id, ownerId, patchedGroupId,
+            new LayerPatch(Name: "Nombre patcheado", Order: null, Visible: null, Locked: null, TouchOperation: false, Operation: null),
+            CancellationToken.None);
+
+        Assert.NotNull(patched);
+        Assert.Equal("Nombre patcheado", patched!.Name);
+
+        // Lectura desde un DbContext NUEVO (misma rigurosidad que RestoreAsync_...: confirma lo
+        // REALMENTE persistido en PostgreSQL, no un objeto todavía trackeado en memoria por el
+        // dbContext que hizo el Save/PATCH).
+        await using var readContext = CreateDbContext();
+        var readRepository = new VectorDocumentRepository(readContext);
+
+        // V1 (histórica) sigue devolviendo el contenido ORIGINAL -- el PATCH no la tocó.
+        var v1Reloaded = await readRepository.FindVersionAsync(project.Id, ownerId, versionNumber: 1, CancellationToken.None);
+        Assert.NotNull(v1Reloaded);
+        var v1PatchedLayer = Assert.Single(v1Reloaded!.Value.Version.Layers, l => l.GroupId == patchedGroupId);
+        Assert.Equal("Nombre original", v1PatchedLayer.Name);
+        Assert.NotEqual(v1PatchedLayer.Id, patched.Id); // fila NUEVA, no la misma reutilizada
+
+        // La versión ACTUAL (V2, creada por el PATCH) tiene el contenido patcheado Y preserva la
+        // capa que no se tocó.
+        var current = await readRepository.FindCurrentDocumentAsync(project.Id, ownerId, CancellationToken.None);
+        Assert.NotNull(current);
+        Assert.Equal(2, current!.Value.Version.VersionNumber);
+        Assert.Equal(2, current.Value.Version.Layers.Count);
+        var currentPatchedLayer = Assert.Single(current.Value.Version.Layers, l => l.GroupId == patchedGroupId);
+        Assert.Equal("Nombre patcheado", currentPatchedLayer.Name);
+        var currentOtherLayer = Assert.Single(current.Value.Version.Layers, l => l.GroupId == otherGroupId);
+        Assert.Equal("Otra capa", currentOtherLayer.Name); // intacta, copiada tal cual
+
+        var reloadedProject = await readContext.Projects.FirstAsync(p => p.Id == project.Id);
+        Assert.Equal(current.Value.Version.Id, reloadedProject.CurrentVersionId);
+    }
+
+    [Fact]
     public async Task UpdateLayerAsync_LayerBelongsToASupersededHistoricalVersion_ReturnsNull()
     {
         await using var dbContext = await CreateMigratedDbContextAsync();

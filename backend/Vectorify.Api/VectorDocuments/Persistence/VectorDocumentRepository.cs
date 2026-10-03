@@ -320,51 +320,155 @@ public sealed class VectorDocumentRepository : IVectorDocumentRepository
         Guid projectId, Guid ownerId, Guid layerId, LayerPatch patch, CancellationToken cancellationToken)
     {
         var project = await _dbContext.Projects
+            .Include(p => p.VectorDocuments).ThenInclude(d => d.Versions)
             .FirstOrDefaultAsync(p => p.Id == projectId && p.OwnerId == ownerId, cancellationToken);
 
-        if (project?.CurrentVersionId is null)
+        var document = project?.VectorDocuments.FirstOrDefault();
+        if (project?.CurrentVersionId is null || document is null)
         {
             return null;
         }
 
-        // M2.2-S06: busca por GroupId (el groupId clásico, estable a través de versiones) scopeado
-        // a la DocumentVersion ACTUAL -- ya NO por Layer.Id (esa PK es una fila nueva en cada
-        // checkpoint desde esta tarjeta, ver el conflicto #1 de spec.md M2.2-S06).
-        var layer = await _dbContext.Layers
-            .FirstOrDefaultAsync(l => l.VersionId == project.CurrentVersionId && l.GroupId == layerId, cancellationToken);
+        // Fix round 1 (QA post-merge): esta operación mutaba la fila de Layer de la
+        // DocumentVersion ACTUAL in-place, violando la misma garantía de inmutabilidad que el
+        // conflicto #1 de spec.md M2.2-S06 ya había resuelto para Save/Restore -- consultar esa
+        // versión como histórica DESPUÉS de un PATCH devolvía contenido distinto del checkpoint
+        // original. Fix: PATCH es, igual que Save/Restore, un checkpoint -- crea una
+        // DocumentVersion COMPLETA nueva (mismo patrón de copia fresca que RestoreAsync: TODOS
+        // los Layer/PaletteColor de la versión actual, ids nuevos), con el patch aplicado SOLO
+        // sobre la copia nueva del Layer identificado por GroupId, Origin: ManualEdit (es una
+        // edición manual, no un restore), y repunta Project.CurrentVersionId a la versión nueva.
+        // Misma transacción EF explícita de dos fases y mismo mecanismo de concurrencia (xmin)
+        // que SaveAsync/RestoreAsync.
+        var currentVersion = await _dbContext.DocumentVersions
+            .Include(v => v.Layers)
+            .Include(v => v.PaletteColors)
+            .FirstOrDefaultAsync(v => v.Id == project.CurrentVersionId, cancellationToken);
 
-        if (layer is null)
+        if (currentVersion is null)
         {
             return null;
         }
 
-        if (patch.Name is not null)
+        // M2.2-S06: busca por GroupId (el groupId clásico, estable a través de versiones) -- ya
+        // NO por Layer.Id (esa PK es una fila nueva en cada checkpoint, ver el conflicto #1 de
+        // spec.md M2.2-S06). Si no está en la versión ACTUAL (p. ej. pertenece a una versión
+        // histórica ya superada), no hay nada que patchear.
+        if (currentVersion.Layers.All(l => l.GroupId != layerId))
         {
-            layer.Name = patch.Name;
+            return null;
         }
 
-        if (patch.Order is not null)
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+        var nextVersionNumber = document.Versions.Max(v => v.VersionNumber) + 1;
+        var now = DateTimeOffset.UtcNow;
+
+        var newVersion = new DocumentVersion
         {
-            layer.Order = patch.Order.Value;
+            Id = Guid.NewGuid(),
+            VectorDocumentId = document.Id,
+            VersionNumber = nextVersionNumber,
+            WidthMm = currentVersion.WidthMm,
+            HeightMm = currentVersion.HeightMm,
+            ViewBox = currentVersion.ViewBox,
+            SchemaVersion = currentVersion.SchemaVersion,
+            Origin = DocumentVersionOrigin.ManualEdit,
+            MetadataJson = "{}",
+            CreatedAt = now,
+        };
+        document.Versions.Add(newVersion);
+        _dbContext.Add(newVersion); // siempre nuevo -- ver comentario de SaveAsync sobre el fixup de EF Core.
+
+        // Copia fresca (ids nuevos) de cada PaletteColor de la versión actual -- idéntico a
+        // RestoreAsync, necesita el mapeo viejo-Id -> nuevo-Id para repuntar Layer.ColorId.
+        var colorIdMap = new Dictionary<Guid, Guid>();
+        foreach (var color in currentVersion.PaletteColors)
+        {
+            var newColor = new PaletteColor
+            {
+                Id = Guid.NewGuid(),
+                VersionId = newVersion.Id,
+                Hex = color.Hex,
+                Coverage = color.Coverage,
+                IsBackground = color.IsBackground,
+                Order = color.Order,
+            };
+            colorIdMap[color.Id] = newColor.Id;
+            newVersion.PaletteColors.Add(newColor);
+            _dbContext.Add(newColor);
         }
 
-        if (patch.Visible is not null)
+        // Copia fresca (ids nuevos) de cada Layer de la versión actual -- el identificado por
+        // GroupId == layerId recibe el patch aplicado sobre la copia NUEVA (nunca sobre la fila
+        // vieja de currentVersion, que queda intacta como checkpoint histórico).
+        Layer? patchedLayer = null;
+        foreach (var layer in currentVersion.Layers)
         {
-            layer.Visible = patch.Visible.Value;
+            var newLayer = new Layer
+            {
+                Id = Guid.NewGuid(),
+                GroupId = layer.GroupId,
+                VersionId = newVersion.Id,
+                ColorId = colorIdMap[layer.ColorId],
+                Name = layer.Name,
+                Order = layer.Order,
+                Visible = layer.Visible,
+                Locked = layer.Locked,
+                ManufacturingOperation = layer.ManufacturingOperation,
+                SvgAssetId = layer.SvgAssetId,
+                PathCount = layer.PathCount,
+            };
+
+            if (layer.GroupId == layerId)
+            {
+                if (patch.Name is not null)
+                {
+                    newLayer.Name = patch.Name;
+                }
+
+                if (patch.Order is not null)
+                {
+                    newLayer.Order = patch.Order.Value;
+                }
+
+                if (patch.Visible is not null)
+                {
+                    newLayer.Visible = patch.Visible.Value;
+                }
+
+                if (patch.Locked is not null)
+                {
+                    newLayer.Locked = patch.Locked.Value;
+                }
+
+                if (patch.TouchOperation)
+                {
+                    newLayer.ManufacturingOperation = patch.Operation;
+                }
+
+                patchedLayer = newLayer;
+            }
+
+            newVersion.Layers.Add(newLayer);
+            _dbContext.Add(newLayer);
         }
 
-        if (patch.Locked is not null)
-        {
-            layer.Locked = patch.Locked.Value;
-        }
-
-        if (patch.TouchOperation)
-        {
-            layer.ManufacturingOperation = patch.Operation;
-        }
-
+        // Fase 1: inserta DocumentVersion/Layer/PaletteColor -- Project.CurrentVersionId todavía
+        // no se tocó (grafo sin ciclos, ver SaveAsync).
         await _dbContext.SaveChangesAsync(cancellationToken);
 
-        return layer;
+        project.CurrentVersionId = newVersion.Id;
+        project.UpdatedAt = now;
+
+        // Fase 2: repunta Project a la versión nueva. Mismo mecanismo de concurrencia optimista
+        // (xmin) que SaveAsync/RestoreAsync -- un Save/Restore/PATCH concurrente sobre el mismo
+        // Project entre medio dispara DbUpdateConcurrencyException acá (VectorDocumentService.UpdateLayerAsync
+        // la traduce a VectorDocumentResult.Conflict, 409).
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
+
+        return patchedLayer;
     }
 }

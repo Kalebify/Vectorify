@@ -169,6 +169,7 @@ public static class VectorDocumentEndpoints
                 VectorDocumentResult.LayerReady ready => Results.Ok(ToLayerResponse(projectId, ready.Layer)),
                 VectorDocumentResult.NotFound notFound => Results.NotFound(new ApiErrorResponse(notFound.Code, notFound.Message)),
                 VectorDocumentResult.ValidationFailed failed => Results.BadRequest(new ApiErrorResponse(failed.Code, failed.Message)),
+                VectorDocumentResult.Conflict conflict => Results.Conflict(new ApiErrorResponse(conflict.Code, conflict.Message)),
                 _ => UnexpectedResult(),
             };
         })
@@ -177,12 +178,15 @@ public static class VectorDocumentEndpoints
         .Produces<VectorDocumentLayerResponse>(StatusCodes.Status200OK)
         .Produces<ApiErrorResponse>(StatusCodes.Status400BadRequest)
         .Produces<ApiErrorResponse>(StatusCodes.Status404NotFound)
+        .Produces<ApiErrorResponse>(StatusCodes.Status409Conflict)
         .WithSummary("Actualiza order/visible/locked/name/operación de una capa YA guardada (cutover de los sidecars clásicos tras el primer Save).")
         .WithDescription(
             "Campo null = sin cambios (mismo criterio PATCH que ProjectV2Endpoints). manufacturingOperation acepta " +
-            "además 'unassigned' para vaciar explícitamente la asignación. Solo edita la capa de la DocumentVersion " +
-            "ACTUAL del proyecto -- 404 si pertenece a una versión histórica ya superada, o si el proyecto no " +
-            "existe/no es del usuario efectivo.");
+            "además 'unassigned' para vaciar explícitamente la asignación. Es, igual que Save/Restore, un checkpoint " +
+            "nuevo (M2.2-S06 fix): crea una DocumentVersion completa nueva con el patch aplicado, nunca muta la " +
+            "versión actual in-place -- 404 si la capa no existe en la DocumentVersion ACTUAL del proyecto (pertenece " +
+            "a una versión histórica ya superada), o si el proyecto no existe/no es del usuario efectivo. 409 si otro " +
+            "Save/Restore/PATCH concurrente modificó el mismo Project entre medio (concurrencia optimista vía xmin).");
     }
 
     private static VectorDocumentSaveResponse ToSaveResponse(VectorDocumentResult.Saved saved) =>
