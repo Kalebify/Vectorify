@@ -3,12 +3,12 @@
   "card_url": "https://app.notion.com/p/3e8d77b263988102b073e59cc6fe2e53",
   "title": "M2.2-S05 · Persistencia completa del VectorDocument",
   "stack": "ASP.NET Core, Frontend, Vector -- primera escritura real a VectorDocument/DocumentVersion/Layer/PaletteColor (M2.2-S02), puente Project clasico -> Project v2 al primer Save, cutover de los sidecars LayerLayout/ManufacturingOperation en el limite del Save",
-  "branch": "sprint/3e8d77b2-vectordocument-persistencia-completa",
-  "column": "Done",
-  "phase": "review",
-  "fix_rounds": 0,
+  "branch": "sprint/3e8d77b2-s05-cutover-fix",
+  "column": "Bloqueado",
+  "phase": "fix_round",
+  "fix_rounds": 1,
   "preview_url": null,
-  "pr_url": "https://github.com/Kalebify/Vectorify/pull/36",
+  "pr_url": "PENDING_FIX_ROUND_1",
   "started_at": "2026-10-02T00:00:00Z",
   "exceptions": [
     "Corrida en modo autonomo dentro del backlog MVP2.2 (confirmado explicitamente por el usuario para las 10 tarjetas del milestone).",
@@ -17,6 +17,7 @@
     "DECISION TECNICA PROPIA: se agrega Layer.SvgAssetId (migracion aditiva minima) en vez de un SVG compuesto por version con <g> por layer -- evita logica de parseo/split, reusa IAssetService/AssetKeyFactory tal cual.",
     "DECISION TECNICA PROPIA: Layer.Id = groupId clasico reutilizado verbatim entre versiones (IDs estables). PaletteColor.Id se regenera por version (ningun consumidor depende de su identidad).",
     "DECISION TECNICA PROPIA: dimensiones fisicas (WidthMm/HeightMm) default 1px=1mm si el usuario nunca aplico dimensiones explicitas (mismo criterio que DimensionResponse ya usa).",
-    "BUG REAL ENCONTRADO Y CORREGIDO EN REVISION DEL ORQUESTADOR: pathCount quedaba hardcodeado en 0 para documentos reabiertos (rompia 'Seleccionar todo en la capa' en silencio y mostraba un dato falso en el Inspector). Corregido con migracion aditiva Layer.PathCount, ver IMPL.md."
+    "BUG REAL ENCONTRADO Y CORREGIDO EN REVISION DEL ORQUESTADOR: pathCount quedaba hardcodeado en 0 para documentos reabiertos (rompia 'Seleccionar todo en la capa' en silencio y mostraba un dato falso en el Inspector). Corregido con migracion aditiva Layer.PathCount, ver IMPL.md.",
+    "FIX ROUND 1 (bloqueado por QA del usuario, comentario 2026-10-02T21:25): el frontend nunca hizo el cutover post-Save que el spec exigia -- EditorShell/useVectorDocument seguian mandando visibility/lock/rename/reorder/operacion a los sidecars clasicos aun con un savedProjectId activo, en vez de PATCH /api/v2/projects/{id}/layers/{layerId}. La DB no era la fuente autoritativa real tras guardar. Esto se me paso en la revision personal de la tarjeta original -- error del orquestador, no solo del implementador."
   ]
 }

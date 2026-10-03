@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { useVectorDocument } from "./useVectorDocument";
+import type { VectorDocumentLayerResponse } from "../types/vectorDocument";
 
 const PROJECT_ID = "11111111-1111-1111-1111-111111111111";
 const IMAGE_ID = "22222222-2222-2222-2222-222222222222";
@@ -76,7 +77,7 @@ function consolidatedResponse(overrides: Record<string, unknown> = {}) {
 }
 
 function stubFetchSequence(handlers: Array<(url: string) => Response>) {
-  const fetch = vi.fn((input: string | URL) => {
+  const fetch = vi.fn((input: string | URL, _init?: RequestInit) => {
     const url = String(input);
     for (const handler of handlers) {
       const result = handler(url);
@@ -513,6 +514,212 @@ describe("useVectorDocument — reapertura vía savedProjectId (M2.2-S05)", () =
 
     await waitFor(() => expect(result.current.status).toBe("empty"));
     expect(result.current.emptyReason).toBe("palette_not_found");
+  });
+});
+
+describe("useVectorDocument — cutover post-Save (PATCH v2, M2.2-S05 ronda de fix 1)", () => {
+  it("toggleVisibility con savedProjectId llama al PATCH v2, NUNCA al sidecar clásico de LayerLayout", async () => {
+    const fetch = stubFetchSequence([
+      (url) => (url.includes(`/api/v2/projects/${SAVED_PROJECT_ID}/document`) ? jsonResponse(savedDocumentResponse()) : undefined!),
+    ]);
+
+    const { result } = renderHook(() => useVectorDocument(PROJECT_ID, IMAGE_ID, PALETTE_ID, SAVED_PROJECT_ID));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+
+    fetch.mockImplementation((input: string | URL) => {
+      const url = String(input);
+      if (url === `http://localhost:5080/api/v2/projects/${SAVED_PROJECT_ID}/layers/${GROUP_A_ID}`) {
+        return Promise.resolve(
+          jsonResponse({
+            id: GROUP_A_ID, name: "Rojo", order: 0, visible: false, locked: false,
+            manufacturingOperation: "cut", colorHex: "#ff0000", coverage: 60, isBackground: false,
+            svgAssetId: null, svgUrl: null, pathCount: 5,
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    act(() => result.current.toggleVisibility(GROUP_A_ID));
+    // Optimista: se refleja de inmediato, antes de que resuelva el PATCH.
+    expect(result.current.visibility[GROUP_A_ID]).toBe(false);
+
+    await waitFor(() =>
+      expect(fetch.mock.calls.some(([input, init]) => String(input).endsWith(`/layers/${GROUP_A_ID}`) && (init as RequestInit)?.method === "PATCH")).toBe(true),
+    );
+    // NUNCA pega al endpoint clásico del sidecar LayerLayout.
+    expect(fetch.mock.calls.some((call) => String(call[0]).includes("/visibility"))).toBe(false);
+
+    await waitFor(() => expect(result.current.visibility[GROUP_A_ID]).toBe(false));
+  });
+
+  it("toggleLocked con savedProjectId llama al PATCH v2 con { locked }", async () => {
+    const fetch = stubFetchSequence([
+      (url) => (url.includes(`/api/v2/projects/${SAVED_PROJECT_ID}/document`) ? jsonResponse(savedDocumentResponse()) : undefined!),
+    ]);
+
+    const { result } = renderHook(() => useVectorDocument(PROJECT_ID, IMAGE_ID, PALETTE_ID, SAVED_PROJECT_ID));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+
+    fetch.mockImplementation((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith(`/layers/${GROUP_A_ID}`) && init?.method === "PATCH") {
+        return Promise.resolve(
+          jsonResponse({
+            id: GROUP_A_ID, name: "Rojo", order: 0, visible: true, locked: true,
+            manufacturingOperation: "cut", colorHex: "#ff0000", coverage: 60, isBackground: false,
+            svgAssetId: null, svgUrl: null, pathCount: 5,
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    act(() => result.current.toggleLocked(GROUP_A_ID));
+
+    await waitFor(() => expect(result.current.document?.layers.find((l) => l.groupId === GROUP_A_ID)?.locked).toBe(true));
+    expect(fetch.mock.calls.some((call) => String(call[0]).includes("/lock"))).toBe(false);
+
+    const patchCall = fetch.mock.calls.find(
+      ([input, init]) => String(input).endsWith(`/layers/${GROUP_A_ID}`) && (init as RequestInit | undefined)?.method === "PATCH",
+    );
+    expect(patchCall).toBeDefined();
+    expect(JSON.parse((patchCall![1] as RequestInit).body as string)).toEqual({ locked: true });
+  });
+
+  it("renameLayer con savedProjectId llama al PATCH v2 con { name }", async () => {
+    const fetch = stubFetchSequence([
+      (url) => (url.includes(`/api/v2/projects/${SAVED_PROJECT_ID}/document`) ? jsonResponse(savedDocumentResponse()) : undefined!),
+    ]);
+
+    const { result } = renderHook(() => useVectorDocument(PROJECT_ID, IMAGE_ID, PALETTE_ID, SAVED_PROJECT_ID));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+
+    fetch.mockImplementation((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith(`/layers/${GROUP_A_ID}`) && init?.method === "PATCH") {
+        return Promise.resolve(
+          jsonResponse({
+            id: GROUP_A_ID, name: "Rojo carmesí", order: 0, visible: true, locked: false,
+            manufacturingOperation: "cut", colorHex: "#ff0000", coverage: 60, isBackground: false,
+            svgAssetId: null, svgUrl: null, pathCount: 5,
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    act(() => result.current.renameLayer(GROUP_A_ID, "Rojo carmesí"));
+
+    await waitFor(() => expect(result.current.document?.layers.find((l) => l.groupId === GROUP_A_ID)?.name).toBe("Rojo carmesí"));
+    expect(fetch.mock.calls.some((call) => String(call[0]).includes("/rename"))).toBe(false);
+
+    const patchCall = fetch.mock.calls.find(
+      ([input, init]) => String(input).endsWith(`/layers/${GROUP_A_ID}`) && (init as RequestInit | undefined)?.method === "PATCH",
+    );
+    expect(patchCall).toBeDefined();
+    expect(JSON.parse((patchCall![1] as RequestInit).body as string)).toEqual({ name: "Rojo carmesí" });
+  });
+
+  it("reorderLayers con savedProjectId manda un PATCH { order } por cada layer cuyo orden cambió, sin endpoint de batch", async () => {
+    const fetch = stubFetchSequence([
+      (url) => (url.includes(`/api/v2/projects/${SAVED_PROJECT_ID}/document`) ? jsonResponse(savedDocumentResponse()) : undefined!),
+    ]);
+
+    const { result } = renderHook(() => useVectorDocument(PROJECT_ID, IMAGE_ID, PALETTE_ID, SAVED_PROJECT_ID));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+
+    fetch.mockImplementation((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith(`/layers/${GROUP_A_ID}`) && init?.method === "PATCH") {
+        return Promise.resolve(
+          jsonResponse({
+            id: GROUP_A_ID, name: "Rojo", order: 1, visible: true, locked: false,
+            manufacturingOperation: "cut", colorHex: "#ff0000", coverage: 60, isBackground: false,
+            svgAssetId: null, svgUrl: null, pathCount: 5,
+          }),
+        );
+      }
+      if (url.endsWith(`/layers/${GROUP_B_ID}`) && init?.method === "PATCH") {
+        return Promise.resolve(
+          jsonResponse({
+            id: GROUP_B_ID, name: "Azul", order: 0, visible: true, locked: false,
+            manufacturingOperation: "unassigned", colorHex: "#0000ff", coverage: 40, isBackground: false,
+            svgAssetId: null, svgUrl: null, pathCount: 2,
+          }),
+        );
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    // Orden original: A (0), B (1) -- se invierte a B (0), A (1): AMBOS layers cambian de orden.
+    act(() => result.current.reorderLayers([GROUP_B_ID, GROUP_A_ID]));
+
+    await waitFor(() => expect(result.current.document?.layers.map((l) => l.groupId)).toEqual([GROUP_B_ID, GROUP_A_ID]));
+
+    const patchCalls = fetch.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "PATCH");
+    expect(patchCalls).toHaveLength(2);
+    expect(fetch.mock.calls.some((call) => String(call[0]).includes("/reorder"))).toBe(false);
+
+    const patchByGroupId = new Map(patchCalls.map(([input, init]) => [String(input), JSON.parse((init as RequestInit).body as string)]));
+    expect(patchByGroupId.get(`http://localhost:5080/api/v2/projects/${SAVED_PROJECT_ID}/layers/${GROUP_A_ID}`)).toEqual({ order: 1 });
+    expect(patchByGroupId.get(`http://localhost:5080/api/v2/projects/${SAVED_PROJECT_ID}/layers/${GROUP_B_ID}`)).toEqual({ order: 0 });
+  });
+
+  it("round-trip: editar (visible/locked/order/nombre/operación) con savedProjectId -> reabrir vía GET .../document -> el cambio sigue ahí", async () => {
+    // Simula el estado real persistido en el backend: GET siempre devuelve el estado VIGENTE,
+    // y cada PATCH lo muta -- igual que Data.Layer en PostgreSQL (ver spec.md M2.2-S05,
+    // Decisión arquitectónica #2: "la DB es la fuente autoritativa").
+    const serverLayers: VectorDocumentLayerResponse[] = [
+      { id: GROUP_A_ID, name: "Rojo", order: 0, visible: true, locked: false, manufacturingOperation: "cut", colorHex: "#ff0000", coverage: 60, isBackground: false, svgAssetId: null, svgUrl: null, pathCount: 5 },
+      { id: GROUP_B_ID, name: "Azul", order: 1, visible: true, locked: false, manufacturingOperation: "unassigned", colorHex: "#0000ff", coverage: 40, isBackground: false, svgAssetId: null, svgUrl: null, pathCount: 2 },
+    ];
+
+    const fetch = vi.fn((input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes(`/api/v2/projects/${SAVED_PROJECT_ID}/document`) && (!init || init.method === undefined || init.method === "GET")) {
+        return Promise.resolve(jsonResponse(savedDocumentResponse({ layers: serverLayers })));
+      }
+      const patchMatch = url.match(new RegExp(`/layers/([0-9a-f-]+)$`));
+      if (patchMatch && init?.method === "PATCH") {
+        const layerId = patchMatch[1];
+        const layer = serverLayers.find((l) => l.id === layerId)!;
+        const patch = JSON.parse(init.body as string) as Partial<VectorDocumentLayerResponse>;
+        Object.assign(layer, patch);
+        return Promise.resolve(jsonResponse(layer));
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    const { result, unmount } = renderHook(() => useVectorDocument(PROJECT_ID, IMAGE_ID, PALETTE_ID, SAVED_PROJECT_ID));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+
+    // Editar: visibilidad, lock, orden (invertir A/B) y nombre -- todo contra el PATCH v2.
+    act(() => result.current.toggleVisibility(GROUP_B_ID));
+    await waitFor(() => expect(result.current.visibility[GROUP_B_ID]).toBe(false));
+
+    act(() => result.current.toggleLocked(GROUP_A_ID));
+    await waitFor(() => expect(result.current.document?.layers.find((l) => l.groupId === GROUP_A_ID)?.locked).toBe(true));
+
+    act(() => result.current.renameLayer(GROUP_A_ID, "Rojo carmesí"));
+    await waitFor(() => expect(result.current.document?.layers.find((l) => l.groupId === GROUP_A_ID)?.name).toBe("Rojo carmesí"));
+
+    act(() => result.current.reorderLayers([GROUP_B_ID, GROUP_A_ID]));
+    await waitFor(() => expect(result.current.document?.layers.map((l) => l.groupId)).toEqual([GROUP_B_ID, GROUP_A_ID]));
+
+    // "Reabrir": desmontar el hook (como si se cerrara el Workspace) y montar uno nuevo, que
+    // vuelve a pedir GET .../document desde cero -- NUNCA desde memoria del cliente.
+    unmount();
+    const { result: reopened } = renderHook(() => useVectorDocument(PROJECT_ID, IMAGE_ID, PALETTE_ID, SAVED_PROJECT_ID));
+    await waitFor(() => expect(reopened.current.status).toBe("ready"));
+
+    expect(reopened.current.document?.layers.map((l) => l.groupId)).toEqual([GROUP_B_ID, GROUP_A_ID]);
+    expect(reopened.current.visibility[GROUP_B_ID]).toBe(false);
+    expect(reopened.current.document?.layers.find((l) => l.groupId === GROUP_A_ID)).toMatchObject({
+      locked: true,
+      name: "Rojo carmesí",
+    });
   });
 });
 

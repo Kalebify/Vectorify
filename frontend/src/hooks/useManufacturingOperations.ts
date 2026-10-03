@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { assignManufacturingOperation, getManufacturingOperations } from "../api/manufacturingOperationsApi";
 import { ApiClientError } from "../api/httpClient";
+import { updateVectorDocumentLayer } from "../api/vectorDocumentApi";
 import type { ApiErrorResponse } from "../types/preprocess";
 import type {
   ManufacturingOperationChoice,
   ManufacturingOperationErrorCode,
   ManufacturingOperationPayload,
   ManufacturingOperationSummaryPayload,
+  ManufacturingOperationValue,
 } from "../types/manufacturingOperations";
 
 const GENERIC_ERROR_MESSAGE = "No se pudo completar la operación de fabricación. Intentá de nuevo.";
@@ -54,12 +56,29 @@ export interface UseManufacturingOperationsState {
  * automáticamente: se vuelve a pedir el conjunto (vacío / "unassigned" para
  * todas hasta que el usuario asigne de nuevo) -- mismo criterio que el
  * backend (ver ManufacturingOperationService).
+ *
+ * Cutover post-Save (M2.2-S05, ronda de fix 1): con `savedProjectId` activo (Workspace ya
+ * guardado, ver `useVectorDocument`), este hook NUNCA pide el conjunto clásico
+ * `GET .../layers/operations` -- ese sidecar quedó congelado en el estado de la sesión de
+ * staging que produjo el último Save, no refleja ediciones post-Save (que ahora viven en
+ * `Data.Layer`, no en el sidecar). El valor inicial de cada capa ya lo trae `useVectorDocument`
+ * (`document.layers[].manufacturingOperation`, resuelto desde `GET .../document`) -- los
+ * paneles que consumen este hook ya hacen fallback a ese valor cuando `operations[groupId]` no
+ * existe (ver `operations[layer.groupId]?.operation ?? layer.manufacturingOperation` en
+ * `EditorLayersPanel.tsx`/`InspectorPanel.tsx`), así que dejar `operations` vacío en este modo
+ * sigue mostrando el valor correcto. `assign()` persiste vía
+ * `PATCH /api/v2/projects/{savedProjectId}/layers/{groupId}` en vez del sidecar clásico.
+ * `summary` (cutCount/engraveCount/...) es una vista agregada propia del sidecar clásico sin
+ * equivalente en la DB en esta tarjeta -- queda en su valor inicial en este modo; ningún panel
+ * del Workspace guardado lo lee (ver `EditorShell.tsx`).
  */
 export function useManufacturingOperations(
   projectId: string,
   imageId: string,
   paletteId: string | null,
   layerSetId: string | null,
+  /** Project.Id v2 ya guardado -- ver docstring de arriba. Null/undefined = comportamiento existente sin cambios (staging). */
+  savedProjectId?: string | null,
 ): UseManufacturingOperationsState {
   const [operations, setOperations] = useState<Record<string, ManufacturingOperationPayload>>({});
   const [summary, setSummary] = useState<ManufacturingOperationSummaryPayload>(EMPTY_SUMMARY);
@@ -110,7 +129,7 @@ export function useManufacturingOperations(
   // Recupera -- una sola vez por layerSetId -- las asignaciones YA
   // persistidas del conjunto de capas actual, si las hubiera.
   useEffect(() => {
-    if (!paletteId || !layerSetId) {
+    if (!paletteId || !layerSetId || savedProjectId) {
       return;
     }
     if (fetchedLayerSetIdRef.current === layerSetId) {
@@ -144,7 +163,7 @@ export function useManufacturingOperations(
         // para todas) hasta que el usuario asigne algo -- que si persiste, sí
         // confirma que la Web API está disponible.
       });
-  }, [projectId, imageId, paletteId, layerSetId, applyResponse]);
+  }, [projectId, imageId, paletteId, layerSetId, savedProjectId, applyResponse]);
 
   const assign = useCallback(
     (groupId: string, operation: ManufacturingOperationChoice) => {
@@ -156,6 +175,27 @@ export function useManufacturingOperations(
       setErrorMessage(null);
       setMutatingGroupId(groupId);
 
+      if (savedProjectId) {
+        updateVectorDocumentLayer(savedProjectId, groupId, { manufacturingOperation: operation })
+          .then((response) => {
+            setMutatingGroupId(null);
+            setOperations((current) => ({
+              ...current,
+              [response.id]: {
+                groupId: response.id,
+                name: response.name,
+                colorHex: response.colorHex,
+                operation: response.manufacturingOperation as ManufacturingOperationValue,
+              },
+            }));
+          })
+          .catch((error: unknown) => {
+            setMutatingGroupId(null);
+            handleError(error);
+          });
+        return;
+      }
+
       assignManufacturingOperation(projectId, imageId, paletteId, groupId, operation)
         .then((response) => {
           setMutatingGroupId(null);
@@ -166,7 +206,7 @@ export function useManufacturingOperations(
           handleError(error);
         });
     },
-    [projectId, imageId, paletteId, applyResponse, handleError],
+    [projectId, imageId, paletteId, savedProjectId, applyResponse, handleError],
   );
 
   return { operations, summary, errorCode, errorMessage, mutatingGroupId, assign };

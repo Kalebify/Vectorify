@@ -8,11 +8,11 @@ import {
   setLayerName as setLayerNameRequest,
   setLayerVisible as setLayerVisibleRequest,
 } from "../api/layerLayoutApi";
-import { getVectorDocument } from "../api/vectorDocumentApi";
+import { getVectorDocument, updateVectorDocumentLayer } from "../api/vectorDocumentApi";
 import { getVectorLayers } from "../api/vectorLayersApi";
 import type { LayerLayoutEntryPayload } from "../types/layerLayout";
 import type { ManufacturingOperationValue } from "../types/manufacturingOperations";
-import type { VectorDocumentResponse } from "../types/vectorDocument";
+import type { VectorDocumentLayerResponse, VectorDocumentResponse } from "../types/vectorDocument";
 
 /**
  * `VectorDocument`: estado de dominio del Workspace (M2.1-S06, extendido en
@@ -102,14 +102,23 @@ export interface UseVectorDocumentState {
    * el Eye real de cada capa, tal como estaba antes de aislar.
    */
   visibility: Record<string, boolean>;
-  /** Persiste (Eye) la visibilidad de una capa -- optimista, con rollback si falla la Web API. */
+  /**
+   * Persiste (Eye) la visibilidad de una capa -- optimista, con rollback si falla la Web API.
+   * Cutover post-Save (M2.2-S05, ronda de fix 1): con `savedProjectId` activo, persiste vía
+   * `PATCH /api/v2/projects/{savedProjectId}/layers/{groupId}` (`applySavedLayerResponse`), no
+   * contra el sidecar `LayerLayout` clásico -- ver docstring de `fromSavedDocument` más arriba.
+   */
   toggleVisibility: (groupId: string) => void;
   /** Overlay de VISTA, solo de sesión -- ver `visibility`. */
   isolate: (groupId: string) => void;
   /** Descarta el overlay de Isolate (si había uno) -- NUNCA fuerza `visible=true` en el backend. */
   showAll: () => void;
 
-  /** Persiste (Lock, M2.1-S07) el bloqueo de edición de una capa -- optimista, con rollback si falla la Web API. NUNCA afecta `visible`. */
+  /**
+   * Persiste (Lock, M2.1-S07) el bloqueo de edición de una capa -- optimista, con rollback si
+   * falla la Web API. NUNCA afecta `visible`. Bifurca al PATCH v2 con `savedProjectId` activo,
+   * mismo criterio que `toggleVisibility`.
+   */
   toggleLocked: (groupId: string) => void;
 
   /**
@@ -120,19 +129,25 @@ export interface UseVectorDocumentState {
    * de error expuesto, igual que esos dos: la fila simplemente vuelve a
    * mostrar el nombre anterior).
    *
-   * Persiste vía `setLayerName` (sidecar `LayerLayout`, ver
-   * `Vectorify.Api.LayerLayout.LayerLayoutService.SetNameAsync`) -- NO vía
+   * Sin `savedProjectId` (staging): persiste vía `setLayerName` (sidecar
+   * `LayerLayout`, ver `Vectorify.Api.LayerLayout.LayerLayoutService.SetNameAsync`) -- NO vía
    * `renameColorPaletteGroup` (`ColorPaletteService.RenameAsync`, M2-S01),
    * que rechaza con 409 "palette_confirmed" en cuanto la paleta está
    * confirmada, que es SIEMPRE el caso en el Workspace (ver
    * IMPL-fix-round-1.md, "Ronda de fix 2" para el detalle completo de por
    * qué se descartó tocar esa gate). El flujo clásico pre-confirmación
    * (`ColorSwatchList.tsx`) sigue usando `renameColorPaletteGroup` tal cual,
-   * sin cambios.
+   * sin cambios. Con `savedProjectId` activo (cutover post-Save, M2.2-S05 ronda de fix 1):
+   * persiste vía PATCH v2, mismo criterio que `toggleVisibility`/`toggleLocked`.
    */
   renameLayer: (groupId: string, name: string) => void;
 
-  /** Persiste (Drag & Drop, M2.1-S07) el nuevo orden visual completo -- optimista, con rollback si falla. NUNCA toca geometría (`d`/`transform`/VectorId). */
+  /**
+   * Persiste (Drag & Drop, M2.1-S07) el nuevo orden visual completo -- optimista, con rollback
+   * si falla. NUNCA toca geometría (`d`/`transform`/VectorId). Con `savedProjectId` activo
+   * (cutover post-Save, M2.2-S05 ronda de fix 1): el PATCH v2 es por-layer, sin endpoint de
+   * batch-reorder -- manda un PATCH `order` por cada layer cuyo orden efectivamente cambió.
+   */
   reorderLayers: (orderedGroupIds: string[]) => void;
 
   /** Selección COMPARTIDA de "qué capa se está inspeccionando" (Canvas/LayersPanel/PaletteBar/Inspector). Efímera. Seleccionar una capa distinta limpia `selectedPathKeys`. */
@@ -208,15 +223,40 @@ function toDocument(
  * Reconstruye el `VectorDocument` directo desde `GET /api/v2/projects/{projectId}/document`
  * (M2.2-S05, "Reapertura") -- SIN pasar por la agregación de 3 endpoints clásicos de
  * `toDocument`. `classicProjectId`/`imageId`/`paletteId` se preservan igual (vienen de la URL,
- * ver `App.tsx`): las mutaciones del documento (toggle/rename/reorder/operación) siguen
- * resolviéndose contra los sidecars clásicos en esta tarjeta -- el cutover de esas llamadas a
- * los endpoints PATCH v2 nuevos queda fuera del alcance frontend de esta tarjeta (ver
- * supuestos del reporte del sprint). `paletteVersion`/`layerSetId`/`version` no tienen
+ * ver `App.tsx`): mientras este `savedProjectId` esté presente, las mutaciones del documento
+ * (toggle/rename/reorder/operación) pasan a resolverse contra `PATCH
+ * /api/v2/projects/{projectId}/layers/{layerId}` (M2.2-S05, ronda de fix 1 -- cutover post-Save,
+ * ver `applySavedLayerResponse` y las 4 funciones de mutación más abajo), nunca contra los
+ * sidecars clásicos -- esos solo se siguen usando mientras `savedProjectId` es null (staging).
+ * `paletteVersion`/`layerSetId`/`version` no tienen
  * equivalente real en la respuesta v2 (es un documento ya desacoplado del triple clásico) --
  * se completan con valores de relleno inertes (0/el propio projectId/versionNumber) que ningún
  * panel usa para mostrar datos falsos: ninguno de los paneles existentes LEE esos tres campos
  * para texto visible al usuario.
  */
+/**
+ * Aplica la respuesta AUTORITATIVA de `PATCH /api/v2/projects/{projectId}/layers/{layerId}`
+ * (M2.2-S05, ronda de fix 1 -- cutover post-Save) sobre UNA sola capa del documento en memoria
+ * -- mismo criterio que `applyLayoutEntries`, pero para la respuesta de un solo layer (`id` en
+ * vez de `groupId`, sin `entries[]`) en vez del set completo del sidecar clásico.
+ */
+function applySavedLayerResponse(document: VectorDocument, response: VectorDocumentLayerResponse): VectorDocument {
+  const layers = document.layers.map((layer) =>
+    layer.groupId === response.id
+      ? {
+          ...layer,
+          name: response.name,
+          order: response.order,
+          visible: response.visible,
+          locked: response.locked,
+          manufacturingOperation: response.manufacturingOperation as ManufacturingOperationValue,
+        }
+      : layer,
+  );
+  layers.sort((a, b) => a.order - b.order);
+  return { ...document, layers };
+}
+
 function fromSavedDocument(classicProjectId: string, imageId: string, paletteId: string, response: VectorDocumentResponse): VectorDocument {
   const [, , viewBoxWidth, viewBoxHeight] = response.viewBox.split(" ").map(Number);
 
@@ -436,6 +476,17 @@ export function useVectorDocument(
       // afuera, una sola vez, leyendo el valor "previo" ya calculado arriba.
       setDocument((current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, visible: nextVisible } : l)) });
 
+      if (savedProjectId) {
+        updateVectorDocumentLayer(savedProjectId, groupId, { visible: nextVisible })
+          .then((response) => setDocument((current) => current && applySavedLayerResponse(current, response)))
+          .catch(() =>
+            setDocument(
+              (current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, visible: !nextVisible } : l)) },
+            ),
+          );
+        return;
+      }
+
       setLayerVisibleRequest(projectId, imageId, paletteIdForRequest, groupId, nextVisible)
         .then((response) => setDocument((current) => current && applyLayoutEntries(current, response.entries)))
         .catch(() =>
@@ -444,7 +495,7 @@ export function useVectorDocument(
           ),
         );
     },
-    [document, projectId, imageId],
+    [document, projectId, imageId, savedProjectId],
   );
 
   const isolate = useCallback((groupId: string) => {
@@ -475,6 +526,17 @@ export function useVectorDocument(
 
       setDocument((current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, locked: nextLocked } : l)) });
 
+      if (savedProjectId) {
+        updateVectorDocumentLayer(savedProjectId, groupId, { locked: nextLocked })
+          .then((response) => setDocument((current) => current && applySavedLayerResponse(current, response)))
+          .catch(() =>
+            setDocument(
+              (current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, locked: !nextLocked } : l)) },
+            ),
+          );
+        return;
+      }
+
       setLayerLockedRequest(projectId, imageId, paletteIdForRequest, groupId, nextLocked)
         .then((response) => setDocument((current) => current && applyLayoutEntries(current, response.entries)))
         .catch(() =>
@@ -483,7 +545,7 @@ export function useVectorDocument(
           ),
         );
     },
-    [document, projectId, imageId],
+    [document, projectId, imageId, savedProjectId],
   );
 
   // ---- Rename (M2.1-S07, ronda de fix 1 -- ver docstring de renameLayer arriba) ----
@@ -502,6 +564,17 @@ export function useVectorDocument(
 
       setDocument((current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, name: trimmed } : l)) });
 
+      if (savedProjectId) {
+        updateVectorDocumentLayer(savedProjectId, groupId, { name: trimmed })
+          .then((response) => setDocument((current) => current && applySavedLayerResponse(current, response)))
+          .catch(() =>
+            setDocument(
+              (current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, name: previousName } : l)) },
+            ),
+          );
+        return;
+      }
+
       setLayerNameRequest(projectId, imageId, paletteIdForRequest, groupId, trimmed)
         .then((response) => setDocument((current) => current && applyLayoutEntries(current, response.entries)))
         .catch(() =>
@@ -510,7 +583,7 @@ export function useVectorDocument(
           ),
         );
     },
-    [document, projectId, imageId],
+    [document, projectId, imageId, savedProjectId],
   );
 
   // ---- Reorder (Drag & Drop, PERSISTIDO -- NUNCA toca geometría) ----
@@ -529,11 +602,29 @@ export function useVectorDocument(
 
       setDocument((current) => current && { ...current, layers: optimisticLayers });
 
+      if (savedProjectId) {
+        // PATCH v2 es por-layer, sin endpoint de batch-reorder (decisión ya tomada en spec.md
+        // de M2.2-S05, "Mutaciones post-Save": el patrón PATCH individual alcanza para el caso
+        // de uso del drag-and-drop) -- un PATCH por cada layer cuyo `order` efectivamente
+        // cambió respecto al valor previo, nunca uno por cada layer del documento.
+        const changedLayers = optimisticLayers.filter((layer) => byGroupId.get(layer.groupId)!.order !== layer.order);
+
+        Promise.all(changedLayers.map((layer) => updateVectorDocumentLayer(savedProjectId, layer.groupId, { order: layer.order })))
+          .then((responses) =>
+            setDocument((current) => {
+              if (!current) return current;
+              return responses.reduce((doc, response) => applySavedLayerResponse(doc, response), current);
+            }),
+          )
+          .catch(() => setDocument((current) => current && { ...current, layers: previousLayers }));
+        return;
+      }
+
       reorderLayersRequest(projectId, imageId, paletteIdForRequest, orderedGroupIds)
         .then((response) => setDocument((current) => current && applyLayoutEntries(current, response.entries)))
         .catch(() => setDocument((current) => current && { ...current, layers: previousLayers }));
     },
-    [document, projectId, imageId],
+    [document, projectId, imageId, savedProjectId],
   );
 
   // ---- Selección (EFÍMERA) ----
