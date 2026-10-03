@@ -432,9 +432,23 @@ public sealed class VectorDocumentService : IVectorDocumentService
         var ownerId = _userContext.GetEffectiveUserId();
         var patch = new LayerPatch(request.Name?.Trim(), request.Order, request.Visible, request.Locked, touchOperation, operation);
 
-        var layer = await _repository.UpdateLayerAsync(projectId, ownerId, layerId, patch, cancellationToken);
-        return layer is null
-            ? new VectorDocumentResult.NotFound("not_found", "No existe esa capa en la versión actual de ese proyecto.")
-            : new VectorDocumentResult.LayerReady(layer);
+        // Fix round 1 (QA post-merge): PATCH ahora crea una DocumentVersion nueva completa (ya
+        // no muta la actual in-place, ver el comentario de VectorDocumentRepository.UpdateLayerAsync)
+        // -- mismo checkpoint transaccional que Save/Restore, mismo manejo de concurrencia (xmin
+        // -> 409).
+        try
+        {
+            var layer = await _repository.UpdateLayerAsync(projectId, ownerId, layerId, patch, cancellationToken);
+            return layer is null
+                ? new VectorDocumentResult.NotFound("not_found", "No existe esa capa en la versión actual de ese proyecto.")
+                : new VectorDocumentResult.LayerReady(layer);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            _logger.LogWarning(ex, "Conflicto de concurrencia patcheando una capa del proyecto {ProjectId}", projectId);
+            return new VectorDocumentResult.Conflict(
+                "concurrency_conflict",
+                "El proyecto fue modificado por otro Save/Restore/PATCH concurrente mientras tanto. Volvé a cargarlo e intentá de nuevo.");
+        }
     }
 }

@@ -213,21 +213,22 @@ public sealed class VectorDocumentEndpointsTests : IAsyncLifetime
 
         // Edición post-Save vía PATCH v2 (cutover, ronda de fix 1) -- NUNCA toca los sidecars
         // clásicos (LayerLayout/ManufacturingOperation), que siguen reflejando el estado del
-        // primer Save.
+        // primer Save. Desde el fix round 1 de M2.2-S06, este PATCH crea su PROPIO checkpoint
+        // (V2) -- la V1 original queda intacta.
         var patchResponse = await client.PatchAsJsonAsync(
             $"/api/v2/projects/{firstBody!.ProjectId}/layers/{layerId}",
             new UpdateLayerRequest("Renombrado vía PATCH", null, false, true, "engrave"));
         Assert.Equal(HttpStatusCode.OK, patchResponse.StatusCode);
 
-        // Segundo Save del MISMO Workspace -- antes de este fix, releía los sidecars clásicos
-        // (que nunca se tocaron) y la V2 resultante hubiera vuelto a mostrar el nombre/visible/
-        // locked/operación de ANTES del PATCH.
+        // Tercer checkpoint (Save) del MISMO Workspace -- antes del fix de M2.2-S05 (ronda de fix
+        // 2), releía los sidecars clásicos (que nunca se tocaron) y la versión resultante hubiera
+        // vuelto a mostrar el nombre/visible/locked/operación de ANTES del PATCH.
         var secondSave = await client.PostAsJsonAsync("/api/v2/workspaces/save", new VectorDocumentSaveRequest(
             firstBody.ProjectId, null, classic.ProjectId, classic.ImageId, classic.PaletteId, classic.PaletteVersion, null));
         Assert.Equal(HttpStatusCode.OK, secondSave.StatusCode);
 
         var document = await client.GetFromJsonAsync<VectorDocumentResponse>($"/api/v2/projects/{firstBody.ProjectId}/document");
-        Assert.Equal(2, document!.VersionNumber);
+        Assert.Equal(3, document!.VersionNumber); // V1 (Save) -> V2 (PATCH, checkpoint propio) -> V3 (Save)
         var layer = Assert.Single(document.Layers);
         Assert.Equal("Renombrado vía PATCH", layer.Name);
         Assert.False(layer.Visible);
@@ -460,6 +461,51 @@ public sealed class VectorDocumentEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task PatchLayer_CreatesANewVersion_HistoricalVersionOneKeepsItsOriginalContent()
+    {
+        // Test de regresión pedido explícitamente por QA (fix round 1, M2.2-S06): Save (V1) ->
+        // PATCH un layer -> esto debe crear V2 (nunca mutar V1 in-place) -> GET .../versions/1
+        // sigue devolviendo el contenido ORIGINAL (sin el patch) -> GET .../document (la
+        // ACTUAL, V2) devuelve el contenido CON el patch aplicado.
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        var saveResponse = await client.PostAsJsonAsync("/api/v2/workspaces/save", new VectorDocumentSaveRequest(
+            null, "V1 antes del patch", classic.ProjectId, classic.ImageId, classic.PaletteId, classic.PaletteVersion, null));
+        var saveBody = await saveResponse.Content.ReadFromJsonAsync<VectorDocumentSaveResponse>();
+        Assert.Equal(1, saveBody!.VersionNumber);
+        var layerId = classic.Layers[0].GroupId;
+
+        var originalName = classic.Layers[0].Name;
+
+        var patchResponse = await client.PatchAsJsonAsync(
+            $"/api/v2/projects/{saveBody.ProjectId}/layers/{layerId}",
+            new UpdateLayerRequest("Nombre patcheado", null, null, null, null));
+        Assert.Equal(HttpStatusCode.OK, patchResponse.StatusCode);
+        var patched = await patchResponse.Content.ReadFromJsonAsync<VectorDocumentLayerResponse>();
+        Assert.Equal("Nombre patcheado", patched!.Name);
+
+        // GET .../versions/1 (histórica): devuelve el contenido ORIGINAL, SIN el patch -- el
+        // bug original lo mutaba, violando la inmutabilidad del checkpoint.
+        var v1 = await client.GetFromJsonAsync<VectorDocumentResponse>($"/api/v2/projects/{saveBody.ProjectId}/versions/1");
+        Assert.Equal(1, v1!.VersionNumber);
+        Assert.Equal(originalName, Assert.Single(v1.Layers).Name);
+
+        // GET .../versions (metadata): confirma que el PATCH creó su PROPIO checkpoint
+        // (VersionNumber 2), no reutilizó/machacó la V1.
+        var versions = await client.GetFromJsonAsync<List<VectorDocumentVersionSummaryResponse>>($"/api/v2/projects/{saveBody.ProjectId}/versions");
+        Assert.Equal([2, 1], versions!.Select(v => v.VersionNumber));
+
+        // GET .../document (la ACTUAL, V2): devuelve el contenido CON el patch aplicado.
+        var current = await client.GetFromJsonAsync<VectorDocumentResponse>($"/api/v2/projects/{saveBody.ProjectId}/document");
+        Assert.Equal(2, current!.VersionNumber);
+        Assert.Equal("Nombre patcheado", Assert.Single(current.Layers).Name);
+    }
+
+    [Fact]
     public async Task PatchLayer_WithUnassignedOperation_ClearsIt()
     {
         await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
@@ -582,8 +628,8 @@ public sealed class VectorDocumentEndpointsTests : IAsyncLifetime
             firstBody.ProjectId, null, classic.ProjectId, classic.ImageId, classic.PaletteId, classic.PaletteVersion, null));
         secondSave.EnsureSuccessStatusCode();
 
-        // PATCH muta la capa de la DocumentVersion ACTUAL (V2) IN-PLACE -- V1 nunca se toca
-        // (PATCH no es un checkpoint/versión nueva, a diferencia de Save/Restore).
+        // PATCH es, igual que Save/Restore, un checkpoint (fix round 1 de M2.2-S06): crea una
+        // V3 nueva con el patch aplicado -- V2 (de donde partió) nunca se toca.
         var patchResponse = await client.PatchAsJsonAsync(
             $"/api/v2/projects/{firstBody.ProjectId}/layers/{classic.Layers[0].GroupId}",
             new UpdateLayerRequest("Nombre cambiado antes de restaurar", null, null, null, null));
@@ -593,17 +639,18 @@ public sealed class VectorDocumentEndpointsTests : IAsyncLifetime
 
         Assert.Equal(HttpStatusCode.OK, restoreResponse.StatusCode);
         var restoreBody = await restoreResponse.Content.ReadFromJsonAsync<VectorDocumentSaveResponse>();
-        Assert.Equal(3, restoreBody!.VersionNumber); // siguiente número secuencial (V1 Save + V2 Save + PATCH no crea versión = próxima es V3)
+        Assert.Equal(4, restoreBody!.VersionNumber); // siguiente número secuencial (V1 Save, V2 Save, V3 PATCH, V4 Restore)
         Assert.Equal(firstBody.ProjectId, restoreBody.ProjectId);
 
         var currentDocument = await client.GetFromJsonAsync<VectorDocumentResponse>($"/api/v2/projects/{firstBody.ProjectId}/document");
-        Assert.Equal(3, currentDocument!.VersionNumber);
+        Assert.Equal(4, currentDocument!.VersionNumber);
         // Contenido de V1 restaurado -- el nombre vuelve a ser el original de V1, no el
-        // patcheado sobre V2.
+        // patcheado sobre V3.
         Assert.Equal(v1Document!.Layers[0].Name, currentDocument.Layers[0].Name);
 
         var versions = await client.GetFromJsonAsync<List<VectorDocumentVersionSummaryResponse>>($"/api/v2/projects/{firstBody.ProjectId}/versions");
-        Assert.Contains(versions!, v => v.VersionNumber == 3 && v.Origin == "RESTORE");
+        Assert.Contains(versions!, v => v.VersionNumber == 4 && v.Origin == "RESTORE");
+        Assert.Contains(versions!, v => v.VersionNumber == 3 && v.Origin == "MANUAL_EDIT"); // el PATCH quedó registrado como su propio checkpoint
     }
 
     [Fact]

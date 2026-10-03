@@ -98,6 +98,19 @@ public interface IVectorDocumentRepository
     /// perteneciente a <paramref name="ownerId"/> -- null en cualquier otro caso (no existe,
     /// pertenece a otro proyecto/usuario, o pertenece a una versión histórica ya superada),
     /// mismo 404 uniforme que el resto del módulo.
+    ///
+    /// Fix round 1 (QA post-merge, M2.2-S06): YA NO muta la fila de la versión actual in-place
+    /// -- PATCH es, igual que <see cref="SaveAsync"/>/<see cref="RestoreAsync"/>, un checkpoint:
+    /// crea una <see cref="DocumentVersion"/> COMPLETA nueva (copia fresca, ids nuevos, de TODOS
+    /// los <see cref="Layer"/>/<see cref="PaletteColor"/> de la versión actual, mismo patrón que
+    /// <see cref="RestoreAsync"/>) con el patch aplicado SOLO sobre la copia nueva del layer
+    /// identificado, <see cref="DocumentVersionOrigin.ManualEdit"/>, y repunta
+    /// <see cref="Project.CurrentVersionId"/> a la versión nueva -- la versión anterior queda
+    /// intacta como checkpoint histórico (consultar <c>GET .../versions/{n}</c> sobre ella sigue
+    /// devolviendo el contenido ORIGINAL, sin el patch). Misma transacción EF explícita de dos
+    /// fases y mismo mecanismo de concurrencia (xmin) que <see cref="SaveAsync"/>: puede lanzar
+    /// <see cref="Microsoft.EntityFrameworkCore.DbUpdateConcurrencyException"/>
+    /// (<see cref="VectorDocumentService"/> la traduce a <see cref="VectorDocumentResult.Conflict"/>, 409).
     /// </summary>
     Task<Layer?> UpdateLayerAsync(
         Guid projectId, Guid ownerId, Guid layerId, LayerPatch patch, CancellationToken cancellationToken);
