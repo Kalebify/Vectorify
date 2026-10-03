@@ -319,6 +319,14 @@ export function useVectorDocument(
    * comportamiento existente sin cambios (flujo clásico de staging).
    */
   savedProjectId?: string | null,
+  /**
+   * `useWorkspaceSave().trackPatch` (M2.2-S07) -- conecta el indicador Dirty/Saving/Saved/Error
+   * compartido al PATCH real de cada mutación cuando `savedProjectId` ya está presente (el PATCH
+   * YA ES el autosave de una sesión guardada, ver spec.md M2.2-S07). Nunca se invoca en staging
+   * (sin `savedProjectId`, esas mutaciones siguen pasando por los sidecars clásicos, ajenos al
+   * indicador de Save). No toca la lógica de rollback optimista de acá, que sigue sin cambios.
+   */
+  trackPatch?: (promise: Promise<unknown>) => void,
 ): UseVectorDocumentState {
   const [status, setStatus] = useState<VectorDocumentStatus>("idle");
   const [document, setDocument] = useState<VectorDocument | null>(null);
@@ -484,7 +492,11 @@ export function useVectorDocument(
       setDocument((current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, visible: nextVisible } : l)) });
 
       if (savedProjectId) {
-        updateVectorDocumentLayer(savedProjectId, groupId, { visible: nextVisible })
+        const patchPromise = updateVectorDocumentLayer(savedProjectId, groupId, { visible: nextVisible });
+        // M2.2-S07: el PATCH YA ES el autosave real de una sesión guardada -- conecta el
+        // indicador compartido a ESTA promesa, sin alterar el rollback optimista de abajo.
+        trackPatch?.(patchPromise);
+        patchPromise
           .then((response) => setDocument((current) => current && applySavedLayerResponse(current, response)))
           .catch(() =>
             setDocument(
@@ -502,7 +514,7 @@ export function useVectorDocument(
           ),
         );
     },
-    [document, projectId, imageId, savedProjectId],
+    [document, projectId, imageId, savedProjectId, trackPatch],
   );
 
   const isolate = useCallback((groupId: string) => {
@@ -534,7 +546,9 @@ export function useVectorDocument(
       setDocument((current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, locked: nextLocked } : l)) });
 
       if (savedProjectId) {
-        updateVectorDocumentLayer(savedProjectId, groupId, { locked: nextLocked })
+        const patchPromise = updateVectorDocumentLayer(savedProjectId, groupId, { locked: nextLocked });
+        trackPatch?.(patchPromise);
+        patchPromise
           .then((response) => setDocument((current) => current && applySavedLayerResponse(current, response)))
           .catch(() =>
             setDocument(
@@ -552,7 +566,7 @@ export function useVectorDocument(
           ),
         );
     },
-    [document, projectId, imageId, savedProjectId],
+    [document, projectId, imageId, savedProjectId, trackPatch],
   );
 
   // ---- Rename (M2.1-S07, ronda de fix 1 -- ver docstring de renameLayer arriba) ----
@@ -572,7 +586,9 @@ export function useVectorDocument(
       setDocument((current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, name: trimmed } : l)) });
 
       if (savedProjectId) {
-        updateVectorDocumentLayer(savedProjectId, groupId, { name: trimmed })
+        const patchPromise = updateVectorDocumentLayer(savedProjectId, groupId, { name: trimmed });
+        trackPatch?.(patchPromise);
+        patchPromise
           .then((response) => setDocument((current) => current && applySavedLayerResponse(current, response)))
           .catch(() =>
             setDocument(
@@ -590,7 +606,7 @@ export function useVectorDocument(
           ),
         );
     },
-    [document, projectId, imageId, savedProjectId],
+    [document, projectId, imageId, savedProjectId, trackPatch],
   );
 
   // ---- Reorder (Drag & Drop, PERSISTIDO -- NUNCA toca geometría) ----
@@ -616,7 +632,11 @@ export function useVectorDocument(
         // cambió respecto al valor previo, nunca uno por cada layer del documento.
         const changedLayers = optimisticLayers.filter((layer) => byGroupId.get(layer.groupId)!.order !== layer.order);
 
-        Promise.all(changedLayers.map((layer) => updateVectorDocumentLayer(savedProjectId, layer.groupId, { order: layer.order })))
+        const patchPromise = Promise.all(
+          changedLayers.map((layer) => updateVectorDocumentLayer(savedProjectId, layer.groupId, { order: layer.order })),
+        );
+        trackPatch?.(patchPromise);
+        patchPromise
           .then((responses) =>
             setDocument((current) => {
               if (!current) return current;
@@ -631,7 +651,7 @@ export function useVectorDocument(
         .then((response) => setDocument((current) => current && applyLayoutEntries(current, response.entries)))
         .catch(() => setDocument((current) => current && { ...current, layers: previousLayers }));
     },
-    [document, projectId, imageId, savedProjectId],
+    [document, projectId, imageId, savedProjectId, trackPatch],
   );
 
   // ---- Selección (EFÍMERA) ----

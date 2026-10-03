@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useCanvasTransform } from "../../hooks/useCanvasTransform";
 import { useLaserWarnings } from "../../hooks/useLaserWarnings";
 import { useManufacturingOperations } from "../../hooks/useManufacturingOperations";
@@ -57,6 +57,19 @@ export function EditorShell({
   onSaved,
   onClose,
 }: EditorShellProps) {
+  // M2.2-S07: `useVectorDocument`/`useManufacturingOperations` necesitan `trackPatch` (expuesto
+  // por `useWorkspaceSave`, declarado más abajo) para conectar cada PATCH-por-edición al
+  // indicador compartido en una sesión ya guardada -- pero `useWorkspaceSave` a su vez necesita
+  // `document.paletteVersion` (de `useVectorDocument`). Se rompe el ciclo con el patrón "latest
+  // ref" (mismo criterio que `latestParamsRef` dentro de useWorkspaceSave.ts): `trackPatch` (la
+  // función ESTABLE pasada a los hooks de abajo) reenvía a `trackPatchRef.current`, asignado
+  // recién una vez resuelto `workspaceSave` más abajo -- siempre con el valor VIGENTE para cuando
+  // alguna mutación real la invoque (nunca antes de que termine este mismo render).
+  const trackPatchRef = useRef<((promise: Promise<unknown>) => void) | undefined>(undefined);
+  const trackPatch = useCallback((promise: Promise<unknown>) => {
+    trackPatchRef.current?.(promise);
+  }, []);
+
   const {
     status,
     document,
@@ -74,11 +87,12 @@ export function EditorShell({
     selectGroup,
     selectedPathKeys,
     selectAllInLayer,
-  } = useVectorDocument(projectId, imageId, paletteId, savedProjectId);
+  } = useVectorDocument(projectId, imageId, paletteId, savedProjectId, trackPatch);
   const laserWarnings = useLaserWarnings(projectId, imageId);
 
-  // Guardado real del VectorDocument (M2.2-S05) -- ver useWorkspaceSave para la máquina de
-  // estados completa (idle/dirty/saving/saved/error).
+  // Guardado real del VectorDocument (M2.2-S05/S07) -- ver useWorkspaceSave para la máquina de
+  // estados completa (idle/dirty/saving/saved/error) y el autosave (debounce de staging +
+  // trackPatch de una sesión ya guardada).
   const workspaceSave = useWorkspaceSave({
     initialSavedProjectId: savedProjectId,
     projectName,
@@ -88,6 +102,9 @@ export function EditorShell({
     paletteVersion: document?.paletteVersion ?? null,
     dimensionId,
   });
+  useEffect(() => {
+    trackPatchRef.current = workspaceSave.trackPatch;
+  }, [workspaceSave.trackPatch]);
 
   useEffect(() => {
     if (workspaceSave.state === "saved" && workspaceSave.savedProjectId && workspaceSave.savedProjectId !== savedProjectId) {
@@ -109,7 +126,7 @@ export function EditorShell({
     operations: manufacturingOperations,
     mutatingGroupId: manufacturingMutatingGroupId,
     assign: assignManufacturingOperation,
-  } = useManufacturingOperations(projectId, imageId, paletteId, document?.layerSetId ?? null, savedProjectId);
+  } = useManufacturingOperations(projectId, imageId, paletteId, document?.layerSetId ?? null, savedProjectId, trackPatch);
 
   const { transform, zoomBy, panBy, fitToScreen } = useCanvasTransform();
   const [activeTool, setActiveTool] = useState<EditorTool>("select");
@@ -123,28 +140,32 @@ export function EditorShell({
     fitToScreen(canvasSize, { width: document.sourceWidthPx, height: document.sourceHeightPx });
   };
 
-  // Cualquier mutación del VectorDocument marca "dirty" (M2.2-S05, idle/dirty ->
-  // useWorkspaceSave): el Save sigue siendo una acción explícita del botón Guardar, esto solo
-  // refleja que hay cambios sin guardar desde el último Save exitoso.
+  // Cualquier mutación del VectorDocument marca "dirty" EN STAGING (M2.2-S05, idle/dirty ->
+  // useWorkspaceSave; M2.2-S07: ese "dirty" ahora arranca el debounce que dispara el primer Save
+  // automáticamente). Una vez que hay `savedProjectId` (sesión ya guardada), el PATCH de cada
+  // mutación YA ES el autosave real (ver `trackPatch`, conectado dentro de
+  // useVectorDocument/useManufacturingOperations) -- llamar `markDirty()` acá dejaría un "dirty"
+  // mentiroso, inmediatamente pisado por el resultado del PATCH (spec.md M2.2-S07, "Estado
+  // Dirty/Saving/Saved/Error").
   const { markDirty } = workspaceSave;
   const handleToggleVisibility = (groupId: string) => {
-    markDirty();
+    if (!savedProjectId) markDirty();
     toggleVisibility(groupId);
   };
   const handleToggleLocked = (groupId: string) => {
-    markDirty();
+    if (!savedProjectId) markDirty();
     toggleLocked(groupId);
   };
   const handleRenameLayer = (groupId: string, name: string) => {
-    markDirty();
+    if (!savedProjectId) markDirty();
     renameLayer(groupId, name);
   };
   const handleReorderLayers = (orderedGroupIds: string[]) => {
-    markDirty();
+    if (!savedProjectId) markDirty();
     reorderLayers(orderedGroupIds);
   };
   const handleChangeOperation: typeof assignManufacturingOperation = (groupId, operation) => {
-    markDirty();
+    if (!savedProjectId) markDirty();
     assignManufacturingOperation(groupId, operation);
   };
 

@@ -180,6 +180,15 @@ public sealed class VectorizationDbContext : DbContext
             // versión "1".
             entity.HasIndex(e => new { e.VectorDocumentId, e.VersionNumber }).IsUnique();
 
+            // Idempotencia real de POST /api/v2/workspaces/save (M2.2-S07): índice único PARCIAL
+            // -- solo sobre valores NO NULOS (HasFilter) -- para no romper ninguna DocumentVersion
+            // vieja que nunca mandó un IdempotencyKey (PATCH/Restore, o un Save de antes de esta
+            // tarjeta, todos con la columna en null). Npgsql soporta índices únicos parciales
+            // reales vía HasFilter, mismo criterio ya documentado en IdempotencyKey más arriba.
+            entity.HasIndex(e => e.IdempotencyKey)
+                .IsUnique()
+                .HasFilter("\"IdempotencyKey\" IS NOT NULL");
+
             // VectorDocument -> DocumentVersion: Cascade. DocumentVersion es un hijo
             // propio de VectorDocument sin otra entidad apuntándole desde "afuera" de esa
             // relación salvo Project.CurrentVersionId, que es Restrict -- así que si una

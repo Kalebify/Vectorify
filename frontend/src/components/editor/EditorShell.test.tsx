@@ -366,6 +366,37 @@ describe("EditorShell — cutover post-Save (savedProjectId activo, M2.2-S05 ron
     expect(fetch.mock.calls.some((call) => String(call[0]).includes("/layers/operations"))).toBe(false);
     expect(fetch.mock.calls.some((call) => /\/operation$/.test(String(call[0])))).toBe(false);
   });
+
+  it("M2.2-S07: el PATCH de una edición refleja 'Guardado' en el indicador compartido -- sin que EditorShell llame a markDirty (nunca 'Cambios sin guardar')", async () => {
+    stubFetch((url) => {
+      if (url.includes(`/api/v2/projects/${SAVED_PROJECT_ID}/document`)) return jsonResponse(savedDocumentResponse());
+      if (url.includes("/assets/")) return new Response(SVG_TEXT, { status: 200 });
+      if (/\/layers\/[0-9a-f-]+$/.test(url)) {
+        return jsonResponse({
+          id: GROUP_A_ID, name: "Rojo", order: 0, visible: false, locked: false,
+          manufacturingOperation: "cut", colorHex: "#ff0000", coverage: 60, isBackground: false,
+          svgAssetId: null, svgUrl: `/assets/${GROUP_A_ID}`, pathCount: 3,
+        });
+      }
+      return undefined;
+    });
+
+    renderSavedShell();
+    await waitFor(() => expect(screen.getByRole("application")).toBeInTheDocument());
+
+    // Nunca "Cambios sin guardar" (ese estado es EXCLUSIVO del debounce de staging, sin
+    // savedProjectId) -- una sesión ya guardada arranca directo en "Sin cambios desde la última
+    // apertura" (idle) hasta la primera edición.
+    expect(screen.queryByText("Cambios sin guardar")).not.toBeInTheDocument();
+
+    const eyeButtons = await screen.findAllByRole("button", { name: /Ocultar la capa|Mostrar la capa/ });
+    fireEvent.click(eyeButtons[0]);
+
+    // El PATCH-por-edición YA ES el autosave real (trackPatch): el indicador compartido pasa
+    // directo a "Guardado" apenas resuelve -- nunca pasa por "Cambios sin guardar".
+    await screen.findByText("Guardado");
+    expect(screen.queryByText("Cambios sin guardar")).not.toBeInTheDocument();
+  });
 });
 
 describe("EditorShell — ← Projects", () => {

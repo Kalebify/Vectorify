@@ -82,6 +82,23 @@ public sealed class VectorDocumentService : IVectorDocumentService
 
         var ownerId = _userContext.GetEffectiveUserId();
 
+        // Idempotencia real (M2.2-S07): un reintento (red lenta que hizo timeout del lado del
+        // cliente pero el servidor sí terminó, o un segundo click mientras el primero seguía en
+        // vuelo) reenvía la MISMA idempotencyKey -- si ya existe una DocumentVersion con esa key,
+        // se devuelve ESE resultado tal cual, SIN crear nada nuevo, sin re-resolver el estado
+        // clásico ni re-subir ningún SVG (ver spec.md M2.2-S07, "Backend: idempotencia real").
+        if (!string.IsNullOrWhiteSpace(request.IdempotencyKey))
+        {
+            var existing = await _repository.FindByIdempotencyKeyAsync(ownerId, request.IdempotencyKey, cancellationToken);
+            if (existing is not null)
+            {
+                _logger.LogInformation(
+                    "Replay de idempotencyKey {IdempotencyKey}: devolviendo la versión {VersionNumber} del proyecto {ProjectId} sin crear una nueva",
+                    request.IdempotencyKey, existing.VersionNumber, existing.ProjectId);
+                return new VectorDocumentResult.Replayed(existing.ProjectId, existing.VersionNumber, existing.SavedAt);
+            }
+        }
+
         Guid projectId;
         if (request.ProjectId is null)
         {
@@ -310,7 +327,8 @@ public sealed class VectorDocumentService : IVectorDocumentService
             // "workspace_save" que M2.2-S05 emitía (ver spec.md M2.2-S06, "Origin").
             Origin: DocumentVersionOrigin.ManualEdit,
             MetadataJson: "{}",
-            Layers: layerSnapshots);
+            Layers: layerSnapshots,
+            IdempotencyKey: string.IsNullOrWhiteSpace(request.IdempotencyKey) ? null : request.IdempotencyKey);
 
         try
         {

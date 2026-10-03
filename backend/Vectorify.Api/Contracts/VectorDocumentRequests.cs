@@ -14,6 +14,15 @@ namespace Vectorify.Api.Contracts;
 /// este valor para la escritura -- ver spec.md M2.2-S05). <see cref="DimensionId"/> opcional:
 /// si se manda, resuelve esas dimensiones físicas ya aplicadas; si no, default 1px = 1mm.
 /// </summary>
+/// <param name="IdempotencyKey">
+/// M2.2-S07: GUID generado por el CLIENTE, UNA vez por intento lógico de guardar -- el mismo
+/// valor se reenvía en cada reintento automático/manual de ESE mismo intento, nunca uno nuevo
+/// por reintento. Null/vacío = sin idempotencia (comportamiento anterior a esta tarjeta, nunca
+/// deduplica). Mismo criterio ya existente en
+/// <see cref="Vectorify.Api.Projects.ProjectRecord.IdempotencyKey"/>/
+/// <see cref="Vectorify.Api.Projects.ProjectUploadService.UploadAsync"/> -- reusado acá, no
+/// reinventado.
+/// </param>
 public sealed record VectorDocumentSaveRequest(
     Guid? ProjectId,
     string? Name,
@@ -21,7 +30,8 @@ public sealed record VectorDocumentSaveRequest(
     Guid ImageId,
     Guid PaletteId,
     int PaletteVersion,
-    Guid? DimensionId);
+    Guid? DimensionId,
+    string? IdempotencyKey = null);
 
 /// <summary>
 /// Body de <c>PATCH /api/v2/projects/{projectId}/layers/{layerId}</c> (M2.2-S05): mismo
