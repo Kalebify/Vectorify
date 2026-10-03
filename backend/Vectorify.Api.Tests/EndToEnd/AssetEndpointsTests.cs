@@ -11,6 +11,7 @@ using Testcontainers.PostgreSql;
 using Vectorify.Api.Contracts;
 using Vectorify.Api.Data;
 using Vectorify.Api.Storage;
+using Vectorify.Api.Tests.TestSupport;
 
 namespace Vectorify.Api.Tests.EndToEnd;
 
@@ -21,6 +22,14 @@ namespace Vectorify.Api.Tests.EndToEnd;
 /// temporal por instancia de factory -- NUNCA mockeado, salvo
 /// <see cref="Upload_WhenStorageFails_DoesNotLeaveAnOrphanedAssetRow"/>, que sí necesita un
 /// IFileStorage fake que lanza FileStorageException (ver spec.md, "Tests").
+///
+/// Defecto de QA sobre M2.2-S04 (bloqueo post-merge): los casos de éxito de este archivo
+/// subían bytes arbitrarios ([1,2,3,4], etc.) declarados <c>image/png</c> -- suficiente
+/// mientras <see cref="Vectorify.Api.Assets.AssetUploadValidator"/> no miraba el contenido
+/// real. Ahora que valida firma+decodificación real, los casos de ÉXITO usan imágenes
+/// PNG reales y válidas (<see cref="SampleImages"/>/<see cref="ColorPalettePngs"/>) y se
+/// agregan casos explícitos para los dos rechazos nuevos (contenido corrupto, extensión no
+/// compatible) y para el caso de "reinicio" del spec.md.
 /// </summary>
 public sealed class AssetEndpointsTests : IAsyncLifetime
 {
@@ -46,26 +55,107 @@ public sealed class AssetEndpointsTests : IAsyncLifetime
         await using var factory = CreateFactory();
         var client = factory.CreateClient();
         var projectId = await CreateProjectAsync(client);
+        var content = SampleImages.ValidPng1x1;
 
-        var uploadResponse = await UploadAssetAsync(client, projectId, "original", "hello.png", [1, 2, 3, 4], "image/png");
+        var uploadResponse = await UploadAssetAsync(client, projectId, "original", "hello.png", content, "image/png");
         Assert.Equal(HttpStatusCode.Created, uploadResponse.StatusCode);
         var asset = await uploadResponse.Content.ReadFromJsonAsync<AssetResponse>();
         Assert.NotNull(asset);
         Assert.Equal(projectId, asset!.ProjectId);
         Assert.Equal("original", asset.Type);
-        Assert.Equal(4, asset.Size);
+        Assert.Equal(content.Length, asset.Size);
         Assert.NotNull(uploadResponse.Headers.Location);
 
         var downloadResponse = await client.GetAsync($"/api/v2/projects/{projectId}/assets/{asset.Id}");
         Assert.Equal(HttpStatusCode.OK, downloadResponse.StatusCode);
         var downloadedBytes = await downloadResponse.Content.ReadAsByteArrayAsync();
-        Assert.Equal(new byte[] { 1, 2, 3, 4 }, downloadedBytes);
+        Assert.Equal(content, downloadedBytes);
 
         var deleteResponse = await client.DeleteAsync($"/api/v2/projects/{projectId}/assets/{asset.Id}");
         Assert.Equal(HttpStatusCode.NoContent, deleteResponse.StatusCode);
 
         var getAfterDeleteResponse = await client.GetAsync($"/api/v2/projects/{projectId}/assets/{asset.Id}");
         Assert.Equal(HttpStatusCode.NotFound, getAfterDeleteResponse.StatusCode);
+    }
+
+    /// <summary>
+    /// Defecto de QA sobre M2.2-S04 (bloqueo post-merge): este es el caso EXACTO reportado --
+    /// bytes arbitrarios ([1,2,3,4]) declarados image/png recibían 201 porque el validador
+    /// solo miraba el Content-Type declarado, nunca el contenido real. Ahora debe rechazarse.
+    /// </summary>
+    [Fact]
+    public async Task Upload_WithGarbageBytesDeclaredAsPng_ReturnsBadRequestCorruptImage()
+    {
+        await using var factory = CreateFactory();
+        var client = factory.CreateClient();
+        var projectId = await CreateProjectAsync(client);
+
+        var response = await UploadAssetAsync(client, projectId, "original", "hello.png", [1, 2, 3, 4], "image/png");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ApiErrorResponse>();
+        Assert.Equal("corrupt_image", error!.Code);
+    }
+
+    /// <summary>
+    /// Defecto de QA sobre M2.2-S04: la extensión del FileName declarado nunca se comparaba
+    /// contra el Content-Type declarado -- un ".txt" declarado como image/png pasaba.
+    /// </summary>
+    [Fact]
+    public async Task Upload_WithFileNameExtensionNotMatchingDeclaredContentType_ReturnsBadRequestExtensionMismatch()
+    {
+        await using var factory = CreateFactory();
+        var client = factory.CreateClient();
+        var projectId = await CreateProjectAsync(client);
+
+        var response = await UploadAssetAsync(
+            client, projectId, "original", "foo.txt", SampleImages.ValidPng1x1, "image/png");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ApiErrorResponse>();
+        Assert.Equal("extension_mismatch", error!.Code);
+    }
+
+    /// <summary>
+    /// Spec.md, "Tests": "Reinicio: un Asset guardado antes de 'reiniciar' (simulable
+    /// recreando el DbContext/servicio sin tocar el storage real) sigue siendo legible
+    /// después." -- acá "reiniciar" se simula recreando la WebApplicationFactory completa
+    /// (una instancia nueva de DI container, por lo tanto DbContext/AssetService nuevos)
+    /// apuntando al MISMO Postgres (Testcontainers, nunca se detiene entre factories) y al
+    /// MISMO directorio de storage en disco (_storageRootPath es un campo del test, no de la
+    /// factory) -- prueba que la persistencia es real entre instancias, no un cache en
+    /// memoria de la sesión de test. Mismo criterio que
+    /// Vectorify.Api.Tests.Projects.PersistentProjectRegistryTests.
+    /// Save_ThenRecreatingTheRegistryOnTheSameDirectory_StillFindsTheRecord.
+    /// </summary>
+    [Fact]
+    public async Task Upload_ThenRecreatingTheFactory_StillReadsTheAssetAfterwards()
+    {
+        Guid projectId;
+        Guid assetId;
+        var content = SampleImages.ValidPng1x1;
+
+        await using (var firstFactory = CreateFactory())
+        {
+            var firstClient = firstFactory.CreateClient();
+            projectId = await CreateProjectAsync(firstClient);
+
+            var uploadResponse = await UploadAssetAsync(
+                firstClient, projectId, "original", "restart.png", content, "image/png");
+            Assert.Equal(HttpStatusCode.Created, uploadResponse.StatusCode);
+            var asset = await uploadResponse.Content.ReadFromJsonAsync<AssetResponse>();
+            Assert.NotNull(asset);
+            assetId = asset!.Id;
+        }
+
+        // Simula un reinicio del proceso: nueva WebApplicationFactory (nuevo DI container,
+        // nuevo AssetService/DbContext), mismo Postgres real y mismo directorio de storage.
+        await using var secondFactory = CreateFactory();
+        var secondClient = secondFactory.CreateClient();
+
+        var downloadResponse = await secondClient.GetAsync($"/api/v2/projects/{projectId}/assets/{assetId}");
+        Assert.Equal(HttpStatusCode.OK, downloadResponse.StatusCode);
+        Assert.Equal(content, await downloadResponse.Content.ReadAsByteArrayAsync());
     }
 
     [Fact]
@@ -89,8 +179,14 @@ public sealed class AssetEndpointsTests : IAsyncLifetime
         var client = factory.CreateClient();
         var projectId = await CreateProjectAsync(client);
 
-        var firstResponse = await UploadAssetAsync(client, projectId, "original", "same-name.png", [1, 1, 1], "image/png");
-        var secondResponse = await UploadAssetAsync(client, projectId, "original", "same-name.png", [2, 2, 2, 2], "image/png");
+        // Dos PNGs reales y válidos pero con contenido DISTINTO (mismo FileName de usuario
+        // "same-name.png") -- generados en memoria con ImageSharp, mismo criterio que
+        // Vectorify.Api.Tests.TestSupport.ColorPalettePngs ya usa en otros tests.
+        var firstContent = ColorPalettePngs.SolidMask(2, 2, filled: true);
+        var secondContent = ColorPalettePngs.SolidMask(2, 2, filled: false);
+
+        var firstResponse = await UploadAssetAsync(client, projectId, "original", "same-name.png", firstContent, "image/png");
+        var secondResponse = await UploadAssetAsync(client, projectId, "original", "same-name.png", secondContent, "image/png");
 
         var firstAsset = await firstResponse.Content.ReadFromJsonAsync<AssetResponse>();
         var secondAsset = await secondResponse.Content.ReadFromJsonAsync<AssetResponse>();
@@ -102,8 +198,8 @@ public sealed class AssetEndpointsTests : IAsyncLifetime
 
         var firstDownload = await client.GetAsync($"/api/v2/projects/{projectId}/assets/{firstAsset.Id}");
         var secondDownload = await client.GetAsync($"/api/v2/projects/{projectId}/assets/{secondAsset.Id}");
-        Assert.Equal(new byte[] { 1, 1, 1 }, await firstDownload.Content.ReadAsByteArrayAsync());
-        Assert.Equal(new byte[] { 2, 2, 2, 2 }, await secondDownload.Content.ReadAsByteArrayAsync());
+        Assert.Equal(firstContent, await firstDownload.Content.ReadAsByteArrayAsync());
+        Assert.Equal(secondContent, await secondDownload.Content.ReadAsByteArrayAsync());
     }
 
     [Fact]
@@ -113,7 +209,8 @@ public sealed class AssetEndpointsTests : IAsyncLifetime
         var client = factory.CreateClient();
         var projectId = await CreateProjectAsync(client);
 
-        var response = await UploadAssetAsync(client, projectId, "original", "wont-be-saved.png", [9, 9, 9], "image/png");
+        var response = await UploadAssetAsync(
+            client, projectId, "original", "wont-be-saved.png", SampleImages.ValidPng1x1, "image/png");
 
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
         var error = await response.Content.ReadFromJsonAsync<ApiErrorResponse>();
@@ -130,7 +227,7 @@ public sealed class AssetEndpointsTests : IAsyncLifetime
         await using var factory = CreateFactory();
         var client = factory.CreateClient();
         var projectId = await CreateProjectAsync(client);
-        byte[] content = [10, 20, 30, 40, 50];
+        var content = SampleImages.ValidPng1x1;
         var expectedChecksum = Convert.ToHexStringLower(SHA256.HashData(content));
 
         var response = await UploadAssetAsync(client, projectId, "original", "checksum.png", content, "image/png");
@@ -145,8 +242,9 @@ public sealed class AssetEndpointsTests : IAsyncLifetime
         await using var factory = CreateFactory();
         var client = factory.CreateClient();
         var projectId = await CreateProjectAsync(client);
+        var content = SampleImages.ValidPng1x1;
 
-        var response = await UploadAssetAsync(client, projectId, "original", "../../etc/passwd.png", [7, 7], "image/png");
+        var response = await UploadAssetAsync(client, projectId, "original", "../../etc/passwd.png", content, "image/png");
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var asset = await response.Content.ReadFromJsonAsync<AssetResponse>();
@@ -162,7 +260,7 @@ public sealed class AssetEndpointsTests : IAsyncLifetime
 
         var downloadResponse = await client.GetAsync($"/api/v2/projects/{projectId}/assets/{asset.Id}");
         Assert.Equal(HttpStatusCode.OK, downloadResponse.StatusCode);
-        Assert.Equal(new byte[] { 7, 7 }, await downloadResponse.Content.ReadAsByteArrayAsync());
+        Assert.Equal(content, await downloadResponse.Content.ReadAsByteArrayAsync());
     }
 
     [Fact]

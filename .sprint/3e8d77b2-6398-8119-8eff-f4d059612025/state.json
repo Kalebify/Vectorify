@@ -3,17 +3,18 @@
   "card_url": "https://app.notion.com/p/3e8d77b2639881198efff4d059612025",
   "title": "M2.2-S04 · Object Storage + gestión de Assets",
   "stack": "ASP.NET Core, Infra -- extiende el IFileStorage ya existente desde M1-S02 (DeleteAsync + checksum) y construye AssetService/IAssetRepository sobre el Asset de M2.2-S02",
-  "branch": "sprint/3e8d77b2-object-storage-assets",
+  "branch": "sprint/3e8d77b2-s04-asset-validation-fix",
   "column": "Done",
   "phase": "review",
-  "fix_rounds": 0,
+  "fix_rounds": 1,
   "preview_url": null,
-  "pr_url": "https://github.com/Kalebify/Vectorify/pull/35",
+  "pr_url": "https://github.com/Kalebify/Vectorify/pull/38",
   "started_at": "2026-10-01T00:00:00Z",
   "exceptions": [
     "Corrida en modo autonomo dentro del backlog MVP2.2 (confirmado explicitamente por el usuario para las 10 tarjetas del milestone).",
     "HALLAZGO CLAVE: IFileStorage/LocalFileStorage YA EXISTEN desde M1-S02, usados por 18 servicios del flujo clasico -- esta tarjeta los EXTIENDE (DeleteAsync, checksum) en vez de reinventar una abstraccion paralela.",
     "MinIO/S3 real diferido -- LocalFileStorage sigue siendo la unica implementacion, documentado como decision explicita (misma linea que M1-S02).",
-    "No migra el flujo clasico a la convencion de claves nueva de Assets -- coexisten."
+    "No migra el flujo clasico a la convencion de claves nueva de Assets -- coexisten.",
+    "FIX ROUND 1 (bloqueado por QA del usuario, comentario 2026-10-01T23:33): AssetUploadValidator confiaba solo en el Content-Type declarado por el cliente sin verificar la firma real del archivo -- permitia subir bytes arbitrarios como si fueran PNG/SVG validos. Tambien faltaba un test de lectura tras recrear el servicio/DbContext (persistencia real entre instancias) que la tarjeta ya pedia."
   ]
 }
