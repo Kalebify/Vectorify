@@ -616,6 +616,52 @@ describe("useVectorDocument — cutover post-Save (PATCH v2, M2.2-S05 ronda de f
     await waitFor(() => expect(result.current.visibility[GROUP_A_ID]).toBe(false));
   });
 
+  it("toggleVisibility con savedProjectId conecta trackPatch (M2.2-S07) a la promesa del PATCH -- saving de inmediato, saved al resolver", async () => {
+    const fetch = stubFetchSequence([
+      (url) => (url.includes(`/api/v2/projects/${SAVED_PROJECT_ID}/document`) ? jsonResponse(savedDocumentResponse()) : undefined!),
+    ]);
+
+    const trackPatch = vi.fn((promise: Promise<unknown>) => {
+      // Mismo contrato real de useWorkspaceSave().trackPatch -- acá solo se confirma que
+      // useVectorDocument lo invoca con la promesa REAL del PATCH, sin alterar su resultado.
+      void promise;
+    });
+
+    const { result } = renderHook(() => useVectorDocument(PROJECT_ID, IMAGE_ID, PALETTE_ID, SAVED_PROJECT_ID, trackPatch));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+
+    let resolvePatch!: (value: Response) => void;
+    fetch.mockImplementation((input: string | URL) => {
+      const url = String(input);
+      if (url === `http://localhost:5080/api/v2/projects/${SAVED_PROJECT_ID}/layers/${GROUP_A_ID}`) {
+        return new Promise<Response>((resolve) => {
+          resolvePatch = resolve;
+        });
+      }
+      return Promise.reject(new Error(`Unhandled fetch: ${url}`));
+    });
+
+    act(() => result.current.toggleVisibility(GROUP_A_ID));
+
+    expect(trackPatch).toHaveBeenCalledTimes(1);
+    const trackedPromise = trackPatch.mock.calls[0][0];
+
+    let trackedSettled = false;
+    trackedPromise.then(() => {
+      trackedSettled = true;
+    });
+
+    resolvePatch(
+      jsonResponse({
+        id: GROUP_A_ID, name: "Rojo", order: 0, visible: false, locked: false,
+        manufacturingOperation: "cut", colorHex: "#ff0000", coverage: 60, isBackground: false,
+        svgAssetId: null, svgUrl: null, pathCount: 5,
+      }),
+    );
+
+    await waitFor(() => expect(trackedSettled).toBe(true));
+  });
+
   it("toggleLocked con savedProjectId llama al PATCH v2 con { locked }", async () => {
     const fetch = stubFetchSequence([
       (url) => (url.includes(`/api/v2/projects/${SAVED_PROJECT_ID}/document`) ? jsonResponse(savedDocumentResponse()) : undefined!),

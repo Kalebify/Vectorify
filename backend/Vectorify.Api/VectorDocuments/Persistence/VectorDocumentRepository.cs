@@ -72,6 +72,7 @@ public sealed class VectorDocumentRepository : IVectorDocumentRepository
             SchemaVersion = snapshot.SchemaVersion,
             Origin = snapshot.Origin,
             MetadataJson = snapshot.MetadataJson,
+            IdempotencyKey = snapshot.IdempotencyKey,
             CreatedAt = now,
         };
         document.Versions.Add(version);
@@ -132,6 +133,33 @@ public sealed class VectorDocumentRepository : IVectorDocumentRepository
         await transaction.CommitAsync(cancellationToken);
 
         return new VectorDocumentSaveOutcome(project.Id, version.VersionNumber, project.UpdatedAt);
+    }
+
+    public async Task<VectorDocumentSaveOutcome?> FindByIdempotencyKeyAsync(
+        Guid ownerId, string idempotencyKey, CancellationToken cancellationToken)
+    {
+        // Única query, sin necesitar projectId (ver docstring de la interfaz): el índice único
+        // parcial sobre IdempotencyKey ya ubica la fila directamente. El filtro por OwnerId (vía
+        // la navegación VectorDocument -> Project, que respeta el query filter global de soft
+        // delete de Project automáticamente) evita que un replay con la key de OTRO usuario
+        // filtre que esa key ya existe.
+        var match = await _dbContext.DocumentVersions
+            .Where(v => v.IdempotencyKey == idempotencyKey)
+            .Select(v => new
+            {
+                v.VersionNumber,
+                v.CreatedAt,
+                ProjectId = v.VectorDocument!.ProjectId,
+                OwnerId = v.VectorDocument!.Project!.OwnerId,
+            })
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (match is null || match.OwnerId != ownerId)
+        {
+            return null;
+        }
+
+        return new VectorDocumentSaveOutcome(match.ProjectId, match.VersionNumber, match.CreatedAt);
     }
 
     public async Task<(VectorDocument Document, DocumentVersion Version)?> FindCurrentDocumentAsync(

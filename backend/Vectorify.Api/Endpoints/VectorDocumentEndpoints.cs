@@ -31,6 +31,9 @@ public static class VectorDocumentEndpoints
                 VectorDocumentResult.Saved saved when request.ProjectId is null => Results.Created(
                     $"/api/v2/projects/{saved.ProjectId}", ToSaveResponse(saved)),
                 VectorDocumentResult.Saved saved => Results.Ok(ToSaveResponse(saved)),
+                // M2.2-S07: replay de idempotencyKey -- SIEMPRE 200, nunca 201 (no se creó nada
+                // nuevo, ver VectorDocumentResult.Replayed).
+                VectorDocumentResult.Replayed replayed => Results.Ok(ToSaveResponse(replayed)),
                 VectorDocumentResult.NotFound notFound => Results.NotFound(new ApiErrorResponse(notFound.Code, notFound.Message)),
                 VectorDocumentResult.ValidationFailed failed => Results.BadRequest(new ApiErrorResponse(failed.Code, failed.Message)),
                 VectorDocumentResult.Conflict conflict => Results.Conflict(new ApiErrorResponse(conflict.Code, conflict.Message)),
@@ -191,6 +194,9 @@ public static class VectorDocumentEndpoints
 
     private static VectorDocumentSaveResponse ToSaveResponse(VectorDocumentResult.Saved saved) =>
         new(saved.ProjectId, saved.VersionNumber, saved.SavedAt);
+
+    private static VectorDocumentSaveResponse ToSaveResponse(VectorDocumentResult.Replayed replayed) =>
+        new(replayed.ProjectId, replayed.VersionNumber, replayed.SavedAt);
 
     private static VectorDocumentVersionSummaryResponse ToVersionSummaryResponse(DocumentVersion version) => new(
         version.VersionNumber,

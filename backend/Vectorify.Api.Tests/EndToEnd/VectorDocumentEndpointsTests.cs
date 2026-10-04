@@ -264,6 +264,72 @@ public sealed class VectorDocumentEndpointsTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Save_WithSameIdempotencyKey_SecondCallReplaysTheFirstResult_WithoutCreatingANewVersion()
+    {
+        // spec.md M2.2-S07, "Doble request": simula un reintento real (red lenta que hizo timeout
+        // del lado del cliente pero el servidor sí terminó, el cliente reintenta con la MISMA
+        // idempotencyKey) -- la segunda llamada devuelve el MISMO VersionNumber/ProjectId, nunca
+        // crea una versión nueva.
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        var idempotencyKey = Guid.NewGuid().ToString("n");
+        var requestBody = new VectorDocumentSaveRequest(
+            ProjectId: null, Name: "Guardado con reintento", ClassicProjectId: classic.ProjectId, ImageId: classic.ImageId,
+            PaletteId: classic.PaletteId, PaletteVersion: classic.PaletteVersion, DimensionId: null, IdempotencyKey: idempotencyKey);
+
+        var firstResponse = await client.PostAsJsonAsync("/api/v2/workspaces/save", requestBody);
+        Assert.Equal(HttpStatusCode.Created, firstResponse.StatusCode);
+        var firstBody = await firstResponse.Content.ReadFromJsonAsync<VectorDocumentSaveResponse>();
+
+        // Reintento: MISMO body exacto (mismo ProjectId null, misma idempotencyKey) -- igual que
+        // reenviaría un cliente real reintentando el mismo intento lógico.
+        var secondResponse = await client.PostAsJsonAsync("/api/v2/workspaces/save", requestBody);
+        Assert.Equal(HttpStatusCode.OK, secondResponse.StatusCode); // replay: nunca 201 de nuevo
+        var secondBody = await secondResponse.Content.ReadFromJsonAsync<VectorDocumentSaveResponse>();
+
+        Assert.Equal(firstBody!.ProjectId, secondBody!.ProjectId);
+        Assert.Equal(firstBody.VersionNumber, secondBody.VersionNumber);
+        // Tolerancia submilisegundo: firstBody.SavedAt viaja con la precisión de tick de .NET (el
+        // valor en memoria de la request original, serializado directo a JSON), secondBody.SavedAt
+        // se releyó de Postgres para el replay (precisión de microsegundo) -- misma fila, nunca
+        // relevante para idempotencia real.
+        Assert.True(Math.Abs((firstBody.SavedAt - secondBody.SavedAt).TotalMilliseconds) < 1);
+
+        var versions = await client.GetFromJsonAsync<List<VectorDocumentVersionSummaryResponse>>($"/api/v2/projects/{firstBody.ProjectId}/versions");
+        Assert.Single(versions!); // nunca se creó una segunda DocumentVersion
+    }
+
+    [Fact]
+    public async Task Save_WithoutIdempotencyKey_TwoCallsStillCreateTwoDistinctVersions()
+    {
+        // Control del test anterior: sin idempotencyKey (comportamiento sin cambios de esta
+        // tarjeta), dos Save reales consecutivos siguen creando dos versiones DISTINTAS -- la
+        // deduplicación es EXCLUSIVAMENTE un efecto de mandar la misma key, nunca el default.
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        var requestBody = new VectorDocumentSaveRequest(
+            ProjectId: null, Name: "Sin idempotencyKey", ClassicProjectId: classic.ProjectId, ImageId: classic.ImageId,
+            PaletteId: classic.PaletteId, PaletteVersion: classic.PaletteVersion, DimensionId: null, IdempotencyKey: null);
+
+        var firstResponse = await client.PostAsJsonAsync("/api/v2/workspaces/save", requestBody);
+        var firstBody = await firstResponse.Content.ReadFromJsonAsync<VectorDocumentSaveResponse>();
+
+        var secondResponse = await client.PostAsJsonAsync("/api/v2/workspaces/save", requestBody);
+        Assert.Equal(HttpStatusCode.Created, secondResponse.StatusCode); // NO es un replay -- crea un Project v2 nuevo de nuevo
+        var secondBody = await secondResponse.Content.ReadFromJsonAsync<VectorDocumentSaveResponse>();
+
+        Assert.NotEqual(firstBody!.ProjectId, secondBody!.ProjectId);
+    }
+
+    [Fact]
     public async Task Save_WhenPaletteIsNotConfirmed_ReturnsUnprocessableEntity()
     {
         await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
@@ -813,6 +879,9 @@ public sealed class VectorDocumentEndpointsTests : IAsyncLifetime
     private sealed class ThrowingVectorDocumentRepository : IVectorDocumentRepository
     {
         public Task<VectorDocumentSaveOutcome?> SaveAsync(Guid projectId, Guid ownerId, DocumentSnapshot snapshot, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("fallo de base de datos simulado");
+
+        public Task<VectorDocumentSaveOutcome?> FindByIdempotencyKeyAsync(Guid ownerId, string idempotencyKey, CancellationToken cancellationToken) =>
             throw new InvalidOperationException("fallo de base de datos simulado");
 
         public Task<(VectorDocument Document, DocumentVersion Version)?> FindCurrentDocumentAsync(Guid projectId, Guid ownerId, CancellationToken cancellationToken) =>

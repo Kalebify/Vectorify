@@ -12,6 +12,12 @@ namespace Vectorify.Api.VectorDocuments;
 /// <see cref="VectorDocumentResult.Conflict"/>) evita mezclar ambas responsabilidades en un
 /// solo método gigante.
 /// </summary>
+/// <param name="IdempotencyKey">
+/// M2.2-S07: viaja tal cual desde <see cref="Contracts.VectorDocumentSaveRequest.IdempotencyKey"/>
+/// hasta la fila de <see cref="Data.DocumentVersion.IdempotencyKey"/> -- null para cualquier
+/// llamador que no sea <see cref="VectorDocumentService.SaveAsync"/> (PATCH/Restore no
+/// necesitan idempotencia nueva, ver spec.md M2.2-S07).
+/// </param>
 public sealed record DocumentSnapshot(
     double WidthMm,
     double HeightMm,
@@ -19,7 +25,8 @@ public sealed record DocumentSnapshot(
     int SchemaVersion,
     DocumentVersionOrigin Origin,
     string MetadataJson,
-    IReadOnlyList<LayerSnapshot> Layers);
+    IReadOnlyList<LayerSnapshot> Layers,
+    string? IdempotencyKey = null);
 
 /// <summary>
 /// Un color de paleta dentro de un <see cref="DocumentSnapshot"/> -- siempre 1:1 con un

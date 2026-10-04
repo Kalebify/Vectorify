@@ -19,6 +19,15 @@ public abstract record VectorDocumentResult
     public sealed record Saved(Guid ProjectId, int VersionNumber, DateTimeOffset SavedAt) : VectorDocumentResult;
 
     /// <summary>
+    /// Replay de un Save ya realizado antes con la MISMA idempotencyKey (M2.2-S07) -- no se creó
+    /// nada nuevo (ni Project, ni DocumentVersion, ni se re-resolvió el estado clásico/re-subió
+    /// ningún SVG), se devuelve tal cual el resultado de la vez anterior. SIEMPRE 200, incluso si
+    /// el intento ORIGINAL (la primera vez que se vio esa key) hubiera sido un 201 -- mismo
+    /// criterio que <see cref="Vectorify.Api.Projects.ProjectUploadResult.Replayed"/>.
+    /// </summary>
+    public sealed record Replayed(Guid ProjectId, int VersionNumber, DateTimeOffset SavedAt) : VectorDocumentResult;
+
+    /// <summary>
     /// Una DocumentVersion completa -- la ACTUAL (GET .../document) o una histórica cualquiera
     /// (GET .../versions/{versionNumber}, M2.2-S06) -- el endpoint responde 200.
     /// </summary>
