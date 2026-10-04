@@ -99,6 +99,51 @@ public sealed class PersistentProjectRegistryTests : IDisposable
         Assert.Null(registry.FindByIdempotencyKey("   "));
     }
 
+    [Fact]
+    public void LoadFromDisk_WhenTheSidecarJsonPredatesOwnerId_LoadsItWithoutOwner_AndItStaysAccessibleToAnyone()
+    {
+        // JSON tal como lo escribía el registry ANTES de M2.2-S09 (sin la propiedad OwnerId).
+        var projectId = Guid.NewGuid();
+        var imageId = Guid.NewGuid();
+        var projectDir = Path.Combine(_rootPath, "projects", projectId.ToString("N"));
+        Directory.CreateDirectory(projectDir);
+        File.WriteAllText(Path.Combine(projectDir, $"{imageId:N}.json"), $$"""
+            {
+              "ProjectId": "{{projectId}}",
+              "ImageId": "{{imageId}}",
+              "FileName": "viejo.png",
+              "MimeType": "image/png",
+              "Bytes": 4,
+              "Width": 1,
+              "Height": 1,
+              "Status": "uploaded",
+              "StorageKey": "proj/img/original.png",
+              "IdempotencyKey": null,
+              "CreatedAt": "2026-01-01T00:00:00+00:00"
+            }
+            """);
+
+        var record = CreateRegistry().Find(projectId, imageId);
+
+        Assert.NotNull(record);
+        Assert.Null(record!.OwnerId);
+        Assert.True(record.IsAccessibleBy(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public void Save_WithOwner_PersistsItAcrossRestarts_AndOnlyTheOwnerCanAccessIt()
+    {
+        var ownerId = Guid.NewGuid();
+        var record = SampleRecord() with { OwnerId = ownerId };
+        CreateRegistry().Save(record);
+
+        var reloaded = CreateRegistry().Find(record.ProjectId, record.ImageId);
+
+        Assert.Equal(ownerId, reloaded!.OwnerId);
+        Assert.True(reloaded.IsAccessibleBy(ownerId));
+        Assert.False(reloaded.IsAccessibleBy(Guid.NewGuid()));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_rootPath))

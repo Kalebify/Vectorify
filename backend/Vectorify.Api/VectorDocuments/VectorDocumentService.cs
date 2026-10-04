@@ -123,9 +123,16 @@ public sealed class VectorDocumentService : IVectorDocumentService
         // vuelo) reenvía la MISMA idempotencyKey -- si ya existe una DocumentVersion con esa key,
         // se devuelve ESE resultado tal cual, SIN crear nada nuevo, sin re-resolver el estado
         // clásico ni re-subir ningún SVG (ver spec.md M2.2-S07, "Backend: idempotencia real").
-        if (!string.IsNullOrWhiteSpace(request.IdempotencyKey))
+        //
+        // M2.2-S09: la key se guarda/busca con el dueño como prefijo (ver ScopeIdempotencyKey): el
+        // índice único de DocumentVersion.IdempotencyKey es GLOBAL, así que sin esto la key de A
+        // hacía fallar con 500 el Save de B (y B podía deducir que la key de A existe).
+        var scopedIdempotencyKey = string.IsNullOrWhiteSpace(request.IdempotencyKey)
+            ? null
+            : ScopeIdempotencyKey(ownerId, request.IdempotencyKey);
+        if (scopedIdempotencyKey is not null)
         {
-            var existing = await _repository.FindByIdempotencyKeyAsync(ownerId, request.IdempotencyKey, cancellationToken);
+            var existing = await _repository.FindByIdempotencyKeyAsync(ownerId, scopedIdempotencyKey, cancellationToken);
             if (existing is not null)
             {
                 _logger.LogInformation(
@@ -133,6 +140,18 @@ public sealed class VectorDocumentService : IVectorDocumentService
                     request.IdempotencyKey, existing.VersionNumber, existing.ProjectId);
                 return new VectorDocumentResult.Replayed(existing.ProjectId, existing.VersionNumber, existing.SavedAt);
             }
+        }
+
+        // M2.2-S09: puente clásico -> v2. Los uploads del flujo clásico (ProjectRecord) tienen dueño
+        // desde esta tarjeta: si el original del triple es de OTRO usuario, el resultado es el mismo
+        // NotFound que "no existe" -- y se corta ACÁ, antes de crear el Project, subir Assets o generar
+        // el thumbnail, para no dejar nada huérfano. Un registro sin dueño (previo a la tarjeta) sigue
+        // siendo accesible. Un registro inexistente no se rechaza acá: lo atrapan los chequeos de
+        // paleta/capas de más abajo, como siempre.
+        var classicRecord = _projectRegistry.Find(request.ClassicProjectId, request.ImageId);
+        if (classicRecord is not null && !classicRecord.IsAccessibleBy(ownerId))
+        {
+            return new VectorDocumentResult.NotFound("not_found", "No existe un proyecto con ese Id.");
         }
 
         Guid projectId;
@@ -372,7 +391,7 @@ public sealed class VectorDocumentService : IVectorDocumentService
             Origin: DocumentVersionOrigin.ManualEdit,
             MetadataJson: "{}",
             Layers: layerSnapshots,
-            IdempotencyKey: string.IsNullOrWhiteSpace(request.IdempotencyKey) ? null : request.IdempotencyKey);
+            IdempotencyKey: scopedIdempotencyKey);
 
         try
         {
@@ -406,6 +425,14 @@ public sealed class VectorDocumentService : IVectorDocumentService
                 "El proyecto fue modificado por otro Save concurrente mientras tanto. Volvé a cargarlo e intentá de nuevo.");
         }
     }
+
+    /// <summary>
+    /// Clave de idempotencia efectivamente persistida: la del cliente prefijada con el dueño
+    /// (<c>{ownerId:N}:{key}</c>). Dos usuarios que manden la misma key no colisionan ni se ven.
+    /// Las filas previas a M2.2-S09 (key sin prefijo) dejan de ser replayables -- aceptable: la
+    /// ventana de un replay es el reintento inmediato de un Save, no días después.
+    /// </summary>
+    private static string ScopeIdempotencyKey(Guid ownerId, string idempotencyKey) => $"{ownerId:N}:{idempotencyKey}";
 
     /// <summary>
     /// Thumbnail best-effort (M2.2-S08): lee el original subido del flujo clásico, lo reduce a

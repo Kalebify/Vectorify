@@ -1,6 +1,7 @@
 using Vectorify.Api.Contracts;
 using Vectorify.Api.Imaging;
 using Vectorify.Api.Storage;
+using Vectorify.Api.Users;
 using Vectorify.Api.Validation;
 
 namespace Vectorify.Api.Projects;
@@ -8,34 +9,43 @@ namespace Vectorify.Api.Projects;
 /// <summary>
 /// Implementación de <see cref="IProjectUploadService"/>: valida el archivo,
 /// genera projectId/imageId, guarda el original mediante <see cref="IFileStorage"/>
-/// y registra el proyecto. El original nunca se modifica después de guardado
-/// (se escribe una sola vez, bajo una clave nueva por carga).
+/// y registra el proyecto, estampando el usuario efectivo como dueño (M2.2-S09). El
+/// original nunca se modifica después de guardado (se escribe una sola vez, bajo una
+/// clave nueva por carga).
 /// </summary>
 public sealed class ProjectUploadService : IProjectUploadService
 {
     private readonly IImageUploadValidator _validator;
     private readonly IFileStorage _fileStorage;
     private readonly IProjectRegistry _registry;
+    private readonly IUserContext _userContext;
     private readonly ILogger<ProjectUploadService> _logger;
 
     public ProjectUploadService(
         IImageUploadValidator validator,
         IFileStorage fileStorage,
         IProjectRegistry registry,
+        IUserContext userContext,
         ILogger<ProjectUploadService> logger)
     {
         _validator = validator;
         _fileStorage = fileStorage;
         _registry = registry;
+        _userContext = userContext;
         _logger = logger;
     }
 
     public async Task<ProjectUploadResult> UploadAsync(IFormFile? file, string? idempotencyKey, CancellationToken cancellationToken)
     {
+        var ownerId = _userContext.GetEffectiveUserId();
+
         if (!string.IsNullOrWhiteSpace(idempotencyKey))
         {
+            // M2.2-S09: el replay solo aplica a un registro del MISMO usuario (o sin dueño, previo
+            // a esta tarjeta). Una key que otro usuario ya usó NO devuelve sus ids: se trata como
+            // una carga nueva (el registry guarda la key más reciente).
             var existing = _registry.FindByIdempotencyKey(idempotencyKey);
-            if (existing is not null)
+            if (existing is not null && existing.IsAccessibleBy(ownerId))
             {
                 _logger.LogInformation(
                     "Replay de Idempotency-Key {IdempotencyKey}: devolviendo proyecto {ProjectId} sin crear uno nuevo",
@@ -91,7 +101,8 @@ public sealed class ProjectUploadService : IProjectUploadService
             Status: "uploaded",
             storageKey,
             idempotencyKey,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            ownerId);
 
         _registry.Save(record);
 

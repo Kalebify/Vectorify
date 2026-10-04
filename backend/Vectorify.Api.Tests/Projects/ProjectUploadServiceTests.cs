@@ -22,10 +22,11 @@ public sealed class ProjectUploadServiceTests
             ContentType = contentType,
         };
 
-    private static ProjectUploadService CreateService(FakeFileStorage storage, InMemoryProjectRegistry registry)
+    private static ProjectUploadService CreateService(FakeFileStorage storage, InMemoryProjectRegistry registry, Guid? userId = null)
     {
         var validator = new ImageUploadValidator(Microsoft.Extensions.Options.Options.Create(new UploadOptions()));
-        return new ProjectUploadService(validator, storage, registry, NullLogger<ProjectUploadService>.Instance);
+        return new ProjectUploadService(
+            validator, storage, registry, new FixedUserContext(userId), NullLogger<ProjectUploadService>.Instance);
     }
 
     [Fact]
@@ -101,5 +102,53 @@ public sealed class ProjectUploadServiceTests
         Assert.Equal(created.Response.ProjectId, replayed.Response.ProjectId);
         Assert.Equal(created.Response.ImageId, replayed.Response.ImageId);
         Assert.Equal(1, storage.SaveCallCount); // no se guardó una segunda vez
+    }
+
+    [Fact]
+    public async Task UploadAsync_StampsTheEffectiveUserAsOwnerOfTheRecord()
+    {
+        var userId = Guid.NewGuid();
+        var registry = new InMemoryProjectRegistry();
+        var service = CreateService(new FakeFileStorage(), registry, userId);
+
+        var result = await service.UploadAsync(CreateFile(SampleImages.ValidPng1x1, "logo.png", "image/png"), null, CancellationToken.None);
+
+        var created = Assert.IsType<ProjectUploadResult.Created>(result);
+        Assert.Equal(userId, registry.Find(created.Response.ProjectId, created.Response.ImageId)!.OwnerId);
+    }
+
+    [Fact]
+    public async Task UploadAsync_WhenTheIdempotencyKeyBelongsToAnotherUser_CreatesANewUploadInsteadOfReplayingTheirs()
+    {
+        var storage = new FakeFileStorage();
+        var registry = new InMemoryProjectRegistry();
+        var userA = CreateService(storage, registry, Guid.NewGuid());
+        var userBId = Guid.NewGuid();
+        var userB = CreateService(storage, registry, userBId);
+
+        var first = Assert.IsType<ProjectUploadResult.Created>(
+            await userA.UploadAsync(CreateFile(SampleImages.ValidPng1x1, "logo.png", "image/png"), "shared-key", CancellationToken.None));
+        var second = await userB.UploadAsync(CreateFile(SampleImages.ValidPng1x1, "logo.png", "image/png"), "shared-key", CancellationToken.None);
+
+        var created = Assert.IsType<ProjectUploadResult.Created>(second);
+        Assert.NotEqual(first.Response.ProjectId, created.Response.ProjectId);
+        Assert.Equal(userBId, registry.Find(created.Response.ProjectId, created.Response.ImageId)!.OwnerId);
+        Assert.Equal(2, storage.SaveCallCount);
+    }
+
+    [Fact]
+    public async Task UploadAsync_WhenTheIdempotencyKeyBelongsToARecordWithoutOwner_StillReplaysIt()
+    {
+        var registry = new InMemoryProjectRegistry();
+        var legacy = new ProjectRecord(
+            Guid.NewGuid(), Guid.NewGuid(), "viejo.png", "image/png", 4, 1, 1, "uploaded", "p/i/original.png",
+            "legacy-key", DateTimeOffset.UtcNow);
+        registry.Save(legacy);
+        var service = CreateService(new FakeFileStorage(), registry);
+
+        var result = await service.UploadAsync(CreateFile(SampleImages.ValidPng1x1, "logo.png", "image/png"), "legacy-key", CancellationToken.None);
+
+        var replayed = Assert.IsType<ProjectUploadResult.Replayed>(result);
+        Assert.Equal(legacy.ProjectId, replayed.Response.ProjectId);
     }
 }
