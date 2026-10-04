@@ -4,16 +4,18 @@
   "title": "M2.2-S08 · Pantalla Mis Proyectos",
   "stack": "Frontend, ASP.NET Core -- dashboard de proyectos persistentes sobre el CRUD v2 existente; vinculo Project v2 -> triple clasico para poder reabrir; thumbnail del original en el primer Save",
   "branch": "sprint/3e8d77b2-mis-proyectos",
-  "column": "Doing",
-  "phase": "implementation",
+  "column": "Done",
+  "phase": "review",
   "fix_rounds": 0,
   "preview_url": null,
-  "pr_url": null,
+  "pr_url": "https://github.com/Kalebify/Vectorify/pull/44",
   "started_at": "2026-10-04T00:00:00Z",
   "exceptions": [
     "Corrida en modo autonomo dentro del backlog MVP2.2 (confirmado explicitamente por el usuario para las 10 tarjetas del milestone).",
     "DECISION TECNICA PROPIA: Project v2 gana ClassicProjectId/ClassicImageId/ClassicPaletteId (nullable) en el primer Save -- sin ese vinculo Open desde la lista es imposible. Sin backfill (el dato nunca se guardo).",
     "DECISION TECNICA PROPIA: thumbnail = original reducido con ImageSharp (<=320px), mejor-esfuerzo en el primer Save; no hay rasterizador de SVG.",
-    "DECISION DE PRODUCTO TOMADA POR EL ORQUESTADOR: el dashboard pasa a ser la landing por defecto; el flujo clasico de upload queda en ?view=new."
+    "DECISION DE PRODUCTO TOMADA POR EL ORQUESTADOR: el dashboard pasa a ser la landing por defecto; el flujo clasico de upload queda en ?view=new.",
+    "BUG REAL ENCONTRADO Y CORREGIDO EN REVISION DEL ORQUESTADOR (1): DuplicateAsync (M2.2-S03) no copiaba Layer.SvgAssetId/PathCount y las filas Asset pertenecen a un solo proyecto -- un proyecto duplicado desde la lista se reabria sin arte. Corregido: filas Asset propias para el duplicado (misma StorageKey) + AssetService.DeleteAsync no borra el archivo si otra fila lo referencia. Reproducido con test rojo antes del fix.",
+    "BUG REAL ENCONTRADO Y CORREGIDO EN REVISION DEL ORQUESTADOR (2): un primer Save fallido dejaba un Project fantasma (sin documento, 0 capas) que apareceria en Mis Proyectos. Corregido: SaveAsync descarta (soft-delete) el Project creado en un Save que no termina en Saved/Replayed. Reproducido antes del fix."
   ]
 }
