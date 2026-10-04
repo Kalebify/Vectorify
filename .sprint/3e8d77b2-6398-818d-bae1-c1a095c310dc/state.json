@@ -1,0 +1,19 @@
+{
+  "card_id": "3e8d77b2-6398-818d-bae1-c1a095c310dc",
+  "card_url": "https://app.notion.com/p/3e8d77b26398818dbae1c1a095c310dc",
+  "title": "M2.2-S08 · Pantalla Mis Proyectos",
+  "stack": "Frontend, ASP.NET Core -- dashboard de proyectos persistentes sobre el CRUD v2 existente; vinculo Project v2 -> triple clasico para poder reabrir; thumbnail del original en el primer Save",
+  "branch": "sprint/3e8d77b2-mis-proyectos",
+  "column": "Doing",
+  "phase": "implementation",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "pr_url": null,
+  "started_at": "2026-10-04T00:00:00Z",
+  "exceptions": [
+    "Corrida en modo autonomo dentro del backlog MVP2.2 (confirmado explicitamente por el usuario para las 10 tarjetas del milestone).",
+    "DECISION TECNICA PROPIA: Project v2 gana ClassicProjectId/ClassicImageId/ClassicPaletteId (nullable) en el primer Save -- sin ese vinculo Open desde la lista es imposible. Sin backfill (el dato nunca se guardo).",
+    "DECISION TECNICA PROPIA: thumbnail = original reducido con ImageSharp (<=320px), mejor-esfuerzo en el primer Save; no hay rasterizador de SVG.",
+    "DECISION DE PRODUCTO TOMADA POR EL ORQUESTADOR: el dashboard pasa a ser la landing por defecto; el flujo clasico de upload queda en ?view=new."
+  ]
+}
