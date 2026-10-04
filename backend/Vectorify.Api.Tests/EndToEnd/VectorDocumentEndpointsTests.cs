@@ -349,6 +349,11 @@ public sealed class VectorDocumentEndpointsTests : IAsyncLifetime
         Assert.Equal((HttpStatusCode)422, saveResponse.StatusCode);
         var error = await saveResponse.Content.ReadFromJsonAsync<ApiErrorResponse>();
         Assert.Equal("palette_not_confirmed", error!.Code);
+
+        // Regresión (revisión M2.2-S08): un PRIMER Save fallido no deja un proyecto fantasma
+        // (sin documento, 0 capas) apareciendo en Mis Proyectos.
+        var list = await client.GetFromJsonAsync<ProjectListResponse>("/api/v2/projects");
+        Assert.Empty(list!.Items);
     }
 
     [Fact]
@@ -761,6 +766,288 @@ public sealed class VectorDocumentEndpointsTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.NotFound, (await client.PostAsync($"/api/v2/projects/{saveBody.ProjectId}/versions/1/restore", null)).StatusCode);
     }
 
+    // ---------- M2.2-S08: triple clásico, thumbnail y LayerCount en el listado ----------
+
+    [Fact]
+    public async Task FirstSave_PersistsTheClassicTripleAndCreatesADownloadableThumbnail_VisibleInTheList()
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        var saveBody = await SaveFirstAsync(client, classic, "Con origen y thumbnail");
+
+        var detail = await client.GetFromJsonAsync<ProjectResponse>($"/api/v2/projects/{saveBody.ProjectId}");
+        Assert.Equal(classic.ProjectId, detail!.ClassicProjectId);
+        Assert.Equal(classic.ImageId, detail.ClassicImageId);
+        Assert.Equal(classic.PaletteId, detail.ClassicPaletteId);
+        Assert.NotNull(detail.ThumbnailAssetId);
+
+        var list = await client.GetFromJsonAsync<ProjectListResponse>("/api/v2/projects");
+        var item = Assert.Single(list!.Items);
+        Assert.Equal(saveBody.ProjectId, item.Id);
+        Assert.Equal(classic.ProjectId, item.ClassicProjectId);
+        Assert.Equal(classic.ImageId, item.ClassicImageId);
+        Assert.Equal(classic.PaletteId, item.ClassicPaletteId);
+        Assert.Equal(1, item.LayerCount);
+        Assert.Equal(detail.ThumbnailAssetId, item.ThumbnailAssetId);
+        Assert.Equal($"/api/v2/projects/{saveBody.ProjectId}/assets/{detail.ThumbnailAssetId}", item.ThumbnailUrl);
+
+        // La URL del listado apunta al endpoint de assets EXISTENTE y sirve una imagen real ≤ 320 px.
+        var thumbnailResponse = await client.GetAsync(item.ThumbnailUrl);
+        Assert.Equal(HttpStatusCode.OK, thumbnailResponse.StatusCode);
+        Assert.Equal("image/png", thumbnailResponse.Content.Headers.ContentType?.MediaType);
+        using var thumbnail = SixLabors.ImageSharp.Image.Load(await thumbnailResponse.Content.ReadAsByteArrayAsync());
+        Assert.InRange(Math.Max(thumbnail.Width, thumbnail.Height), 1, 320);
+
+        // Se guardó como Asset v2 de tipo "thumbnail" del propio proyecto.
+        await using var scope = factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<VectorizationDbContext>();
+        var asset = await dbContext.Assets.SingleAsync(a => a.Id == detail.ThumbnailAssetId);
+        Assert.Equal("thumbnail", asset.Type);
+        Assert.Equal(saveBody.ProjectId, asset.ProjectId);
+    }
+
+    [Fact]
+    public async Task SecondSave_NeverChangesTheTripleNorRegeneratesTheThumbnail()
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+
+        var first = await DetectConfirmAndGenerateLayersAsync(client);
+        var firstSave = await SaveFirstAsync(client, first, "Triple inmutable");
+        var before = await client.GetFromJsonAsync<ProjectResponse>($"/api/v2/projects/{firstSave.ProjectId}");
+
+        // Segundo Save contra OTRA sesión clásica (otro triple): el triple persistido y el
+        // thumbnail son los del PRIMER Save, nunca se tocan.
+        var second = await DetectConfirmAndGenerateLayersAsync(client);
+        Assert.NotEqual(first.ProjectId, second.ProjectId);
+        var secondSave = await client.PostAsJsonAsync("/api/v2/workspaces/save", new VectorDocumentSaveRequest(
+            firstSave.ProjectId, null, second.ProjectId, second.ImageId, second.PaletteId, second.PaletteVersion, null));
+        Assert.Equal(HttpStatusCode.OK, secondSave.StatusCode);
+
+        var after = await client.GetFromJsonAsync<ProjectResponse>($"/api/v2/projects/{firstSave.ProjectId}");
+        Assert.Equal(first.ProjectId, after!.ClassicProjectId);
+        Assert.Equal(first.ImageId, after.ClassicImageId);
+        Assert.Equal(first.PaletteId, after.ClassicPaletteId);
+        Assert.Equal(before!.ThumbnailAssetId, after.ThumbnailAssetId);
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<VectorizationDbContext>();
+        Assert.Equal(1, await dbContext.Assets.CountAsync(a => a.ProjectId == firstSave.ProjectId && a.Type == "thumbnail"));
+    }
+
+    [Fact]
+    public async Task IdempotencyReplay_DoesNotGenerateASecondThumbnail()
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        var request = new VectorDocumentSaveRequest(
+            null, "Replay", classic.ProjectId, classic.ImageId, classic.PaletteId, classic.PaletteVersion, null,
+            IdempotencyKey: Guid.NewGuid().ToString("n"));
+
+        var firstResponse = await client.PostAsJsonAsync("/api/v2/workspaces/save", request);
+        var firstBody = await firstResponse.Content.ReadFromJsonAsync<VectorDocumentSaveResponse>();
+        var replayResponse = await client.PostAsJsonAsync("/api/v2/workspaces/save", request);
+        var replayBody = await replayResponse.Content.ReadFromJsonAsync<VectorDocumentSaveResponse>();
+
+        Assert.Equal(firstBody!.ProjectId, replayBody!.ProjectId);
+
+        await using var scope = factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<VectorizationDbContext>();
+        Assert.Equal(1, await dbContext.Projects.CountAsync());
+        Assert.Equal(1, await dbContext.Assets.CountAsync(a => a.Type == "thumbnail"));
+    }
+
+    [Fact]
+    public async Task FirstSave_WhenTheThumbnailCannotBeStored_StillSucceeds_WithoutThumbnail()
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl, failThumbnailUploads: true);
+        var client = factory.CreateClient();
+
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        var saveResponse = await client.PostAsJsonAsync("/api/v2/workspaces/save", new VectorDocumentSaveRequest(
+            null, "Sin thumbnail", classic.ProjectId, classic.ImageId, classic.PaletteId, classic.PaletteVersion, null));
+
+        // Un fallo generando el thumbnail NUNCA hace fallar el Save.
+        Assert.Equal(HttpStatusCode.Created, saveResponse.StatusCode);
+        var saveBody = await saveResponse.Content.ReadFromJsonAsync<VectorDocumentSaveResponse>();
+
+        var list = await client.GetFromJsonAsync<ProjectListResponse>("/api/v2/projects");
+        var item = Assert.Single(list!.Items);
+        Assert.Equal(saveBody!.ProjectId, item.Id);
+        Assert.Null(item.ThumbnailAssetId);
+        Assert.Null(item.ThumbnailUrl);
+        Assert.Equal(1, item.LayerCount);
+        Assert.Equal(classic.ProjectId, item.ClassicProjectId);
+
+        // El documento se guardó completo y se puede reabrir.
+        var document = await client.GetFromJsonAsync<VectorDocumentResponse>($"/api/v2/projects/{saveBody.ProjectId}/document");
+        Assert.Single(document!.Layers);
+    }
+
+    [Fact]
+    public async Task FirstSave_WhenTheClassicOriginalIsGone_StillSucceeds_WithoutThumbnail()
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl, failThumbnailReads: true);
+        var client = factory.CreateClient();
+
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        ((SelectivelyFailingFileStorage)factory.Services.GetRequiredService<IFileStorage>()).FailOriginalReads = true;
+        var saveResponse = await client.PostAsJsonAsync("/api/v2/workspaces/save", new VectorDocumentSaveRequest(
+            null, "Original ilegible", classic.ProjectId, classic.ImageId, classic.PaletteId, classic.PaletteVersion, null));
+
+        Assert.Equal(HttpStatusCode.Created, saveResponse.StatusCode);
+        var list = await client.GetFromJsonAsync<ProjectListResponse>("/api/v2/projects");
+        Assert.Null(Assert.Single(list!.Items).ThumbnailUrl);
+    }
+
+    [Fact]
+    public async Task List_LayerCountStaysCorrect_AfterPatchAndRestore()
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"),
+            respondColorPalette: _ => (200, ColorPalettePayloads.MultiGroupSuccessBody(1, 1, "#ff0000", "#00ff00")));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        Assert.Equal(2, classic.Layers.Count);
+        var saveBody = await SaveFirstAsync(client, classic, "Dos capas");
+        Assert.Equal(2, await LayerCountOfAsync(client, saveBody.ProjectId));
+
+        // PATCH crea una DocumentVersion nueva completa (V2): el conteo es el de la VIGENTE, no se duplica.
+        var patchResponse = await client.PatchAsJsonAsync(
+            $"/api/v2/projects/{saveBody.ProjectId}/layers/{classic.Layers[0].GroupId}",
+            new UpdateLayerRequest("Renombrada", null, null, null, null));
+        patchResponse.EnsureSuccessStatusCode();
+        Assert.Equal(2, await LayerCountOfAsync(client, saveBody.ProjectId));
+
+        // Restore (V3, copia de V1): tampoco cambia el conteo ni suma capas históricas.
+        var restoreResponse = await client.PostAsync($"/api/v2/projects/{saveBody.ProjectId}/versions/1/restore", null);
+        restoreResponse.EnsureSuccessStatusCode();
+        Assert.Equal(2, await LayerCountOfAsync(client, saveBody.ProjectId));
+
+        var versions = await client.GetFromJsonAsync<List<VectorDocumentVersionSummaryResponse>>($"/api/v2/projects/{saveBody.ProjectId}/versions");
+        Assert.True(versions!.Count >= 3);
+    }
+
+    [Fact]
+    public async Task Duplicate_CopiesTheTripleAndThumbnail_AndTheListServesTheSharedThumbnail()
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        var saveBody = await SaveFirstAsync(client, classic, "Original");
+        var source = await client.GetFromJsonAsync<ProjectResponse>($"/api/v2/projects/{saveBody.ProjectId}");
+
+        var duplicateResponse = await client.PostAsync($"/api/v2/projects/{saveBody.ProjectId}/duplicate", null);
+        Assert.Equal(HttpStatusCode.Created, duplicateResponse.StatusCode);
+        var duplicate = await duplicateResponse.Content.ReadFromJsonAsync<ProjectResponse>();
+
+        Assert.NotEqual(source!.Id, duplicate!.Id);
+        Assert.Equal(classic.ProjectId, duplicate.ClassicProjectId);
+        Assert.Equal(classic.ImageId, duplicate.ClassicImageId);
+        Assert.Equal(classic.PaletteId, duplicate.ClassicPaletteId);
+        // El duplicado tiene su PROPIO Asset de thumbnail (no comparte el Id con el original).
+        Assert.NotNull(duplicate.ThumbnailAssetId);
+        Assert.NotEqual(source.ThumbnailAssetId, duplicate.ThumbnailAssetId);
+
+        var list = await client.GetFromJsonAsync<ProjectListResponse>("/api/v2/projects");
+        var duplicateItem = list!.Items.Single(i => i.Id == duplicate.Id);
+        Assert.Equal(1, duplicateItem.LayerCount);
+        Assert.Equal($"/api/v2/projects/{duplicate.Id}/assets/{duplicate.ThumbnailAssetId}", duplicateItem.ThumbnailUrl);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(duplicateItem.ThumbnailUrl)).StatusCode);
+
+        // Regresión (revisión M2.2-S08): el documento reabierto del DUPLICADO trae el arte de sus
+        // capas (SvgUrl descargable con el projectId del duplicado) y el mismo PathCount.
+        var sourceDocument = await client.GetFromJsonAsync<VectorDocumentResponse>($"/api/v2/projects/{source.Id}/document");
+        var duplicateDocument = await client.GetFromJsonAsync<VectorDocumentResponse>($"/api/v2/projects/{duplicate.Id}/document");
+        var duplicateLayer = Assert.Single(duplicateDocument!.Layers);
+        Assert.Equal(Assert.Single(sourceDocument!.Layers).PathCount, duplicateLayer.PathCount);
+        Assert.NotNull(duplicateLayer.SvgUrl);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(duplicateLayer.SvgUrl)).StatusCode);
+
+        // Borrar el ORIGINAL (soft-delete) no deja al duplicado sin arte ni sin thumbnail.
+        Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync($"/api/v2/projects/{source.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(duplicateLayer.SvgUrl)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(duplicateItem.ThumbnailUrl)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Duplicate_DeletingAnAssetOfTheOriginal_DoesNotRemoveTheSharedFileFromTheDuplicate()
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        var saveBody = await SaveFirstAsync(client, classic, "Original");
+        var duplicate = await (await client.PostAsync($"/api/v2/projects/{saveBody.ProjectId}/duplicate", null))
+            .Content.ReadFromJsonAsync<ProjectResponse>();
+        var sourceDocument = await client.GetFromJsonAsync<VectorDocumentResponse>($"/api/v2/projects/{saveBody.ProjectId}/document");
+        var duplicateDocument = await client.GetFromJsonAsync<VectorDocumentResponse>($"/api/v2/projects/{duplicate!.Id}/document");
+
+        // Hard delete del Asset SVG de la capa del ORIGINAL (endpoint existente de M2.2-S04).
+        var sourceLayer = Assert.Single(sourceDocument!.Layers);
+        var deleteResponse = await client.DeleteAsync($"/api/v2/projects/{saveBody.ProjectId}/assets/{sourceLayer.SvgAssetId}");
+        Assert.Equal(HttpStatusCode.NoContent, deleteResponse.StatusCode);
+
+        // La fila del duplicado sigue apuntando a un archivo que sigue existiendo en storage.
+        var duplicateLayer = Assert.Single(duplicateDocument!.Layers);
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync(duplicateLayer.SvgUrl)).StatusCode);
+    }
+
+    [Fact]
+    public async Task List_ExcludesSoftDeletedProjects_AndReportsNothingForThem()
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        var saveBody = await SaveFirstAsync(client, classic, "A borrar");
+        Assert.Single((await client.GetFromJsonAsync<ProjectListResponse>("/api/v2/projects"))!.Items);
+
+        var deleteResponse = await client.DeleteAsync($"/api/v2/projects/{saveBody.ProjectId}");
+        Assert.Equal(HttpStatusCode.NoContent, deleteResponse.StatusCode);
+
+        var list = await client.GetFromJsonAsync<ProjectListResponse>("/api/v2/projects");
+        Assert.Empty(list!.Items);
+        Assert.Equal(0, list.TotalCount);
+    }
+
+    private static async Task<VectorDocumentSaveResponse> SaveFirstAsync(HttpClient client, ClassicSessionInfo classic, string name)
+    {
+        var saveResponse = await client.PostAsJsonAsync("/api/v2/workspaces/save", new VectorDocumentSaveRequest(
+            null, name, classic.ProjectId, classic.ImageId, classic.PaletteId, classic.PaletteVersion, null));
+        Assert.Equal(HttpStatusCode.Created, saveResponse.StatusCode);
+        return (await saveResponse.Content.ReadFromJsonAsync<VectorDocumentSaveResponse>())!;
+    }
+
+    private static async Task<int> LayerCountOfAsync(HttpClient client, Guid projectId)
+    {
+        var list = await client.GetFromJsonAsync<ProjectListResponse>("/api/v2/projects");
+        return list!.Items.Single(i => i.Id == projectId).LayerCount;
+    }
+
     private static async Task<UploadImageResponse> UploadAsync(HttpClient client)
     {
         using var content = new MultipartFormDataContent();
@@ -807,7 +1094,8 @@ public sealed class VectorDocumentEndpointsTests : IAsyncLifetime
     }
 
     private WebApplicationFactory<Program> CreateFactory(
-        string pythonBaseUrl, bool failLayerSvgUploads = false, bool overrideRepositoryWithThrowingFake = false) =>
+        string pythonBaseUrl, bool failLayerSvgUploads = false, bool overrideRepositoryWithThrowingFake = false,
+        bool failThumbnailUploads = false, bool failThumbnailReads = false) =>
         new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
             builder.ConfigureAppConfiguration((_, config) =>
@@ -824,11 +1112,12 @@ public sealed class VectorDocumentEndpointsTests : IAsyncLifetime
 
             builder.ConfigureServices(services =>
             {
-                if (failLayerSvgUploads)
+                if (failLayerSvgUploads || failThumbnailUploads || failThumbnailReads)
                 {
                     services.RemoveAll<IFileStorage>();
                     services.AddSingleton<IFileStorage>(sp =>
-                        new SelectivelyFailingFileStorage(ActivatorUtilities.CreateInstance<LocalFileStorage>(sp)));
+                        new SelectivelyFailingFileStorage(
+                            ActivatorUtilities.CreateInstance<LocalFileStorage>(sp), failLayerSvgUploads, failThumbnailUploads));
                 }
 
                 if (overrideRepositoryWithThrowingFake)
@@ -851,18 +1140,38 @@ public sealed class VectorDocumentEndpointsTests : IAsyncLifetime
     private sealed class SelectivelyFailingFileStorage : IFileStorage
     {
         private readonly IFileStorage _inner;
+        private readonly bool _failLayerSvgUploads;
+        private readonly bool _failThumbnailUploads;
 
-        public SelectivelyFailingFileStorage(IFileStorage inner)
+        public SelectivelyFailingFileStorage(IFileStorage inner, bool failLayerSvgUploads = true, bool failThumbnailUploads = false)
         {
             _inner = inner;
+            _failLayerSvgUploads = failLayerSvgUploads;
+            _failThumbnailUploads = failThumbnailUploads;
         }
 
-        public Task<StoredFile> SaveAsync(string key, Stream content, string contentType, CancellationToken cancellationToken) =>
-            key.Contains("/layer-svg/", StringComparison.Ordinal)
-                ? throw new FileStorageException("fallo simulado de storage al subir el SVG de una capa")
-                : _inner.SaveAsync(key, content, contentType, cancellationToken);
+        /// <summary>M2.2-S08: cuando es true, leer un ORIGINAL clásico (clave "{projectId}/{imageId}/original.ext") lanza FileNotFoundException -- se activa DESPUÉS del flujo clásico, justo antes del Save.</summary>
+        public bool FailOriginalReads { get; set; }
 
-        public Task<Stream> OpenReadAsync(string key, CancellationToken cancellationToken) => _inner.OpenReadAsync(key, cancellationToken);
+        public Task<StoredFile> SaveAsync(string key, Stream content, string contentType, CancellationToken cancellationToken)
+        {
+            if (_failLayerSvgUploads && key.Contains("/layer-svg/", StringComparison.Ordinal))
+            {
+                throw new FileStorageException("fallo simulado de storage al subir el SVG de una capa");
+            }
+
+            if (_failThumbnailUploads && key.Contains("/thumbnail/", StringComparison.Ordinal))
+            {
+                throw new FileStorageException("fallo simulado de storage al subir el thumbnail");
+            }
+
+            return _inner.SaveAsync(key, content, contentType, cancellationToken);
+        }
+
+        public Task<Stream> OpenReadAsync(string key, CancellationToken cancellationToken) =>
+            FailOriginalReads && key.Contains("/original.", StringComparison.Ordinal)
+                ? throw new FileNotFoundException("original clásico no disponible (simulado)")
+                : _inner.OpenReadAsync(key, cancellationToken);
 
         public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken) => _inner.ExistsAsync(key, cancellationToken);
 

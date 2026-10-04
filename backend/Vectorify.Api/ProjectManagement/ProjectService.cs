@@ -30,7 +30,8 @@ public sealed class ProjectService : IProjectService
         _logger = logger;
     }
 
-    public async Task<ProjectResult> CreateAsync(string? name, string? description, CancellationToken cancellationToken)
+    public async Task<ProjectResult> CreateAsync(
+        string? name, string? description, CancellationToken cancellationToken, ClassicProjectLink? classicLink = null)
     {
         var nameValidation = ValidateName(name, out var trimmedName);
         if (nameValidation is not null)
@@ -45,7 +46,7 @@ public sealed class ProjectService : IProjectService
         }
 
         var ownerId = _userContext.GetEffectiveUserId();
-        var project = await _repository.CreateAsync(ownerId, trimmedName, description, cancellationToken);
+        var project = await _repository.CreateAsync(ownerId, trimmedName, description, cancellationToken, classicLink);
 
         _logger.LogInformation("Proyecto {ProjectId} creado para el usuario {OwnerId}", project.Id, ownerId);
 

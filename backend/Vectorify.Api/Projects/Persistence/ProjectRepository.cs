@@ -18,7 +18,9 @@ public sealed class ProjectRepository : IProjectRepository
         _dbContext = dbContext;
     }
 
-    public async Task<Project> CreateAsync(Guid ownerId, string name, string? description, CancellationToken cancellationToken)
+    public async Task<Project> CreateAsync(
+        Guid ownerId, string name, string? description, CancellationToken cancellationToken,
+        ClassicProjectLink? classicLink = null)
     {
         var now = DateTimeOffset.UtcNow;
         var project = new Project
@@ -27,6 +29,9 @@ public sealed class ProjectRepository : IProjectRepository
             OwnerId = ownerId,
             Name = name,
             Description = description,
+            ClassicProjectId = classicLink?.ClassicProjectId,
+            ClassicImageId = classicLink?.ClassicImageId,
+            ClassicPaletteId = classicLink?.ClassicPaletteId,
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -40,7 +45,7 @@ public sealed class ProjectRepository : IProjectRepository
     public Task<Project?> FindByIdAsync(Guid id, Guid ownerId, CancellationToken cancellationToken) =>
         _dbContext.Projects.FirstOrDefaultAsync(p => p.Id == id && p.OwnerId == ownerId, cancellationToken);
 
-    public async Task<(IReadOnlyList<Project> Items, int TotalCount)> ListAsync(
+    public async Task<(IReadOnlyList<ProjectListItem> Items, int TotalCount)> ListAsync(
         Guid ownerId, ProjectListQuery query, CancellationToken cancellationToken)
     {
         var baseQuery = _dbContext.Projects.Where(p => p.OwnerId == ownerId);
@@ -63,12 +68,34 @@ public sealed class ProjectRepository : IProjectRepository
             _ => baseQuery.OrderByDescending(p => p.UpdatedAt),
         };
 
+        // LayerCount (M2.2-S08) se resuelve en ESTA misma query como subquery correlacionada de SQL
+        // (COUNT sobre layers) -- una sola ida a la base para toda la página, sin N+1 y sin
+        // materializar Layers/DocumentVersions.
         var items = await baseQuery
             .Skip((query.Page - 1) * query.PageSize)
             .Take(query.PageSize)
+            .Select(p => new ProjectListItem(
+                p,
+                p.CurrentVersion == null ? 0 : p.CurrentVersion.Layers.Count))
             .ToListAsync(cancellationToken);
 
         return (items, totalCount);
+    }
+
+    public async Task<bool> SetThumbnailAsync(Guid id, Guid ownerId, Guid thumbnailAssetId, CancellationToken cancellationToken)
+    {
+        var project = await _dbContext.Projects.FirstOrDefaultAsync(p => p.Id == id && p.OwnerId == ownerId, cancellationToken);
+        if (project is null)
+        {
+            return false;
+        }
+
+        // Deliberadamente NO toca UpdatedAt: generar el thumbnail no es una edición del usuario
+        // (cambiaría el orden "última modificación" del listado).
+        project.ThumbnailAssetId = thumbnailAssetId;
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return true;
     }
 
     public async Task<Project?> UpdateAsync(Guid id, Guid ownerId, string? name, string? description, CancellationToken cancellationToken)
@@ -143,12 +170,76 @@ public sealed class ProjectRepository : IProjectRepository
             CreatedAt = now,
             UpdatedAt = now,
 
-            // ThumbnailAssetId deliberadamente NO se copia: los Assets no se duplican acá
-            // (ver clase), y apuntar al Asset del proyecto ORIGINAL desde el duplicado
-            // mezclaría la identidad de ambos proyectos -- más simple y correcto dejarlo
-            // sin thumbnail hasta que algo lo genere de nuevo para el duplicado.
-            ThumbnailAssetId = null,
+            // ThumbnailAssetId se asigna en la SEGUNDA fase de abajo, apuntando a la copia propia del
+            // Asset (Project.ThumbnailAssetId -> Asset y Asset.ProjectId -> Project forman un ciclo
+            // de inserts nuevos, mismo caso que CurrentVersionId).
+
+            // M2.2-S08: el triple clásico se copia tal cual para que el duplicado también se pueda
+            // reabrir desde Mis Proyectos.
+            ClassicProjectId = source.ClassicProjectId,
+            ClassicImageId = source.ClassicImageId,
+            ClassicPaletteId = source.ClassicPaletteId,
         };
+
+        // M2.2-S08: el duplicado necesita sus PROPIAS filas de Asset. La descarga
+        // (GET /api/v2/projects/{projectId}/assets/{assetId}) filtra por (projectId, assetId), así
+        // que reutilizar el Id de un Asset del original dejaba a todas las capas del duplicado sin
+        // arte (404); y Layer.SvgAssetId/PathCount ni siquiera se copiaban. Las filas se copian con
+        // Ids nuevos y la MISMA StorageKey: el binario es inmutable y no se re-copia en storage
+        // (AssetService.DeleteAsync no borra el archivo mientras otra fila lo referencie). Solo se
+        // copian los Assets realmente referenciados (SVG de capa, SVG de versión, thumbnail).
+        var referencedAssetIds = new HashSet<Guid>();
+        if (source.ThumbnailAssetId is { } sourceThumbnailId)
+        {
+            referencedAssetIds.Add(sourceThumbnailId);
+        }
+
+        foreach (var sourceVersion in source.VectorDocuments.SelectMany(d => d.Versions))
+        {
+            if (sourceVersion.SvgAssetId is { } versionAssetId)
+            {
+                referencedAssetIds.Add(versionAssetId);
+            }
+
+            foreach (var sourceLayer in sourceVersion.Layers)
+            {
+                if (sourceLayer.SvgAssetId is { } layerAssetId)
+                {
+                    referencedAssetIds.Add(layerAssetId);
+                }
+            }
+        }
+
+        var assetIdMap = new Dictionary<Guid, Guid>();
+        if (referencedAssetIds.Count > 0)
+        {
+            var sourceAssets = await _dbContext.Assets
+                .Where(a => a.ProjectId == source.Id && referencedAssetIds.Contains(a.Id))
+                .ToListAsync(cancellationToken);
+
+            foreach (var sourceAsset in sourceAssets)
+            {
+                var copy = new Asset
+                {
+                    Id = Guid.NewGuid(),
+                    ProjectId = duplicate.Id,
+                    Type = sourceAsset.Type,
+                    StorageKey = sourceAsset.StorageKey,
+                    MimeType = sourceAsset.MimeType,
+                    FileName = sourceAsset.FileName,
+                    Size = sourceAsset.Size,
+                    Width = sourceAsset.Width,
+                    Height = sourceAsset.Height,
+                    Checksum = sourceAsset.Checksum,
+                    CreatedAt = now,
+                };
+                assetIdMap[sourceAsset.Id] = copy.Id;
+                duplicate.Assets.Add(copy);
+            }
+        }
+
+        Guid? MapAsset(Guid? sourceAssetId) =>
+            sourceAssetId is { } id && assetIdMap.TryGetValue(id, out var mapped) ? mapped : null;
 
         Guid? duplicateCurrentVersionId = null;
 
@@ -174,10 +265,8 @@ public sealed class ProjectRepository : IProjectRepository
                     HeightMm = version.HeightMm,
                     ViewBox = version.ViewBox,
                     SchemaVersion = version.SchemaVersion,
-                    // El Asset SVG en sí NO se duplica (binario inmutable, fuera de
-                    // alcance -- ver IMPL.md): la versión duplicada referencia el MISMO
-                    // Asset que la original.
-                    SvgAssetId = version.SvgAssetId,
+                    // Apunta a la copia propia del Asset (ver assetIdMap arriba).
+                    SvgAssetId = MapAsset(version.SvgAssetId),
                     Origin = version.Origin,
                     MetadataJson = version.MetadataJson,
                     CreatedAt = now,
@@ -222,6 +311,8 @@ public sealed class ProjectRepository : IProjectRepository
                         Visible = layer.Visible,
                         Locked = layer.Locked,
                         ManufacturingOperation = layer.ManufacturingOperation,
+                        SvgAssetId = MapAsset(layer.SvgAssetId),
+                        PathCount = layer.PathCount,
                     });
                 }
 
@@ -242,9 +333,11 @@ public sealed class ProjectRepository : IProjectRepository
         _dbContext.Projects.Add(duplicate);
         await _dbContext.SaveChangesAsync(cancellationToken);
 
-        if (duplicateCurrentVersionId is not null)
+        var duplicateThumbnailId = MapAsset(source.ThumbnailAssetId);
+        if (duplicateCurrentVersionId is not null || duplicateThumbnailId is not null)
         {
             duplicate.CurrentVersionId = duplicateCurrentVersionId;
+            duplicate.ThumbnailAssetId = duplicateThumbnailId;
             await _dbContext.SaveChangesAsync(cancellationToken);
         }
 

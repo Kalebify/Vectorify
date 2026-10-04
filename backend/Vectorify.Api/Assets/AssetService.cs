@@ -244,15 +244,23 @@ public sealed partial class AssetService : IAssetService
         // Assets -- ver M2.2-S03): borra el archivo real primero; solo si eso tiene éxito se
         // borra la fila, para no perder la única referencia a una clave que todavía podría
         // tener contenido en storage.
-        try
+        //
+        // Excepción (M2.2-S08): un proyecto duplicado tiene filas de Asset propias que comparten
+        // la StorageKey del original -- si otra fila (de cualquier proyecto, incluso uno
+        // soft-deleteado) todavía referencia el mismo archivo, solo se borra esta fila.
+        var sharedWithOtherRows = await _repository.CountByStorageKeyAsync(asset.StorageKey, cancellationToken) > 1;
+        if (!sharedWithOtherRows)
         {
-            await _fileStorage.DeleteAsync(asset.StorageKey, cancellationToken);
-        }
-        catch (FileStorageException ex)
-        {
-            _logger.LogError(ex, "Fallo de storage al borrar el Asset {AssetId} del proyecto {ProjectId}", assetId, projectId);
-            return new AssetResult.StorageFailed(
-                "storage_failure", "No se pudo borrar el archivo. Intentá de nuevo en unos minutos.");
+            try
+            {
+                await _fileStorage.DeleteAsync(asset.StorageKey, cancellationToken);
+            }
+            catch (FileStorageException ex)
+            {
+                _logger.LogError(ex, "Fallo de storage al borrar el Asset {AssetId} del proyecto {ProjectId}", assetId, projectId);
+                return new AssetResult.StorageFailed(
+                    "storage_failure", "No se pudo borrar el archivo. Intentá de nuevo en unos minutos.");
+            }
         }
 
         await _repository.DeleteRowAsync(projectId, assetId, cancellationToken);

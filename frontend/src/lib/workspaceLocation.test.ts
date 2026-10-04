@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { buildWorkspaceSearch, clearWorkspaceLocation, pushWorkspaceLocation, readWorkspaceLocation } from "./workspaceLocation";
+import {
+  buildViewSearch,
+  buildWorkspaceSearch,
+  clearWorkspaceLocation,
+  pushAppView,
+  pushWorkspaceLocation,
+  readAppView,
+  readWorkspaceLocation,
+} from "./workspaceLocation";
 
 const PROJECT_ID = "11111111-1111-1111-1111-111111111111";
 const IMAGE_ID = "22222222-2222-2222-2222-222222222222";
@@ -90,5 +98,64 @@ describe("pushWorkspaceLocation / clearWorkspaceLocation", () => {
       paletteId: PALETTE_ID,
       savedProjectId: SAVED_PROJECT_ID,
     });
+  });
+});
+
+describe("readAppView (M2.2-S08)", () => {
+  it("sin query string es el dashboard (landing por defecto)", () => {
+    expect(readAppView("")).toBe("dashboard");
+  });
+
+  it("?view=new es el flujo clásico de upload", () => {
+    expect(readAppView("?view=new")).toBe("new");
+  });
+
+  it("un view desconocido cae al dashboard", () => {
+    expect(readAppView("?view=otra-cosa")).toBe("dashboard");
+  });
+
+  it("params completos de Workspace son la vista workspace", () => {
+    expect(readAppView(`?projectId=${PROJECT_ID}&imageId=${IMAGE_ID}&paletteId=${PALETTE_ID}`)).toBe("workspace");
+    expect(readAppView(`?projectId=${PROJECT_ID}&imageId=${IMAGE_ID}&paletteId=${PALETTE_ID}&savedProjectId=${SAVED_PROJECT_ID}`)).toBe("workspace");
+  });
+
+  it("el Workspace tiene prioridad sobre view=new", () => {
+    expect(readAppView(`?view=new&projectId=${PROJECT_ID}&imageId=${IMAGE_ID}&paletteId=${PALETTE_ID}`)).toBe("workspace");
+  });
+
+  it("un deep-link parcial de Workspace no cuenta como workspace", () => {
+    expect(readAppView(`?projectId=${PROJECT_ID}`)).toBe("dashboard");
+    expect(readAppView(`?view=new&projectId=${PROJECT_ID}`)).toBe("new");
+  });
+
+  it("por defecto lee la URL actual del navegador", () => {
+    window.history.pushState({}, "", "/?view=new");
+    expect(readAppView()).toBe("new");
+  });
+});
+
+describe("buildViewSearch / pushAppView (M2.2-S08)", () => {
+  it("el dashboard no lleva query string; new lleva view=new", () => {
+    expect(buildViewSearch("dashboard")).toBe("");
+    expect(buildViewSearch("new")).toBe("?view=new");
+  });
+
+  it("buildViewSearch es inversa de readAppView", () => {
+    expect(readAppView(buildViewSearch("new"))).toBe("new");
+    expect(readAppView(buildViewSearch("dashboard"))).toBe("dashboard");
+  });
+
+  it("pushAppView actualiza la URL sin recargar y deja el dashboard sin params", () => {
+    pushAppView("new");
+    expect(window.location.search).toBe("?view=new");
+
+    pushAppView("dashboard");
+    expect(window.location.search).toBe("");
+  });
+
+  it("pasar del Workspace a una vista de página quita los params del Workspace", () => {
+    pushWorkspaceLocation({ projectId: PROJECT_ID, imageId: IMAGE_ID, paletteId: PALETTE_ID, savedProjectId: SAVED_PROJECT_ID });
+    pushAppView("new");
+    expect(window.location.search).toBe("?view=new");
   });
 });

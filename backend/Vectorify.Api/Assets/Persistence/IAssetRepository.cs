@@ -25,4 +25,11 @@ public interface IAssetRepository
     /// <paramref name="projectId"/>.
     /// </summary>
     Task<bool> DeleteRowAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Cantidad de filas de Asset (de CUALQUIER proyecto) que apuntan a <paramref name="storageKey"/>.
+    /// Duplicar un proyecto (M2.2-S08) crea filas nuevas que comparten la misma clave de storage
+    /// que las del original, así que borrar el archivo solo es seguro cuando queda una única fila.
+    /// </summary>
+    Task<int> CountByStorageKeyAsync(string storageKey, CancellationToken cancellationToken);
 }

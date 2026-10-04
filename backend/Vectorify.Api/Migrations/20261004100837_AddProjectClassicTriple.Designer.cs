@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Vectorify.Api.Data;
@@ -11,9 +12,11 @@ using Vectorify.Api.Data;
 namespace Vectorify.Api.Migrations
 {
     [DbContext(typeof(VectorizationDbContext))]
-    partial class VectorizationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261004100837_AddProjectClassicTriple")]
+    partial class AddProjectClassicTriple
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

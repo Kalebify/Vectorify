@@ -20,13 +20,29 @@ namespace Vectorify.Api.Projects.Persistence;
 /// </summary>
 public interface IProjectRepository
 {
-    Task<Project> CreateAsync(Guid ownerId, string name, string? description, CancellationToken cancellationToken);
+    /// <summary>
+    /// <paramref name="classicLink"/> (M2.2-S08): triple clásico que se persiste junto con el
+    /// Project cuando lo crea el primer Save; null para <c>POST /api/v2/projects</c> "vacío".
+    /// </summary>
+    Task<Project> CreateAsync(
+        Guid ownerId, string name, string? description, CancellationToken cancellationToken,
+        ClassicProjectLink? classicLink = null);
 
     /// <summary>Null si no existe O si existe pero pertenece a otro OwnerId -- mismo resultado para ambos casos (ver spec.md, ownership).</summary>
     Task<Project?> FindByIdAsync(Guid id, Guid ownerId, CancellationToken cancellationToken);
 
-    Task<(IReadOnlyList<Project> Items, int TotalCount)> ListAsync(
+    /// <summary>
+    /// Cada item trae además <c>LayerCount</c> (Layers de la CurrentVersion) y el ProjectId dueño
+    /// del thumbnail, resueltos en la misma query (M2.2-S08, sin N+1).
+    /// </summary>
+    Task<(IReadOnlyList<ProjectListItem> Items, int TotalCount)> ListAsync(
         Guid ownerId, ProjectListQuery query, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Apunta <c>ThumbnailAssetId</c> al Asset dado (M2.2-S08, primer Save). No toca UpdatedAt.
+    /// False si el proyecto no existe/no pertenece al owner.
+    /// </summary>
+    Task<bool> SetThumbnailAsync(Guid id, Guid ownerId, Guid thumbnailAssetId, CancellationToken cancellationToken);
 
     /// <summary>
     /// Campos null = "sin cambios" (ver ProjectService para la validación de negocio previa).
@@ -49,7 +65,8 @@ public interface IProjectRepository
     /// asociados (si los hay) -- nunca reutiliza ningún Id del original. Los Assets NO se
     /// duplican (fuera de alcance, ver IMPL.md): las DocumentVersion duplicadas referencian
     /// el MISMO SvgAssetId que el original. Null si el proyecto origen no existe/no
-    /// pertenece al owner.
+    /// pertenece al owner. M2.2-S08: el duplicado SÍ copia el triple clásico y
+    /// <c>ThumbnailAssetId</c> (mismo Asset, consistente con "los Assets no se duplican").
     /// </summary>
     Task<Project?> DuplicateAsync(Guid id, Guid ownerId, string newName, CancellationToken cancellationToken);
 }

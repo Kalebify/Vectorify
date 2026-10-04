@@ -42,6 +42,20 @@ public sealed class Project
 
     public DocumentVersion? CurrentVersion { get; set; }
 
+    /// <summary>
+    /// Triple clásico (M2.2-S08) con el que se reabre el Workspace de este proyecto desde la
+    /// pantalla Mis Proyectos: son los identificadores del flujo clásico (staging) vigentes en el
+    /// PRIMER Save, que creó este Project v2. Se setean una sola vez y nunca se modifican después.
+    /// Nullable: un proyecto creado antes de esta tarjeta, o vía <c>POST /api/v2/projects</c> sin
+    /// Save, no los tiene (sin backfill, el dato no existe) -- la UI lo trata como "no se puede
+    /// reabrir".
+    /// </summary>
+    public Guid? ClassicProjectId { get; set; }
+
+    public Guid? ClassicImageId { get; set; }
+
+    public Guid? ClassicPaletteId { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public DateTimeOffset UpdatedAt { get; set; }
