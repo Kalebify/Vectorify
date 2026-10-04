@@ -260,14 +260,16 @@ describe("App — reapertura del Workspace por URL (M2.1-S08)", () => {
 
   it("abrir el Workspace desde el flujo normal actualiza la URL sin necesidad de recargar", async () => {
     stubHappyPath();
+    // M2.2-S08: el flujo de upload ya no es la home -- vive en `?view=new`.
+    window.history.pushState({}, "", "/?view=new");
     render(<App />);
 
-    expect(window.location.search).toBe("");
+    expect(window.location.search).toBe("?view=new");
 
     fireEvent.click(await screen.findByRole("button", { name: "Simular carga completa" }));
     fireEvent.click(await screen.findByRole("button", { name: "Simular confirmación de paleta" }));
 
-    expect(window.location.search).toBe("");
+    expect(window.location.search).toBe("?view=new");
 
     fireEvent.click(await screen.findByRole("button", { name: "Abrir en el Workspace" }));
 
@@ -279,16 +281,20 @@ describe("App — reapertura del Workspace por URL (M2.1-S08)", () => {
   it("proyecto/imagen inexistente en la URL no crashea y muestra un estado vacío honesto", async () => {
     stubFetch((url) => {
       if (METADATA_URL_PATTERN.test(url)) return jsonResponse({ code: "not_found", message: "No existe." }, 404);
+      // El deep-link inválido aterriza en Mis proyectos (M2.2-S08): responde su listado vacío.
+      if (/\/api\/v2\/projects\?/.test(url)) return jsonResponse({ items: [], page: 1, pageSize: 12, totalCount: 0 });
       return undefined;
     });
     pushWorkspaceLocation({ projectId: PROJECT_ID, imageId: IMAGE_ID, paletteId: PALETTE_ID });
 
     render(<App />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/ya no existe/);
-    expect(screen.getByText("Nuevo proyecto")).toBeInTheDocument();
+    expect(await screen.findByRole("alert", { name: "Enlace del Workspace inválido" })).toHaveTextContent(/ya no existe/);
+    // Aterriza en el dashboard (la home), no en el flujo de upload.
+    expect(screen.getByRole("heading", { name: "Mis proyectos" })).toBeInTheDocument();
+    expect(screen.queryByText("Nuevo proyecto")).not.toBeInTheDocument();
     expect(screen.queryByRole("application")).not.toBeInTheDocument();
-    // La URL inválida se limpia: no queda "pegada" mostrando el flujo clásico.
+    // La URL inválida se limpia: no queda "pegada" con los params del Workspace.
     expect(window.location.search).toBe("");
   });
 

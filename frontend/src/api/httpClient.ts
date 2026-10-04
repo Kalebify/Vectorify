@@ -13,15 +13,18 @@ export class ApiClientError extends Error {
   readonly isNetworkError: boolean;
   /** true si la operación fue cancelada explícitamente (botón "Cancelar" o AbortSignal). */
   readonly isAborted: boolean;
+  /** Código HTTP cuando la Web API respondió 4xx/5xx (M2.2-S08); undefined en errores de red/abort. */
+  readonly status?: number;
 
   constructor(
     message: string,
-    options?: { cause?: unknown; body?: unknown; isNetworkError?: boolean; isAborted?: boolean },
+    options?: { cause?: unknown; body?: unknown; isNetworkError?: boolean; isAborted?: boolean; status?: number },
   ) {
     super(message);
     this.name = "ApiClientError";
     this.cause = options?.cause;
     this.body = options?.body;
+    this.status = options?.status;
     this.isNetworkError = options?.isNetworkError ?? false;
     this.isAborted = options?.isAborted ?? false;
   }
@@ -50,8 +53,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await response.json().catch(() => undefined);
     throw new ApiClientError(
       `La Web API respondió con código ${response.status} en ${path}`,
-      { body },
+      { body, status: response.status },
     );
+  }
+
+  // 204 No Content (p. ej. DELETE /api/v2/projects/{id}): no hay cuerpo que parsear.
+  if (response.status === 204) {
+    return undefined as T;
   }
 
   return (await response.json()) as T;
@@ -75,6 +83,8 @@ export const httpClient = {
       headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
       body: JSON.stringify(body),
     }),
+  /** DELETE sin cuerpo; resuelve `undefined` ante un 204 (M2.2-S08). */
+  delete: (path: string, init?: RequestInit) => request<void>(path, { ...init, method: "DELETE" }),
 };
 
 export interface UploadFileOptions {

@@ -27,6 +27,9 @@ public sealed class AssetRepository : IAssetRepository
     public Task<Asset?> FindByIdAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken) =>
         _dbContext.Assets.FirstOrDefaultAsync(a => a.Id == assetId && a.ProjectId == projectId, cancellationToken);
 
+    public Task<int> CountByStorageKeyAsync(string storageKey, CancellationToken cancellationToken) =>
+        _dbContext.Assets.IgnoreQueryFilters().CountAsync(a => a.StorageKey == storageKey, cancellationToken);
+
     public async Task<bool> DeleteRowAsync(Guid projectId, Guid assetId, CancellationToken cancellationToken)
     {
         var asset = await _dbContext.Assets

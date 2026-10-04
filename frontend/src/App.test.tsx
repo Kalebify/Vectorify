@@ -1,5 +1,5 @@
 import { act, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import type { PythonStatus } from './types/system';
 
@@ -12,6 +12,11 @@ function response(status: PythonStatus = 'online') {
 }
 
 describe('Diagnóstico desde la respuesta HTTP', () => {
+  // M2.2-S08: la home (sin params) es ahora el dashboard "Mis proyectos"; el diagnóstico del
+  // sistema vive en el flujo clásico `?view=new`.
+  beforeEach(() => { window.history.pushState({}, '', '/?view=new'); });
+  afterEach(() => { window.history.pushState({}, '', '/'); });
+
   it('muestra loading mientras espera', () => {
     vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
     render(<App />);

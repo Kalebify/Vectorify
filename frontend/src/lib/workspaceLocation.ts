@@ -86,3 +86,44 @@ export function pushWorkspaceLocation(location: WorkspaceLocation): void {
 export function clearWorkspaceLocation(): void {
   window.history.pushState({}, "", window.location.pathname);
 }
+
+/**
+ * Vistas de la app (M2.2-S08), identificadas por la misma query string -- sin `react-router`
+ * (mismo criterio que el Workspace, ver cabecera del archivo):
+ *  - `dashboard`: sin params (o `?view=<desconocido>`) -- pantalla "Mis proyectos", landing por defecto.
+ *  - `new`: `?view=new` -- flujo clásico de upload (la home hasta M2.2-S07).
+ *  - `workspace`: params de Workspace (`projectId/imageId/paletteId[/savedProjectId]`), sin cambios.
+ * El Workspace tiene prioridad: un deep-link completo gana sobre cualquier `view`.
+ */
+export type AppView = "dashboard" | "new" | "workspace";
+
+/** Vistas "de página" que se navegan con `pushAppView` (el Workspace se navega con `pushWorkspaceLocation`). */
+export type PageView = Exclude<AppView, "workspace">;
+
+const VIEW_PARAM = "view";
+const NEW_VIEW_VALUE = "new";
+
+/** Resuelve la vista de una query string (default: la URL actual del navegador). */
+export function readAppView(search: string = window.location.search): AppView {
+  if (readWorkspaceLocation(search)) {
+    return "workspace";
+  }
+
+  return new URLSearchParams(search).get(VIEW_PARAM) === NEW_VIEW_VALUE ? "new" : "dashboard";
+}
+
+/** Query string (con `?` inicial, o "" para el dashboard) de una vista de página. */
+export function buildViewSearch(view: PageView): string {
+  if (view === "new") {
+    const params = new URLSearchParams();
+    params.set(VIEW_PARAM, NEW_VIEW_VALUE);
+    return `?${params.toString()}`;
+  }
+
+  return "";
+}
+
+/** Navega (push, sin recargar) a una vista de página. */
+export function pushAppView(view: PageView): void {
+  window.history.pushState({}, "", `${window.location.pathname}${buildViewSearch(view)}`);
+}

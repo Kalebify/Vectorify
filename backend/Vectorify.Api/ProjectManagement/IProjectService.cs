@@ -1,3 +1,5 @@
+using Vectorify.Api.Projects.Persistence;
+
 namespace Vectorify.Api.ProjectManagement;
 
 /// <summary>
@@ -8,7 +10,12 @@ namespace Vectorify.Api.ProjectManagement;
 /// </summary>
 public interface IProjectService
 {
-    Task<ProjectResult> CreateAsync(string? name, string? description, CancellationToken cancellationToken);
+    /// <summary>
+    /// <paramref name="classicLink"/> (M2.2-S08): triple clásico a persistir con el Project cuando lo
+    /// crea el primer Save de un Workspace; null para la creación "vacía" de <c>POST /api/v2/projects</c>.
+    /// </summary>
+    Task<ProjectResult> CreateAsync(
+        string? name, string? description, CancellationToken cancellationToken, ClassicProjectLink? classicLink = null);
 
     Task<ProjectResult> GetAsync(Guid id, CancellationToken cancellationToken);
 

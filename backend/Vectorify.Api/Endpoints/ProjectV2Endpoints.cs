@@ -1,6 +1,7 @@
 using Vectorify.Api.Contracts;
 using Vectorify.Api.Data;
 using Vectorify.Api.ProjectManagement;
+using Vectorify.Api.Projects.Persistence;
 
 namespace Vectorify.Api.Endpoints;
 
@@ -153,8 +154,9 @@ public static class ProjectV2Endpoints
         .WithSummary("Duplica un proyecto: nuevo Project.Id, nuevo Name ('Copia de X'), copia Description/OwnerId.")
         .WithDescription(
             "Si el origen tiene VectorDocument/DocumentVersion/Layer/PaletteColor asociados, los duplica también " +
-            "con Ids nuevos propios (nunca reutiliza Ids del original). Los Assets NO se duplican: las " +
-            "DocumentVersion duplicadas referencian el mismo Asset SVG que el original.");
+            "con Ids nuevos propios (nunca reutiliza Ids del original). Los Assets referenciados (SVG de " +
+            "cada capa y thumbnail) se copian como filas propias del duplicado con Ids nuevos, apuntando al mismo " +
+            "contenido en storage (el binario no se re-copia).");
     }
 
     private static IResult ToHttpResult(ProjectResult result) => result switch
@@ -178,12 +180,29 @@ public static class ProjectV2Endpoints
         project.ThumbnailAssetId,
         project.CurrentVersionId,
         project.CreatedAt,
-        project.UpdatedAt);
+        project.UpdatedAt,
+        project.ClassicProjectId,
+        project.ClassicImageId,
+        project.ClassicPaletteId);
 
-    private static ProjectSummaryResponse ToSummary(Project project) => new(
-        project.Id,
-        project.Name,
-        project.ThumbnailAssetId,
-        project.CreatedAt,
-        project.UpdatedAt);
+    private static ProjectSummaryResponse ToSummary(ProjectListItem item)
+    {
+        var project = item.Project;
+
+        var thumbnailUrl = project.ThumbnailAssetId is { } assetId
+            ? $"/api/v2/projects/{project.Id}/assets/{assetId}"
+            : null;
+
+        return new ProjectSummaryResponse(
+            project.Id,
+            project.Name,
+            project.ThumbnailAssetId,
+            project.CreatedAt,
+            project.UpdatedAt,
+            item.LayerCount,
+            thumbnailUrl,
+            project.ClassicProjectId,
+            project.ClassicImageId,
+            project.ClassicPaletteId);
+    }
 }

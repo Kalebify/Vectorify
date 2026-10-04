@@ -4,9 +4,11 @@ using Vectorify.Api.ColorPalette;
 using Vectorify.Api.Contracts;
 using Vectorify.Api.Data;
 using Vectorify.Api.Dimensioning;
+using Vectorify.Api.Imaging;
 using Vectorify.Api.LayerLayout;
 using Vectorify.Api.ManufacturingOperations;
 using Vectorify.Api.ProjectManagement;
+using Vectorify.Api.Projects;
 using Vectorify.Api.Projects.Persistence;
 using Vectorify.Api.Storage;
 using Vectorify.Api.Users;
@@ -38,6 +40,7 @@ public sealed class VectorDocumentService : IVectorDocumentService
     private readonly IDimensionService _dimensionService;
     private readonly IVectorVersionRegistry _vectorVersionRegistry;
     private readonly IFileStorage _fileStorage;
+    private readonly IProjectRegistry _projectRegistry;
     private readonly IAssetService _assetService;
     private readonly IUserContext _userContext;
     private readonly ILogger<VectorDocumentService> _logger;
@@ -53,6 +56,7 @@ public sealed class VectorDocumentService : IVectorDocumentService
         IDimensionService dimensionService,
         IVectorVersionRegistry vectorVersionRegistry,
         IFileStorage fileStorage,
+        IProjectRegistry projectRegistry,
         IAssetService assetService,
         IUserContext userContext,
         ILogger<VectorDocumentService> logger)
@@ -67,12 +71,44 @@ public sealed class VectorDocumentService : IVectorDocumentService
         _dimensionService = dimensionService;
         _vectorVersionRegistry = vectorVersionRegistry;
         _fileStorage = fileStorage;
+        _projectRegistry = projectRegistry;
         _assetService = assetService;
         _userContext = userContext;
         _logger = logger;
     }
 
     public async Task<VectorDocumentResult> SaveAsync(VectorDocumentSaveRequest request, CancellationToken cancellationToken)
+    {
+        // El Project de un PRIMER Save se crea ANTES de validar el estado clásico y subir los SVGs
+        // (los Assets necesitan su ProjectId). Si ese Save no termina en un documento guardado, el
+        // proyecto quedaría en Mis Proyectos sin documento ni capas (M2.2-S08, revisión): se
+        // descarta (soft-delete) antes de devolver el error.
+        Guid? createdProjectId = null;
+        var succeeded = false;
+        try
+        {
+            var result = await SaveCoreAsync(request, projectId => createdProjectId = projectId, cancellationToken);
+            succeeded = result is VectorDocumentResult.Saved or VectorDocumentResult.Replayed;
+            return result;
+        }
+        finally
+        {
+            if (createdProjectId is { } orphanId && !succeeded)
+            {
+                try
+                {
+                    await _projectRepository.SoftDeleteAsync(orphanId, _userContext.GetEffectiveUserId(), CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "No se pudo descartar el proyecto {ProjectId} de un primer Save fallido", orphanId);
+                }
+            }
+        }
+    }
+
+    private async Task<VectorDocumentResult> SaveCoreAsync(
+        VectorDocumentSaveRequest request, Action<Guid> onProjectCreated, CancellationToken cancellationToken)
     {
         if (request.ClassicProjectId == Guid.Empty || request.ImageId == Guid.Empty || request.PaletteId == Guid.Empty)
         {
@@ -100,6 +136,7 @@ public sealed class VectorDocumentService : IVectorDocumentService
         }
 
         Guid projectId;
+        var createdProjectInThisSave = request.ProjectId is null;
         if (request.ProjectId is null)
         {
             // Reusa IProjectService.CreateAsync (valida Name, resuelve ownerId vía el MISMO
@@ -109,13 +146,20 @@ public sealed class VectorDocumentService : IVectorDocumentService
             // lidiar con un Project nuevo-y-sin-guardar: evita el problema de "dependencia
             // circular de inserts nuevos" que sí aplica en ProjectRepository.DuplicateAsync (acá
             // Project ya existe en la base para cuando se escribe el VectorDocument).
-            var createResult = await _projectService.CreateAsync(request.Name, description: null, cancellationToken);
+            //
+            // M2.2-S08: el triple clásico se persiste ACÁ, junto con el Project, en el PRIMER Save
+            // (nunca se modifica después) -- es lo que permite reabrir el Workspace desde Mis
+            // Proyectos con el mismo resolveWorkspaceDeepLink del frontend.
+            var createResult = await _projectService.CreateAsync(
+                request.Name, description: null, cancellationToken,
+                new ClassicProjectLink(request.ClassicProjectId, request.ImageId, request.PaletteId));
             switch (createResult)
             {
                 case ProjectResult.ValidationFailed validationFailed:
                     return new VectorDocumentResult.ValidationFailed(validationFailed.Code, validationFailed.Message);
                 case ProjectResult.Ready ready:
                     projectId = ready.Record.Id;
+                    onProjectCreated(projectId);
                     break;
                 default:
                     throw new InvalidOperationException(
@@ -344,6 +388,14 @@ public sealed class VectorDocumentService : IVectorDocumentService
                 "VectorDocument del proyecto {ProjectId} guardado (versión {VersionNumber}, {LayerCount} capas)",
                 outcome.ProjectId, outcome.VersionNumber, layerSnapshots.Count);
 
+            if (createdProjectInThisSave)
+            {
+                // Solo en el PRIMER Save (el que creó el Project) y DESPUÉS de que el documento ya
+                // quedó confirmado en la base: así un Save que falló antes no deja Assets sueltos, y
+                // un Save posterior / un replay de idempotencia nunca regenera nada.
+                await TryAttachThumbnailAsync(outcome.ProjectId, ownerId, request, cancellationToken);
+            }
+
             return new VectorDocumentResult.Saved(outcome.ProjectId, outcome.VersionNumber, outcome.SavedAt);
         }
         catch (DbUpdateConcurrencyException ex)
@@ -352,6 +404,65 @@ public sealed class VectorDocumentService : IVectorDocumentService
             return new VectorDocumentResult.Conflict(
                 "concurrency_conflict",
                 "El proyecto fue modificado por otro Save concurrente mientras tanto. Volvé a cargarlo e intentá de nuevo.");
+        }
+    }
+
+    /// <summary>
+    /// Thumbnail best-effort (M2.2-S08): lee el original subido del flujo clásico, lo reduce a
+    /// ≤ <see cref="ThumbnailGenerator.MaxSidePx"/> px, lo guarda como Asset v2 de tipo "thumbnail" y
+    /// apunta <c>Project.ThumbnailAssetId</c> a él. Cualquier fallo (original ausente/ilegible/no
+    /// decodificable, storage, DB) se loguea como warning y se traga: un thumbnail NUNCA hace
+    /// fallar un Save que ya se confirmó. Limitación documentada: es la imagen original, no el
+    /// render vectorial (no hay rasterizador de SVG en el backend).
+    /// </summary>
+    private async Task TryAttachThumbnailAsync(
+        Guid projectId, Guid ownerId, VectorDocumentSaveRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var original = _projectRegistry.Find(request.ClassicProjectId, request.ImageId);
+            if (original is null)
+            {
+                _logger.LogWarning(
+                    "Sin thumbnail para el proyecto {ProjectId}: no se encontró el original clásico (projectId {ClassicProjectId}, imageId {ImageId})",
+                    projectId, request.ClassicProjectId, request.ImageId);
+                return;
+            }
+
+            ThumbnailImage? thumbnail;
+            await using (var stream = await _fileStorage.OpenReadAsync(original.StorageKey, cancellationToken))
+            {
+                // ImageSharp necesita un stream seekable para detectar el formato.
+                using var buffer = new MemoryStream();
+                await stream.CopyToAsync(buffer, cancellationToken);
+                buffer.Position = 0;
+                thumbnail = ThumbnailGenerator.TryCreate(buffer);
+            }
+
+            if (thumbnail is null)
+            {
+                _logger.LogWarning(
+                    "Sin thumbnail para el proyecto {ProjectId}: el original ({MimeType}) no se pudo decodificar/reducir",
+                    projectId, original.MimeType);
+                return;
+            }
+
+            var extension = thumbnail.ContentType == "image/jpeg" ? "jpg" : "png";
+            var assetResult = await _assetService.CreateFromBytesAsync(
+                projectId, "thumbnail", $"thumbnail.{extension}", thumbnail.ContentType, thumbnail.Content, cancellationToken);
+
+            if (assetResult is not AssetResult.Ready assetReady)
+            {
+                _logger.LogWarning("Sin thumbnail para el proyecto {ProjectId}: no se pudo guardar el Asset ({Result})",
+                    projectId, assetResult.GetType().Name);
+                return;
+            }
+
+            await _projectRepository.SetThumbnailAsync(projectId, ownerId, assetReady.Record.Id, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Sin thumbnail para el proyecto {ProjectId}: falló la generación (el Save no se ve afectado)", projectId);
         }
     }
 

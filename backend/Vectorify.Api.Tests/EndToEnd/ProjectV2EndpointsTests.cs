@@ -197,6 +197,64 @@ public sealed class ProjectV2EndpointsTests : IAsyncLifetime
         Assert.Equal("invalid_sort", error!.Code);
     }
 
+    [Fact]
+    public async Task GetProjects_ForAProjectCreatedWithoutSave_ReportsZeroLayersAndNoThumbnailNorTriple()
+    {
+        // M2.2-S08: un proyecto "vacío" de POST /api/v2/projects (sin Save) se lista igual, pero sin
+        // capas, sin thumbnail y sin triple clásico (la UI lo trata como "no se puede reabrir").
+        await using var factory = CreateFactory();
+        var client = factory.CreateClient();
+        var created = await CreateProjectAsync(client, "Vacío");
+
+        Assert.Null(created.ClassicProjectId);
+        Assert.Null(created.ClassicImageId);
+        Assert.Null(created.ClassicPaletteId);
+
+        var list = await client.GetFromJsonAsync<ProjectListResponse>("/api/v2/projects");
+        var item = Assert.Single(list!.Items);
+        Assert.Equal(created.Id, item.Id);
+        Assert.Equal(0, item.LayerCount);
+        Assert.Null(item.ThumbnailAssetId);
+        Assert.Null(item.ThumbnailUrl);
+        Assert.Null(item.ClassicProjectId);
+        Assert.Null(item.ClassicImageId);
+        Assert.Null(item.ClassicPaletteId);
+    }
+
+    [Fact]
+    public async Task GetProjects_ListingShape_UsesCamelCaseJsonForTheNewFields()
+    {
+        await using var factory = CreateFactory();
+        var client = factory.CreateClient();
+        await CreateProjectAsync(client, "Forma JSON");
+
+        var json = await client.GetStringAsync("/api/v2/projects");
+
+        // El frontend (types/projectsV2.ts) depende de estos nombres exactos.
+        Assert.Contains("\"layerCount\":0", json);
+        Assert.Contains("\"thumbnailUrl\":null", json);
+        Assert.Contains("\"classicProjectId\":null", json);
+        Assert.Contains("\"classicImageId\":null", json);
+        Assert.Contains("\"classicPaletteId\":null", json);
+        Assert.Contains("\"totalCount\":1", json);
+    }
+
+    [Fact]
+    public async Task GetProjects_DoesNotListAProjectOfAnotherOwner()
+    {
+        await using var factory = CreateFactory();
+        var client = factory.CreateClient();
+        await CreateProjectAsync(client, "Mío");
+        var strangerProjectId = await SeedProjectForAnotherOwnerAsync(factory, "Ajeno");
+
+        var list = await client.GetFromJsonAsync<ProjectListResponse>("/api/v2/projects");
+
+        Assert.Equal(["Mío"], list!.Items.Select(i => i.Name));
+        // Y pedir el ajeno por Id sigue siendo el 404 uniforme (no revela que existe).
+        var response = await client.GetAsync($"/api/v2/projects/{strangerProjectId}");
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
     private static async Task<ProjectResponse> CreateProjectAsync(HttpClient client, string name, string? description = null)
     {
         var response = await client.PostAsJsonAsync("/api/v2/projects", new CreateProjectRequest(name, description));

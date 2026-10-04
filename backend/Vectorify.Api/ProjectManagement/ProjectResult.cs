@@ -1,4 +1,5 @@
 using Vectorify.Api.Data;
+using Vectorify.Api.Projects.Persistence;
 
 namespace Vectorify.Api.ProjectManagement;
 
@@ -20,7 +21,7 @@ public abstract record ProjectResult
     public sealed record Ready(Project Record) : ProjectResult;
 
     /// <summary>Página de proyectos (list), con el total real (antes de paginar) para que el cliente calcule cuántas páginas hay.</summary>
-    public sealed record ListReady(IReadOnlyList<Project> Items, int TotalCount, int Page, int PageSize) : ProjectResult;
+    public sealed record ListReady(IReadOnlyList<ProjectListItem> Items, int TotalCount, int Page, int PageSize) : ProjectResult;
 
     /// <summary>Soft-delete aplicado (el endpoint responde 204, sin cuerpo).</summary>
     public sealed record Deleted : ProjectResult;

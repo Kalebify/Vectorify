@@ -1,4 +1,6 @@
+using System.Data.Common;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Testcontainers.PostgreSql;
 using Vectorify.Api.Data;
 using Vectorify.Api.Projects.Persistence;
@@ -216,7 +218,7 @@ public sealed class ProjectRepositoryTests : IAsyncLifetime
         Assert.Equal(5, thirdPageItems.Count);
 
         // Ningún Id se repite entre páginas (corta correctamente, no duplica/salta filas).
-        var allIds = firstPageItems.Concat(secondPageItems).Concat(thirdPageItems).Select(p => p.Id).ToList();
+        var allIds = firstPageItems.Concat(secondPageItems).Concat(thirdPageItems).Select(p => p.Project.Id).ToList();
         Assert.Equal(25, allIds.Distinct().Count());
     }
 
@@ -235,7 +237,7 @@ public sealed class ProjectRepositoryTests : IAsyncLifetime
             ownerId, new ProjectListQuery(1, 20, "llavero", ProjectSortBy.Name), CancellationToken.None);
 
         Assert.Equal(2, totalCount);
-        Assert.All(items, p => Assert.Contains("llavero", p.Name, StringComparison.OrdinalIgnoreCase));
+        Assert.All(items, p => Assert.Contains("llavero", p.Project.Name, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -252,7 +254,7 @@ public sealed class ProjectRepositoryTests : IAsyncLifetime
         var (items, _) = await repository.ListAsync(
             ownerId, new ProjectListQuery(1, 20, null, ProjectSortBy.Name), CancellationToken.None);
 
-        Assert.Equal(["Alpha", "Bravo", "Charlie"], items.Select(p => p.Name));
+        Assert.Equal(["Alpha", "Bravo", "Charlie"], items.Select(p => p.Project.Name));
     }
 
     [Fact]
@@ -269,7 +271,7 @@ public sealed class ProjectRepositoryTests : IAsyncLifetime
         var (items, _) = await repository.ListAsync(
             ownerId, new ProjectListQuery(1, 20, null, ProjectSortBy.Created), CancellationToken.None);
 
-        Assert.Equal([second.Id, first.Id], items.Select(p => p.Id));
+        Assert.Equal([second.Id, first.Id], items.Select(p => p.Project.Id));
     }
 
     [Fact]
@@ -290,7 +292,7 @@ public sealed class ProjectRepositoryTests : IAsyncLifetime
         var (items, _) = await repository.ListAsync(
             ownerId, new ProjectListQuery(1, 20, null, ProjectSortBy.LastModified), CancellationToken.None);
 
-        Assert.Equal([first.Id, second.Id], items.Select(p => p.Id));
+        Assert.Equal([first.Id, second.Id], items.Select(p => p.Project.Id));
     }
 
     [Fact]
@@ -433,6 +435,387 @@ public sealed class ProjectRepositoryTests : IAsyncLifetime
         Assert.Null(duplicate);
     }
 
+    // ---------- M2.2-S08: triple clásico, thumbnail y LayerCount ----------
+
+    [Fact]
+    public async Task CreateAsync_WithClassicLink_PersistsTheTriple()
+    {
+        await using var dbContext = await CreateMigratedDbContextAsync();
+        var ownerId = await SeedUserAsync(dbContext);
+        var repository = new ProjectRepository(dbContext);
+        var link = new ClassicProjectLink(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+
+        var created = await repository.CreateAsync(ownerId, "Con origen", null, CancellationToken.None, link);
+
+        await using var readContext = CreateDbContext();
+        var reloaded = await readContext.Projects.FirstAsync(p => p.Id == created.Id);
+        Assert.Equal(link.ClassicProjectId, reloaded.ClassicProjectId);
+        Assert.Equal(link.ClassicImageId, reloaded.ClassicImageId);
+        Assert.Equal(link.ClassicPaletteId, reloaded.ClassicPaletteId);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithoutClassicLink_LeavesTheTripleNull()
+    {
+        await using var dbContext = await CreateMigratedDbContextAsync();
+        var ownerId = await SeedUserAsync(dbContext);
+        var repository = new ProjectRepository(dbContext);
+
+        var created = await repository.CreateAsync(ownerId, "Sin origen", null, CancellationToken.None);
+
+        await using var readContext = CreateDbContext();
+        var reloaded = await readContext.Projects.FirstAsync(p => p.Id == created.Id);
+        Assert.Null(reloaded.ClassicProjectId);
+        Assert.Null(reloaded.ClassicImageId);
+        Assert.Null(reloaded.ClassicPaletteId);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_Rename_NeverTouchesTheTriple()
+    {
+        await using var dbContext = await CreateMigratedDbContextAsync();
+        var ownerId = await SeedUserAsync(dbContext);
+        var repository = new ProjectRepository(dbContext);
+        var link = new ClassicProjectLink(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var created = await repository.CreateAsync(ownerId, "Original", null, CancellationToken.None, link);
+
+        await repository.UpdateAsync(created.Id, ownerId, "Renombrado", null, CancellationToken.None);
+
+        await using var readContext = CreateDbContext();
+        var reloaded = await readContext.Projects.FirstAsync(p => p.Id == created.Id);
+        Assert.Equal("Renombrado", reloaded.Name);
+        Assert.Equal(link.ClassicProjectId, reloaded.ClassicProjectId);
+        Assert.Equal(link.ClassicImageId, reloaded.ClassicImageId);
+        Assert.Equal(link.ClassicPaletteId, reloaded.ClassicPaletteId);
+    }
+
+    [Fact]
+    public async Task SetThumbnailAsync_PointsToTheAsset_WithoutTouchingUpdatedAt()
+    {
+        await using var dbContext = await CreateMigratedDbContextAsync();
+        var ownerId = await SeedUserAsync(dbContext);
+        var repository = new ProjectRepository(dbContext);
+        var project = await repository.CreateAsync(ownerId, "Con thumbnail", null, CancellationToken.None);
+        var asset = await SeedAssetAsync(dbContext, project.Id);
+        // Releído de la base: Postgres guarda microsegundos, el DateTimeOffset en memoria tiene ticks de 100 ns.
+        await using var beforeContext = CreateDbContext();
+        var updatedAtBefore = (await beforeContext.Projects.FirstAsync(p => p.Id == project.Id)).UpdatedAt;
+
+        var updated = await repository.SetThumbnailAsync(project.Id, ownerId, asset.Id, CancellationToken.None);
+
+        Assert.True(updated);
+        await using var readContext = CreateDbContext();
+        var reloaded = await readContext.Projects.FirstAsync(p => p.Id == project.Id);
+        Assert.Equal(asset.Id, reloaded.ThumbnailAssetId);
+        Assert.Equal(updatedAtBefore, reloaded.UpdatedAt);
+    }
+
+    [Fact]
+    public async Task SetThumbnailAsync_WrongOwner_ReturnsFalse()
+    {
+        await using var dbContext = await CreateMigratedDbContextAsync();
+        var ownerId = await SeedUserAsync(dbContext);
+        var strangerId = await SeedUserAsync(dbContext);
+        var repository = new ProjectRepository(dbContext);
+        var project = await repository.CreateAsync(ownerId, "De otro", null, CancellationToken.None);
+        var asset = await SeedAssetAsync(dbContext, project.Id);
+
+        var updated = await repository.SetThumbnailAsync(project.Id, strangerId, asset.Id, CancellationToken.None);
+
+        Assert.False(updated);
+    }
+
+    [Fact]
+    public async Task DuplicateAsync_CopiesTheClassicTripleAndTheThumbnailAssetId()
+    {
+        await using var dbContext = await CreateMigratedDbContextAsync();
+        var ownerId = await SeedUserAsync(dbContext);
+        var repository = new ProjectRepository(dbContext);
+        var link = new ClassicProjectLink(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        var source = await repository.CreateAsync(ownerId, "Original", null, CancellationToken.None, link);
+        var asset = await SeedAssetAsync(dbContext, source.Id);
+        await repository.SetThumbnailAsync(source.Id, ownerId, asset.Id, CancellationToken.None);
+
+        var duplicate = await repository.DuplicateAsync(source.Id, ownerId, "Copia", CancellationToken.None);
+
+        Assert.NotNull(duplicate);
+        await using var readContext = CreateDbContext();
+        var reloaded = await readContext.Projects.FirstAsync(p => p.Id == duplicate!.Id);
+        Assert.Equal(link.ClassicProjectId, reloaded.ClassicProjectId);
+        Assert.Equal(link.ClassicImageId, reloaded.ClassicImageId);
+        Assert.Equal(link.ClassicPaletteId, reloaded.ClassicPaletteId);
+        // El duplicado tiene su PROPIO Asset de thumbnail (misma StorageKey); el original conserva el suyo.
+        Assert.NotNull(reloaded.ThumbnailAssetId);
+        Assert.NotEqual(asset.Id, reloaded.ThumbnailAssetId);
+        var duplicateThumbnail = await readContext.Assets.FirstAsync(a => a.Id == reloaded.ThumbnailAssetId);
+        Assert.Equal(duplicate!.Id, duplicateThumbnail.ProjectId);
+        Assert.Equal(asset.StorageKey, duplicateThumbnail.StorageKey);
+        Assert.Equal(asset.Id, (await readContext.Projects.FirstAsync(p => p.Id == source.Id)).ThumbnailAssetId);
+    }
+
+    [Fact]
+    public async Task DuplicateAsync_GivesTheDuplicateItsOwnAssetRows_ForLayerSvgsAndThumbnail_AndKeepsPathCount()
+    {
+        // Regresión (revisión M2.2-S08): DuplicateAsync no copiaba Layer.SvgAssetId/PathCount, así
+        // que un proyecto duplicado desde Mis Proyectos se reabría SIN el arte de ninguna capa. Y
+        // las filas de Asset pertenecen a UN Project (la descarga filtra por projectId), así que
+        // el duplicado necesita las SUYAS apuntando al mismo contenido en storage.
+        await using var dbContext = await CreateMigratedDbContextAsync();
+        var ownerId = await SeedUserAsync(dbContext);
+        var repository = new ProjectRepository(dbContext);
+        var source = await repository.CreateAsync(ownerId, "Original", null, CancellationToken.None);
+        var versionId = await SeedCurrentVersionAsync(dbContext, source.Id, layerCount: 2);
+        var thumbnail = await SeedAssetAsync(dbContext, source.Id);
+        await repository.SetThumbnailAsync(source.Id, ownerId, thumbnail.Id, CancellationToken.None);
+
+        var svgAssets = new List<Asset>();
+        foreach (var layer in await dbContext.Layers.Where(l => l.VersionId == versionId).ToListAsync())
+        {
+            var svg = await SeedAssetAsync(dbContext, source.Id);
+            svgAssets.Add(svg);
+            layer.SvgAssetId = svg.Id;
+            layer.PathCount = 7;
+        }
+
+        await dbContext.SaveChangesAsync();
+
+        var duplicate = await repository.DuplicateAsync(source.Id, ownerId, "Copia", CancellationToken.None);
+
+        Assert.NotNull(duplicate);
+        await using var readContext = CreateDbContext();
+        var duplicateAssets = await readContext.Assets.Where(a => a.ProjectId == duplicate!.Id).ToListAsync();
+        Assert.Equal(3, duplicateAssets.Count); // 2 SVG de capa + 1 thumbnail
+        Assert.DoesNotContain(duplicateAssets, a => a.Id == thumbnail.Id || svgAssets.Any(s => s.Id == a.Id));
+        Assert.All(duplicateAssets, copy =>
+            Assert.Contains(new[] { thumbnail }.Concat(svgAssets), original => original.StorageKey == copy.StorageKey));
+
+        var reloaded = await readContext.Projects.FirstAsync(p => p.Id == duplicate!.Id);
+        Assert.Contains(duplicateAssets, a => a.Id == reloaded.ThumbnailAssetId);
+
+        var duplicatedLayers = await readContext.Layers
+            .Where(l => l.VersionId == reloaded.CurrentVersionId)
+            .ToListAsync();
+        Assert.Equal(2, duplicatedLayers.Count);
+        Assert.All(duplicatedLayers, layer =>
+        {
+            Assert.Equal(7, layer.PathCount);
+            Assert.NotNull(layer.SvgAssetId);
+            Assert.Contains(duplicateAssets, a => a.Id == layer.SvgAssetId); // asset del DUPLICADO, no del original
+        });
+
+        // El original conserva sus assets, sin tocar.
+        Assert.Equal(3, await readContext.Assets.CountAsync(a => a.ProjectId == source.Id));
+    }
+
+    [Fact]
+    public async Task ListAsync_ReportsLayerCountOfTheCurrentVersion_ZeroWhenThereIsNone()
+    {
+        await using var dbContext = await CreateMigratedDbContextAsync();
+        var ownerId = await SeedUserAsync(dbContext);
+        var repository = new ProjectRepository(dbContext);
+
+        var empty = await repository.CreateAsync(ownerId, "A sin versión", null, CancellationToken.None);
+        var withThree = await repository.CreateAsync(ownerId, "B con tres capas", null, CancellationToken.None);
+        var withOne = await repository.CreateAsync(ownerId, "C con una capa", null, CancellationToken.None);
+        await SeedCurrentVersionAsync(dbContext, withThree.Id, layerCount: 3);
+        await SeedCurrentVersionAsync(dbContext, withOne.Id, layerCount: 1);
+
+        var (items, _) = await repository.ListAsync(
+            ownerId, new ProjectListQuery(1, 20, null, ProjectSortBy.Name), CancellationToken.None);
+
+        Assert.Equal(
+            [(empty.Id, 0), (withThree.Id, 3), (withOne.Id, 1)],
+            items.Select(item => (item.Project.Id, item.LayerCount)));
+    }
+
+    [Fact]
+    public async Task ListAsync_LayerCountFollowsTheCurrentVersion_NotTheHistory()
+    {
+        // PATCH/Restore crean versiones nuevas y repuntan CurrentVersionId: el conteo debe seguir
+        // a la versión VIGENTE, no sumar todas las históricas.
+        await using var dbContext = await CreateMigratedDbContextAsync();
+        var ownerId = await SeedUserAsync(dbContext);
+        var repository = new ProjectRepository(dbContext);
+        var project = await repository.CreateAsync(ownerId, "Con historia", null, CancellationToken.None);
+
+        var v1 = await SeedCurrentVersionAsync(dbContext, project.Id, layerCount: 2);
+        await SeedCurrentVersionAsync(dbContext, project.Id, layerCount: 5);
+
+        var (afterV2, _) = await repository.ListAsync(
+            ownerId, new ProjectListQuery(1, 20, null, ProjectSortBy.Name), CancellationToken.None);
+        Assert.Equal(5, Assert.Single(afterV2).LayerCount);
+
+        // "Restore" lógico: el puntero vuelve a una versión anterior (2 capas).
+        var tracked = await dbContext.Projects.FirstAsync(p => p.Id == project.Id);
+        tracked.CurrentVersionId = v1;
+        await dbContext.SaveChangesAsync();
+
+        var (afterRestore, _) = await repository.ListAsync(
+            ownerId, new ProjectListQuery(1, 20, null, ProjectSortBy.Name), CancellationToken.None);
+        Assert.Equal(2, Assert.Single(afterRestore).LayerCount);
+    }
+
+    [Fact]
+    public async Task ListAsync_DoesNotIssueAQueryPerProject_NoNPlusOne()
+    {
+        // Assert estructural del "sin N+1": la cantidad de comandos SQL del listado NO depende de
+        // cuántos proyectos (con versión, capas y thumbnail) tenga la página -- siempre COUNT +
+        // la página, nada más.
+        var counter = new CommandCounter();
+        await using var seedContext = await CreateMigratedDbContextAsync();
+        var ownerId = await SeedUserAsync(seedContext);
+        var seedRepository = new ProjectRepository(seedContext);
+
+        for (var i = 0; i < 12; i++)
+        {
+            var project = await seedRepository.CreateAsync(ownerId, $"Proyecto {i:D2}", null, CancellationToken.None);
+            await SeedCurrentVersionAsync(seedContext, project.Id, layerCount: 2 + i % 3);
+            var asset = await SeedAssetAsync(seedContext, project.Id);
+            await seedRepository.SetThumbnailAsync(project.Id, ownerId, asset.Id, CancellationToken.None);
+        }
+
+        await using var countingContext = CreateDbContext(counter);
+        var repository = new ProjectRepository(countingContext);
+
+        counter.Reset();
+        var (smallPage, _) = await repository.ListAsync(
+            ownerId, new ProjectListQuery(1, 2, null, ProjectSortBy.Name), CancellationToken.None);
+        var commandsForTwoItems = counter.Count;
+
+        counter.Reset();
+        var (bigPage, _) = await repository.ListAsync(
+            ownerId, new ProjectListQuery(1, 12, null, ProjectSortBy.Name), CancellationToken.None);
+        var commandsForTwelveItems = counter.Count;
+
+        Assert.Equal(2, smallPage.Count);
+        Assert.Equal(12, bigPage.Count);
+        Assert.Equal(2, commandsForTwoItems);
+        Assert.Equal(commandsForTwoItems, commandsForTwelveItems);
+        Assert.All(bigPage, item => Assert.True(item.LayerCount >= 2));
+    }
+
+    [Fact]
+    public async Task ListAsync_OtherOwnersProjects_AndSoftDeletedOnes_AreExcluded_WithTheirLayerCounts()
+    {
+        await using var dbContext = await CreateMigratedDbContextAsync();
+        var ownerId = await SeedUserAsync(dbContext);
+        var strangerId = await SeedUserAsync(dbContext);
+        var repository = new ProjectRepository(dbContext);
+
+        var mine = await repository.CreateAsync(ownerId, "Mío", null, CancellationToken.None);
+        var theirs = await repository.CreateAsync(strangerId, "Ajeno", null, CancellationToken.None);
+        var deleted = await repository.CreateAsync(ownerId, "Borrado", null, CancellationToken.None);
+        await SeedCurrentVersionAsync(dbContext, mine.Id, layerCount: 1);
+        await SeedCurrentVersionAsync(dbContext, theirs.Id, layerCount: 4);
+        await SeedCurrentVersionAsync(dbContext, deleted.Id, layerCount: 2);
+        await repository.SoftDeleteAsync(deleted.Id, ownerId, CancellationToken.None);
+
+        var (items, totalCount) = await repository.ListAsync(
+            ownerId, new ProjectListQuery(1, 20, null, ProjectSortBy.Name), CancellationToken.None);
+
+        Assert.Equal(1, totalCount);
+        var item = Assert.Single(items);
+        Assert.Equal(mine.Id, item.Project.Id);
+        Assert.Equal(1, item.LayerCount);
+    }
+
+    private static async Task<Asset> SeedAssetAsync(VectorizationDbContext dbContext, Guid projectId)
+    {
+        var asset = new Asset
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = projectId,
+            Type = "thumbnail",
+            StorageKey = $"projects/{projectId:N}/thumbnail/{Guid.NewGuid():N}.png",
+            MimeType = "image/png",
+            FileName = "thumbnail.png",
+            Size = 10,
+            Checksum = "abc",
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        dbContext.Assets.Add(asset);
+        await dbContext.SaveChangesAsync();
+        return asset;
+    }
+
+    /// <summary>Agrega una DocumentVersion nueva con <paramref name="layerCount"/> capas al proyecto y la deja como CurrentVersion. Devuelve su Id.</summary>
+    private static async Task<Guid> SeedCurrentVersionAsync(VectorizationDbContext dbContext, Guid projectId, int layerCount)
+    {
+        var document = await dbContext.VectorDocuments
+            .Include(d => d.Versions)
+            .FirstOrDefaultAsync(d => d.ProjectId == projectId);
+        if (document is null)
+        {
+            document = new VectorDocument { Id = Guid.NewGuid(), ProjectId = projectId };
+            dbContext.VectorDocuments.Add(document);
+            await dbContext.SaveChangesAsync();
+        }
+
+        var version = new DocumentVersion
+        {
+            Id = Guid.NewGuid(),
+            VectorDocumentId = document.Id,
+            VersionNumber = document.Versions.Count == 0 ? 1 : document.Versions.Max(v => v.VersionNumber) + 1,
+            WidthMm = 10,
+            HeightMm = 10,
+            ViewBox = "0 0 10 10",
+            SchemaVersion = 1,
+            Origin = DocumentVersionOrigin.ManualEdit,
+            MetadataJson = "{}",
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        dbContext.DocumentVersions.Add(version);
+
+        for (var i = 0; i < layerCount; i++)
+        {
+            var color = new PaletteColor { Id = Guid.NewGuid(), VersionId = version.Id, Hex = $"#00000{i % 10}", Coverage = 1, Order = i };
+            dbContext.PaletteColors.Add(color);
+            dbContext.Layers.Add(new Layer
+            {
+                Id = Guid.NewGuid(),
+                GroupId = Guid.NewGuid(),
+                VersionId = version.Id,
+                ColorId = color.Id,
+                Name = $"Capa {i}",
+                Order = i,
+                Visible = true,
+            });
+        }
+
+        await dbContext.SaveChangesAsync();
+
+        var project = await dbContext.Projects.FirstAsync(p => p.Id == projectId);
+        project.CurrentVersionId = version.Id;
+        await dbContext.SaveChangesAsync();
+
+        return version.Id;
+    }
+
+    /// <summary>Cuenta los comandos SQL realmente ejecutados por un DbContext (ver el test de "sin N+1").</summary>
+    private sealed class CommandCounter : DbCommandInterceptor
+    {
+        public int Count { get; private set; }
+
+        public void Reset() => Count = 0;
+
+        public override ValueTask<InterceptionResult<DbDataReader>> ReaderExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<DbDataReader> result,
+            CancellationToken cancellationToken = default)
+        {
+            Count++;
+            return base.ReaderExecutingAsync(command, eventData, result, cancellationToken);
+        }
+
+        // CountAsync se ejecuta como ExecuteScalar, no como reader: hay que contarlo también.
+        public override ValueTask<InterceptionResult<object>> ScalarExecutingAsync(
+            DbCommand command, CommandEventData eventData, InterceptionResult<object> result,
+            CancellationToken cancellationToken = default)
+        {
+            Count++;
+            return base.ScalarExecutingAsync(command, eventData, result, cancellationToken);
+        }
+    }
+
     private static async Task<Guid> SeedUserAsync(VectorizationDbContext dbContext)
     {
         var user = new User
@@ -453,11 +836,15 @@ public sealed class ProjectRepositoryTests : IAsyncLifetime
         return dbContext;
     }
 
-    private VectorizationDbContext CreateDbContext()
+    private VectorizationDbContext CreateDbContext(IInterceptor? interceptor = null)
     {
-        var options = new DbContextOptionsBuilder<VectorizationDbContext>()
-            .UseNpgsql(_postgres.GetConnectionString())
-            .Options;
-        return new VectorizationDbContext(options);
+        var builder = new DbContextOptionsBuilder<VectorizationDbContext>()
+            .UseNpgsql(_postgres.GetConnectionString());
+        if (interceptor is not null)
+        {
+            builder.AddInterceptors(interceptor);
+        }
+
+        return new VectorizationDbContext(builder.Options);
     }
 }

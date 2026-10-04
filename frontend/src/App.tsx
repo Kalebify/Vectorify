@@ -14,6 +14,7 @@ import { DimensionPanel, type DimensionSourceOption } from "./components/dimensi
 import { EditorShell } from "./components/editor/EditorShell";
 import { ExportPanel, type ExportSourceOption } from "./components/export/ExportPanel";
 import { LayersPanel } from "./components/layers/LayersPanel";
+import { ProjectsDashboard } from "./components/projects/ProjectsDashboard";
 import { PreprocessPanel } from "./components/preprocess/PreprocessPanel";
 import { SimplifyPanel } from "./components/simplify/SimplifyPanel";
 import { ThresholdPanel } from "./components/threshold/ThresholdPanel";
@@ -22,8 +23,11 @@ import { VectorizePanel } from "./components/vectorize/VectorizePanel";
 import { useSystemHealth } from "./hooks/useSystemHealth";
 import {
   clearWorkspaceLocation,
+  pushAppView,
   pushWorkspaceLocation,
+  readAppView,
   readWorkspaceLocation,
+  type PageView,
   type WorkspaceLocation,
 } from "./lib/workspaceLocation";
 import {
@@ -218,6 +222,12 @@ function App() {
   // generan las capas (precondiciones del Workspace), y ninguna tarjeta
   // pidió todavía retirarlo.
   const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
+  // Vista de página (M2.2-S08): sin params = dashboard "Mis proyectos" (landing por defecto);
+  // `?view=new` = flujo clásico de upload. El Workspace NO es una vista de página acá: sigue
+  // gobernado por `isWorkspaceOpen` + los params de la URL (ver lib/workspaceLocation.ts). Una URL
+  // de arranque de Workspace parte en "dashboard": si el deep-link resulta inválido, ahí aterriza.
+  const [view, setView] = useState<PageView>(() => (readAppView() === "new" ? "new" : "dashboard"));
+  const isWorkspaceOpenRef = useRef(false);
   // Project.Id v2 ya guardado de la sesión actual del Workspace (M2.2-S05) -- null hasta que el
   // primer Save exitoso lo resuelva (ver EditorShell.onSaved más abajo), o ya conocido de
   // entrada si la URL lo traía (reapertura/reload, ver resolveWorkspaceDeepLink).
@@ -254,12 +264,19 @@ function App() {
   const resolveWorkspaceDeepLink = useCallback((location: WorkspaceLocation) => {
     setDeepLinkStatus("resolving");
 
+    // Un deep-link inválido limpia la URL (queda sin params = dashboard) y aterriza en "Mis
+    // proyectos" (M2.2-S08), donde se muestra el aviso -- sin importar desde qué vista partió.
+    const failToDashboard = () => {
+      clearWorkspaceLocation();
+      setView("dashboard");
+    };
+
     (async () => {
       let project: UploadImageResponse;
       try {
         project = await getProjectImage(location.projectId, location.imageId);
       } catch (error) {
-        clearWorkspaceLocation();
+        failToDashboard();
         setDeepLinkStatus("invalid");
         setDeepLinkMessage(
           error instanceof ApiClientError && !error.isNetworkError
@@ -282,7 +299,7 @@ function App() {
         try {
           await getVectorDocument(location.savedProjectId);
         } catch (error) {
-          clearWorkspaceLocation();
+          failToDashboard();
           setDeepLinkStatus("invalid");
           setDeepLinkMessage(
             error instanceof ApiClientError && !error.isNetworkError
@@ -304,7 +321,7 @@ function App() {
       try {
         palette = await getColorPalette(location.projectId, location.imageId, location.paletteId);
       } catch (error) {
-        clearWorkspaceLocation();
+        failToDashboard();
         setDeepLinkStatus("invalid");
         setDeepLinkMessage(
           error instanceof ApiClientError && !error.isNetworkError
@@ -343,6 +360,53 @@ function App() {
       setRecoveryPointer(pointer);
     }
   }, [resolveWorkspaceDeepLink]);
+
+  useEffect(() => {
+    isWorkspaceOpenRef.current = isWorkspaceOpen;
+  }, [isWorkspaceOpen]);
+
+  // Botón atrás/adelante del navegador (M2.2-S08): mantiene la vista de página sincronizada con la
+  // URL (dashboard <-> `?view=new`), y re-resuelve un deep-link de Workspace al volver a uno.
+  // Con el Workspace ABIERTO no hace nada (mismo comportamiento que antes de esta tarjeta): cerrar
+  // el editor por un popstate podría descartar un guardado en vuelo.
+  useEffect(() => {
+    const handlePopState = () => {
+      if (isWorkspaceOpenRef.current) return;
+
+      const next = readAppView();
+      if (next === "workspace") {
+        const location = readWorkspaceLocation();
+        if (location) resolveWorkspaceDeepLink(location);
+        return;
+      }
+
+      setView(next);
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [resolveWorkspaceDeepLink]);
+
+  const navigateToView = (next: PageView) => {
+    pushAppView(next);
+    setView(next);
+  };
+
+  // "New Project" / "Crear proyecto" del dashboard: arranca el flujo clásico de upload en limpio
+  // (sin restos del proyecto de una sesión anterior).
+  const handleNewProject = () => {
+    handleProjectCreated(null);
+    navigateToView("new");
+  };
+
+  // Open desde Mis Proyectos: la URL se actualiza ANTES de resolver (un reload inmediato
+  // reconstruye la misma sesión) y se reusa EXACTAMENTE resolveWorkspaceDeepLink -- que valida
+  // GET /api/v2/projects/{id}/document y reabre el Workspace sin rehidratar nada por su cuenta.
+  const handleOpenSavedProject = (location: WorkspaceLocation) => {
+    handleProjectCreated(null);
+    pushWorkspaceLocation(location);
+    resolveWorkspaceDeepLink(location);
+  };
 
   const handleContinueWhereLeftOff = () => {
     if (!recoveryPointer) return;
@@ -463,7 +527,9 @@ function App() {
         }}
         onClose={() => {
           setIsWorkspaceOpen(false);
-          clearWorkspaceLocation();
+          // Cerrar un Workspace YA GUARDADO vuelve a Mis proyectos; uno todavía en staging (sin
+          // savedProjectId) vuelve al flujo clásico `?view=new`, donde sigue su estado (M2.2-S08).
+          navigateToView(savedProjectId ? "dashboard" : "new");
         }}
       />
     );
@@ -477,6 +543,41 @@ function App() {
     );
   }
 
+  // Avisos de la reapertura del Workspace: se muestran en AMBAS vistas de página (el deep-link
+  // inválido aterriza en el dashboard; "Continuar donde quedaste" se ofrece donde sea que parta la
+  // app) para que sigan siendo alcanzables ahora que la home ya no es el flujo de upload.
+  const workspaceNotices = (
+    <>
+      {deepLinkStatus === "invalid" && deepLinkMessage && (
+        <div aria-label="Enlace del Workspace inválido" className="status-banner status-banner--error" role="alert">
+          <p>{deepLinkMessage}</p>
+        </div>
+      )}
+
+      {recoveryPointer && (
+        <div aria-label="Recuperar sesión del Workspace" className="status-banner" role="status">
+          <p>Encontramos una sesión del Workspace sin guardar de tu última visita.</p>
+          <button type="button" className="upload-actions__button upload-actions__button--primary" onClick={handleContinueWhereLeftOff}>
+            Continuar donde quedaste
+          </button>
+          <button type="button" className="upload-actions__button" onClick={handleDismissRecovery}>
+            Descartar
+          </button>
+        </div>
+      )}
+    </>
+  );
+
+  if (view === "dashboard") {
+    return (
+      <ProjectsDashboard
+        onNewProject={handleNewProject}
+        onOpenProject={handleOpenSavedProject}
+        notices={workspaceNotices}
+      />
+    );
+  }
+
   return (
     <>
       <header className="app-header">
@@ -484,26 +585,21 @@ function App() {
         <p className="app-header__subtitle">
           Vectorizá tus imágenes: cargá un original y verificá el estado del sistema.
         </p>
+        <nav aria-label="Navegación principal">
+          <a
+            href={window.location.pathname}
+            onClick={(event) => {
+              event.preventDefault();
+              navigateToView("dashboard");
+            }}
+          >
+            Mis proyectos
+          </a>
+        </nav>
       </header>
 
       <main>
-        {deepLinkStatus === "invalid" && deepLinkMessage && (
-          <div aria-label="Enlace del Workspace inválido" className="status-banner status-banner--error" role="alert">
-            <p>{deepLinkMessage}</p>
-          </div>
-        )}
-
-        {recoveryPointer && (
-          <div aria-label="Recuperar sesión del Workspace" className="status-banner" role="status">
-            <p>Encontramos una sesión del Workspace sin guardar de tu última visita.</p>
-            <button type="button" className="upload-actions__button upload-actions__button--primary" onClick={handleContinueWhereLeftOff}>
-              Continuar donde quedaste
-            </button>
-            <button type="button" className="upload-actions__button" onClick={handleDismissRecovery}>
-              Descartar
-            </button>
-          </div>
-        )}
+        {workspaceNotices}
 
         <section aria-labelledby="upload-heading" className="upload-section">
           <h2 id="upload-heading">Nuevo proyecto</h2>
