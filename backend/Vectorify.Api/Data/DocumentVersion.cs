@@ -55,6 +55,19 @@ public sealed class DocumentVersion
 
     public string MetadataJson { get; set; } = "{}";
 
+    /// <summary>
+    /// GUID generado por el CLIENTE (M2.2-S07, idempotencia real de <c>POST /api/v2/workspaces/save</c>)
+    /// -- el mismo valor se reenvía en cada reintento del MISMO intento lógico de guardar, nunca
+    /// uno nuevo por reintento. Null para cualquier <see cref="DocumentVersion"/> que no vino de
+    /// ese endpoint (PATCH de layer, Restore) o que nunca mandó uno (requests viejos, clientes
+    /// pre-M2.2-S07) -- por eso el índice único de <see cref="VectorizationDbContext.OnModelCreating"/>
+    /// es PARCIAL (solo sobre valores no nulos, <c>HasFilter</c>), igual criterio que
+    /// <see cref="Vectorify.Api.Projects.ProjectRecord.IdempotencyKey"/>/
+    /// <see cref="Vectorify.Api.Projects.ProjectUploadService.UploadAsync"/> -- reusado acá, no
+    /// reinventado.
+    /// </summary>
+    public string? IdempotencyKey { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; }
 
     public ICollection<Layer> Layers { get; set; } = new List<Layer>();

@@ -26,6 +26,11 @@ import {
   readWorkspaceLocation,
   type WorkspaceLocation,
 } from "./lib/workspaceLocation";
+import {
+  clearWorkspaceRecoveryPointer,
+  readRecentWorkspaceRecoveryPointer,
+  type WorkspaceRecoveryPointer,
+} from "./lib/workspaceRecovery";
 import type { ColorPaletteResponse } from "./types/colorPalette";
 import type { DimensionResponse } from "./types/dimension";
 import type { PreprocessResponse } from "./types/preprocess";
@@ -236,6 +241,13 @@ function App() {
   const [deepLinkMessage, setDeepLinkMessage] = useState<string | null>(null);
   const deepLinkResolvedRef = useRef(false);
 
+  // Recovery local de staging (M2.2-S07, "Continuar donde quedaste"): SOLO se ofrece cuando la
+  // URL de arranque NO trae ya un deep-link propio (ver el efecto de montaje más abajo) -- un
+  // deep-link explícito siempre tiene prioridad. El puntero nunca rehidrata el documento desde
+  // localStorage: `handleContinueWhereLeftOff` reusa EXACTAMENTE `resolveWorkspaceDeepLink`, que
+  // vuelve a pedirle todo al backend (ver spec.md M2.2-S07, "Recuperación al cerrar la pestaña").
+  const [recoveryPointer, setRecoveryPointer] = useState<WorkspaceRecoveryPointer | null>(null);
+
   // Extraída (en vez de vivir inline en el efecto) para que el `setState`
   // síncrono de "resolving" quede fuera del cuerpo directo del efecto --
   // mismo patrón ya usado en useVectorDocument.load/useEffect.
@@ -318,10 +330,40 @@ function App() {
     deepLinkResolvedRef.current = true;
 
     const location = readWorkspaceLocation();
-    if (!location) return;
+    if (location) {
+      resolveWorkspaceDeepLink(location);
+      return;
+    }
 
-    resolveWorkspaceDeepLink(location);
+    // Sin deep-link en la URL de arranque: ofrece "Continuar donde quedaste" si hay un puntero
+    // de staging reciente (últimas 24 h, ver lib/workspaceRecovery.ts) -- un simple affordance
+    // descartable, nunca una navegación automática.
+    const pointer = readRecentWorkspaceRecoveryPointer();
+    if (pointer) {
+      setRecoveryPointer(pointer);
+    }
   }, [resolveWorkspaceDeepLink]);
+
+  const handleContinueWhereLeftOff = () => {
+    if (!recoveryPointer) return;
+
+    const location: WorkspaceLocation = {
+      projectId: recoveryPointer.classicProjectId,
+      imageId: recoveryPointer.imageId,
+      paletteId: recoveryPointer.paletteId,
+    };
+
+    setRecoveryPointer(null);
+    // Refleja la ubicación en la URL ANTES de resolver (mismo criterio que "Abrir en el
+    // Workspace" más abajo) -- un reload inmediatamente después reconstruye la misma sesión.
+    pushWorkspaceLocation(location);
+    resolveWorkspaceDeepLink(location);
+  };
+
+  const handleDismissRecovery = () => {
+    setRecoveryPointer(null);
+    clearWorkspaceRecoveryPointer();
+  };
 
   const handleProjectCreated = (project: UploadImageResponse | null) => {
     setConfirmedPalette(null);
@@ -448,6 +490,18 @@ function App() {
         {deepLinkStatus === "invalid" && deepLinkMessage && (
           <div aria-label="Enlace del Workspace inválido" className="status-banner status-banner--error" role="alert">
             <p>{deepLinkMessage}</p>
+          </div>
+        )}
+
+        {recoveryPointer && (
+          <div aria-label="Recuperar sesión del Workspace" className="status-banner" role="status">
+            <p>Encontramos una sesión del Workspace sin guardar de tu última visita.</p>
+            <button type="button" className="upload-actions__button upload-actions__button--primary" onClick={handleContinueWhereLeftOff}>
+              Continuar donde quedaste
+            </button>
+            <button type="button" className="upload-actions__button" onClick={handleDismissRecovery}>
+              Descartar
+            </button>
           </div>
         )}
 

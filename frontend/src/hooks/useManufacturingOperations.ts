@@ -79,6 +79,8 @@ export function useManufacturingOperations(
   layerSetId: string | null,
   /** Project.Id v2 ya guardado -- ver docstring de arriba. Null/undefined = comportamiento existente sin cambios (staging). */
   savedProjectId?: string | null,
+  /** `useWorkspaceSave().trackPatch` (M2.2-S07) -- ver docstring equivalente en useVectorDocument.ts. */
+  trackPatch?: (promise: Promise<unknown>) => void,
 ): UseManufacturingOperationsState {
   const [operations, setOperations] = useState<Record<string, ManufacturingOperationPayload>>({});
   const [summary, setSummary] = useState<ManufacturingOperationSummaryPayload>(EMPTY_SUMMARY);
@@ -176,7 +178,9 @@ export function useManufacturingOperations(
       setMutatingGroupId(groupId);
 
       if (savedProjectId) {
-        updateVectorDocumentLayer(savedProjectId, groupId, { manufacturingOperation: operation })
+        const patchPromise = updateVectorDocumentLayer(savedProjectId, groupId, { manufacturingOperation: operation });
+        trackPatch?.(patchPromise);
+        patchPromise
           .then((response) => {
             setMutatingGroupId(null);
             setOperations((current) => ({
@@ -206,7 +210,7 @@ export function useManufacturingOperations(
           handleError(error);
         });
     },
-    [projectId, imageId, paletteId, savedProjectId, applyResponse, handleError],
+    [projectId, imageId, paletteId, savedProjectId, applyResponse, handleError, trackPatch],
   );
 
   return { operations, summary, errorCode, errorMessage, mutatingGroupId, assign };

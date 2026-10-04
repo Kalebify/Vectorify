@@ -36,6 +36,21 @@ public interface IVectorDocumentRepository
         Guid projectId, Guid ownerId, DocumentSnapshot snapshot, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Idempotencia real de <c>POST /api/v2/workspaces/save</c> (M2.2-S07): el resultado YA
+    /// PERSISTIDO de la <see cref="DocumentVersion"/> con ese <see cref="DocumentVersion.IdempotencyKey"/>,
+    /// si existe y pertenece (vía <see cref="VectorDocument"/> -&gt; <see cref="Project"/>) a
+    /// <paramref name="ownerId"/> -- null en cualquier otro caso (nunca mandado antes, o
+    /// pertenece a otro usuario, que <see cref="VectorDocumentService"/> trata igual que "nunca
+    /// mandado" para no filtrar existencia entre usuarios). Deliberadamente SIN
+    /// <paramref name="projectId"/>: el primer Save de un intento lógico manda
+    /// <c>ProjectId: null</c> en el body, y un reintento de ESE mismo intento reenvía el MISMO
+    /// body (mismo <c>ProjectId: null</c>) -- el índice único parcial sobre
+    /// <see cref="DocumentVersion.IdempotencyKey"/> ya alcanza para ubicarla sin ese dato.
+    /// </summary>
+    Task<VectorDocumentSaveOutcome?> FindByIdempotencyKeyAsync(
+        Guid ownerId, string idempotencyKey, CancellationToken cancellationToken);
+
+    /// <summary>
     /// La <see cref="VectorDocument"/>/<see cref="DocumentVersion"/> ACTUAL
     /// (<see cref="Project.CurrentVersionId"/>) de un proyecto, con Layers (+ su
     /// <see cref="PaletteColor"/>) y PaletteColors ya cargados. Null si el proyecto no existe,

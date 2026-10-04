@@ -177,6 +177,114 @@ public sealed class VectorDocumentRepositoryTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SaveAsync_WithIdempotencyKey_PersistsItOnTheNewDocumentVersion()
+    {
+        await using var dbContext = await CreateMigratedDbContextAsync();
+        var ownerId = await SeedUserAsync(dbContext);
+        var project = await new ProjectRepository(dbContext).CreateAsync(ownerId, "Proyecto idempotente", null, CancellationToken.None);
+        var repository = new VectorDocumentRepository(dbContext);
+        var idempotencyKey = Guid.NewGuid().ToString("n");
+
+        var outcome = await repository.SaveAsync(
+            project.Id, ownerId,
+            new DocumentSnapshot(1, 1, "0 0 1 1", 1, DocumentVersionOrigin.ManualEdit, "{}", [], IdempotencyKey: idempotencyKey),
+            CancellationToken.None);
+
+        await using var readContext = CreateDbContext();
+        var version = await readContext.DocumentVersions
+            .FirstAsync(v => v.VectorDocument!.ProjectId == outcome!.ProjectId && v.VersionNumber == outcome!.VersionNumber);
+        Assert.Equal(idempotencyKey, version.IdempotencyKey);
+    }
+
+    [Fact]
+    public async Task FindByIdempotencyKeyAsync_UnknownKey_ReturnsNull()
+    {
+        await using var dbContext = await CreateMigratedDbContextAsync();
+        var ownerId = await SeedUserAsync(dbContext);
+        var repository = new VectorDocumentRepository(dbContext);
+
+        var found = await repository.FindByIdempotencyKeyAsync(ownerId, Guid.NewGuid().ToString("n"), CancellationToken.None);
+
+        Assert.Null(found);
+    }
+
+    [Fact]
+    public async Task FindByIdempotencyKeyAsync_KnownKeyOfTheRequestingOwner_ReturnsTheExistingOutcome()
+    {
+        await using var dbContext = await CreateMigratedDbContextAsync();
+        var ownerId = await SeedUserAsync(dbContext);
+        var project = await new ProjectRepository(dbContext).CreateAsync(ownerId, "Proyecto replay", null, CancellationToken.None);
+        var repository = new VectorDocumentRepository(dbContext);
+        var idempotencyKey = Guid.NewGuid().ToString("n");
+
+        var originalOutcome = await repository.SaveAsync(
+            project.Id, ownerId,
+            new DocumentSnapshot(1, 1, "0 0 1 1", 1, DocumentVersionOrigin.ManualEdit, "{}", [], IdempotencyKey: idempotencyKey),
+            CancellationToken.None);
+
+        var replay = await repository.FindByIdempotencyKeyAsync(ownerId, idempotencyKey, CancellationToken.None);
+
+        Assert.NotNull(replay);
+        Assert.Equal(originalOutcome!.ProjectId, replay!.ProjectId);
+        Assert.Equal(originalOutcome.VersionNumber, replay.VersionNumber);
+        // Tolerancia submilisegundo: originalOutcome.SavedAt es el valor EN MEMORIA (precisión de
+        // tick de .NET) devuelto por el propio SaveAsync, mientras que replay.SavedAt se releyó
+        // de Postgres (precisión de microsegundo, trunca por debajo de eso) -- la MISMA fila,
+        // diferencia de redondeo nunca relevante para idempotencia real.
+        Assert.True(Math.Abs((originalOutcome.SavedAt - replay.SavedAt).TotalMilliseconds) < 1);
+    }
+
+    [Fact]
+    public async Task FindByIdempotencyKeyAsync_KeyBelongsToAnotherOwner_ReturnsNull()
+    {
+        // Un replay nunca debe filtrar EXISTENCIA de una key ajena -- mismo criterio de
+        // ownership (404 uniforme) que el resto del módulo.
+        await using var dbContext = await CreateMigratedDbContextAsync();
+        var ownerId = await SeedUserAsync(dbContext);
+        var strangerId = await SeedUserAsync(dbContext);
+        var project = await new ProjectRepository(dbContext).CreateAsync(ownerId, "Proyecto de otro dueño", null, CancellationToken.None);
+        var repository = new VectorDocumentRepository(dbContext);
+        var idempotencyKey = Guid.NewGuid().ToString("n");
+
+        await repository.SaveAsync(
+            project.Id, ownerId,
+            new DocumentSnapshot(1, 1, "0 0 1 1", 1, DocumentVersionOrigin.ManualEdit, "{}", [], IdempotencyKey: idempotencyKey),
+            CancellationToken.None);
+
+        var found = await repository.FindByIdempotencyKeyAsync(strangerId, idempotencyKey, CancellationToken.None);
+
+        Assert.Null(found);
+    }
+
+    [Fact]
+    public async Task SaveAsync_WithIdempotencyKey_UnderConcurrentSave_StillThrowsConcurrencyException()
+    {
+        // spec.md M2.2-S07, "Backend: validar Project/Owner/Version": confirma que el camino de
+        // autosave (idempotencyKey incluido) sigue pasando por las MISMAS validaciones de
+        // concurrencia optimista (xmin) que cualquier otro Save -- la idempotencia no reemplaza
+        // ni bypasea ese mecanismo.
+        await using var seedContext = await CreateMigratedDbContextAsync();
+        var ownerId = await SeedUserAsync(seedContext);
+        var project = await new ProjectRepository(seedContext).CreateAsync(ownerId, "Proyecto concurrente idempotente", null, CancellationToken.None);
+
+        await using var contextA = CreateDbContext();
+        await using var contextB = CreateDbContext();
+        await contextA.Projects.FirstAsync(p => p.Id == project.Id);
+        await contextB.Projects.FirstAsync(p => p.Id == project.Id);
+        var repositoryA = new VectorDocumentRepository(contextA);
+        var repositoryB = new VectorDocumentRepository(contextB);
+
+        var snapshotA = new DocumentSnapshot(1, 1, "0 0 1 1", 1, DocumentVersionOrigin.ManualEdit, "{}", [], IdempotencyKey: Guid.NewGuid().ToString("n"));
+        var snapshotB = new DocumentSnapshot(2, 2, "0 0 2 2", 1, DocumentVersionOrigin.ManualEdit, "{}", [], IdempotencyKey: Guid.NewGuid().ToString("n"));
+
+        var outcomeA = await repositoryA.SaveAsync(project.Id, ownerId, snapshotA, CancellationToken.None);
+        Assert.NotNull(outcomeA);
+
+        await Assert.ThrowsAsync<DbUpdateConcurrencyException>(
+            () => repositoryB.SaveAsync(project.Id, ownerId, snapshotB, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task FindCurrentDocumentAsync_ProjectWithoutAnySavedVersion_ReturnsNull()
     {
         await using var dbContext = await CreateMigratedDbContextAsync();

@@ -1,0 +1,20 @@
+{
+  "card_id": "3e8d77b2-6398-813c-9dcb-e537ad6ad9f9",
+  "card_url": "https://app.notion.com/p/3e8d77b26398813c9dcbe537ad6ad9f9",
+  "title": "M2.2-S07 · Autosave + recuperación segura",
+  "stack": "Frontend, ASP.NET Core -- autosave con debounce para el primer Save en staging, conecta Dirty/Saving/Saved/Error al PATCH-por-edicion ya existente en sesiones guardadas, idempotencia real en POST /api/v2/workspaces/save, recovery local como puntero (nunca fuente de verdad)",
+  "branch": "sprint/3e8d77b2-autosave-recuperacion",
+  "column": "Done",
+  "phase": "review",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "pr_url": "https://github.com/Kalebify/Vectorify/pull/43",
+  "started_at": "2026-10-04T00:00:00Z",
+  "exceptions": [
+    "Corrida en modo autonomo dentro del backlog MVP2.2 (confirmado explicitamente por el usuario para las 10 tarjetas del milestone).",
+    "DECISION CONFIRMADA POR EL USUARIO (AskUserQuestion): se separan dos conceptos en vez de que el autosave dispare siempre el snapshot completo. Staging (sin savedProjectId): autosave automatiza el PRIMER Save con debounce de inactividad. Ya guardado: el PATCH-por-edicion YA ES el autosave real (ya persiste al instante desde M2.2-S05/S06) -- la maquina de estados Dirty/Saving/Saved/Error se conecta al ciclo de vida de ESE PATCH, no se dispara ademas el snapshot completo (evita doble-checkpointing redundante).",
+    "DECISION TECNICA PROPIA: debounce de staging fijado en 2000ms de inactividad -- el criterio de aceptacion no fija un valor, elegido y documentado en spec.md.",
+    "DECISION TECNICA PROPIA: idempotencia de POST /api/v2/workspaces/save reusa el patron YA EXISTENTE en el flujo clasico (ProjectRecord.IdempotencyKey/ProjectUploadService) en vez de inventar uno nuevo. El PATCH individual de layer NO necesita idempotencia nueva (ya es naturalmente idempotente a nivel de resultado, sin I/O externo como re-subida de SVGs).",
+    "BUG REAL ENCONTRADO Y CORREGIDO EN REVISION DEL ORQUESTADOR: el click manual podia reusar la idempotencyKey de un autosave automatico que estaba interrumpiendo (abortandolo) -- si ese intento abortado en realidad ya se habia persistido del lado del servidor (cancelacion del cliente no llego a tiempo), el click manual recibia ese resultado viejo como confirmacion, perdiendo en silencio cualquier edicion hecha entre medio. Corregido: se descarta la key vieja antes de abortar, forzando un intento fresco. Confirmado reproduciendo el bug (revertido temporalmente, el test nuevo fallaba) antes de corregirlo."
+  ]
+}

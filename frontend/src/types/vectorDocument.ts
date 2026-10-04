@@ -7,7 +7,13 @@
  * UpdateLayerRequest.
  */
 
-/** Cuerpo JSON de POST /api/v2/workspaces/save. `projectId` null -> crea un Project v2 nuevo (`name` requerido en ese caso). */
+/**
+ * Cuerpo JSON de POST /api/v2/workspaces/save. `projectId` null -> crea un Project v2 nuevo
+ * (`name` requerido en ese caso). `idempotencyKey` (M2.2-S07, opcional): GUID generado por el
+ * cliente UNA vez por intento lógico de guardar -- el mismo valor se reenvía en cada reintento
+ * (automático del debounce o manual) de ESE mismo intento, nunca uno nuevo por reintento. Ver
+ * useWorkspaceSave.ts para dónde se genera.
+ */
 export interface VectorDocumentSaveRequestBody {
   projectId: string | null;
   name: string | null;
@@ -16,6 +22,7 @@ export interface VectorDocumentSaveRequestBody {
   paletteId: string;
   paletteVersion: number;
   dimensionId: string | null;
+  idempotencyKey?: string | null;
 }
 
 /** Respuesta de POST /api/v2/workspaces/save: confirmación mínima de que el Save se persistió. */
