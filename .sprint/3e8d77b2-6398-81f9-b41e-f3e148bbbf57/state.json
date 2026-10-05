@@ -1,0 +1,18 @@
+{
+  "card_id": "3e8d77b2-6398-81f9-b41e-f3e148bbbf57",
+  "card_url": "https://app.notion.com/p/3e8d77b2639881f9b41ef3e148bbbf57",
+  "title": "M2.2-S10 · Integración E2E de persistencia + backup básico",
+  "stack": "Frontend, ASP.NET Core, Python, Vector, Infra -- release gate E2E (test backend con 'reinicio' sobre la misma DB/storage + E2E vivo con docker compose down/up), fallos recuperables, migraciones, backup/restore minimo, README/arquitectura",
+  "branch": "sprint/3e8d77b2-e2e-persistencia",
+  "column": "Doing",
+  "phase": "implementation",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "pr_url": null,
+  "started_at": "2026-10-05T00:00:00Z",
+  "exceptions": [
+    "Corrida en modo autonomo dentro del backlog MVP2.2 (confirmado explicitamente por el usuario para las 10 tarjetas del milestone; el usuario pidio 'segimos' tras S09).",
+    "RAMA APILADA: el PR de S09 (#45) seguia ABIERTO al arrancar S10 (el merge de PRs lo hace una persona por hook del sprint). Esta rama parte de sprint/3e8d77b2-user-ownership; el usuario pidio mergear todos los PRs al final ('mergea todos despues'): orden #45 y luego el de S10, que debe apuntar a main.",
+    "DECISION TECNICA PROPIA: la tarjeta es de verificacion + endurecimiento + docs; los bugs que aparezcan se corrigen aca con test rojo previo."
+  ]
+}
