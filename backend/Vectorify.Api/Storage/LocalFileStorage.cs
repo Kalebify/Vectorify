@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using Microsoft.Extensions.Options;
 using Vectorify.Api.Options;
@@ -11,7 +12,7 @@ namespace Vectorify.Api.Storage;
 /// para que una carga interrumpida o un fallo de I/O nunca deje un original a medio
 /// escribir bajo su clave final.
 /// </summary>
-public sealed class LocalFileStorage : IFileStorage
+public sealed class LocalFileStorage : IFileStorage, IFileStorageInventory
 {
     private readonly string _rootPath;
     private readonly ILogger<LocalFileStorage> _logger;
@@ -115,13 +116,56 @@ public sealed class LocalFileStorage : IFileStorage
             throw new FileNotFoundException($"No existe un original guardado bajo la clave '{key}'.", path);
         }
 
-        Stream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        return Task.FromResult(stream);
+        try
+        {
+            Stream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            return Task.FromResult(stream);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                   && ex is not FileNotFoundException and not DirectoryNotFoundException)
+        {
+            // Permisos/disco desmontado/archivo bloqueado: el storage "existe" pero no responde. Mismo
+            // criterio que SaveAsync/DeleteAsync (M2.2-S10); un archivo que desapareció entre el Exists de
+            // arriba y el open sigue siendo FileNotFoundException ("no existe"), no una falla de storage.
+            _logger.LogError(ex, "Fallo de almacenamiento local al leer la clave {Key}", key);
+            throw new FileStorageException($"No se pudo leer el archivo bajo la clave '{key}'.", ex);
+        }
     }
 
     public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken)
     {
         return Task.FromResult(File.Exists(ResolvePath(key)));
+    }
+
+    public async IAsyncEnumerable<StoredFileInfo> ListAsync(
+        string keyPrefix, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var directory = ResolvePath(keyPrefix);
+        if (!Directory.Exists(directory))
+        {
+            yield break;
+        }
+
+        foreach (var path in Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            FileInfo info;
+            try
+            {
+                info = new FileInfo(path);
+                _ = info.Length; // fuerza la lectura de metadatos: falla si el archivo desapareció entre medio
+            }
+            catch (FileNotFoundException)
+            {
+                continue; // borrado mientras se listaba: ya no existe
+            }
+
+            var key = Path.GetRelativePath(_rootPath, path).Replace(Path.DirectorySeparatorChar, '/');
+            yield return new StoredFileInfo(key, info.Length, new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero));
+        }
+
+        await Task.CompletedTask;
     }
 
     /// <summary>

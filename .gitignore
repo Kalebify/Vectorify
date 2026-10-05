@@ -39,3 +39,6 @@ node-v*-win-x64/
 
 # Scratch de agentes (copias temporales para correr suites en Docker, etc.)
 .test-worktrees/
+
+# Respaldos locales generados por scripts/backup.* (nunca versionar datos)
+backups/

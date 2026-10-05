@@ -1,0 +1,2 @@
+# Los scripts de shell deben conservar LF aunque core.autocrlf=true (en Windows): con CRLF bash falla ("\r: command not found").
+*.sh text eol=lf

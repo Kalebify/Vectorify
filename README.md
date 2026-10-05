@@ -37,6 +37,16 @@ de vectorización. Estado actual:
   inicial mínima aplicada automáticamente al arrancar, health check extendido
   y tests de integración contra una PostgreSQL real y efímera (Testcontainers).
   Ver "PostgreSQL + EF Core" más abajo.
+- **M2.2-S02 a S10** (cierre de MVP 2.2, "Project y VectorDocument persistentes"):
+  modelo relacional (`User → Project → VectorDocument → DocumentVersion →
+  Layer/PaletteColor/Asset`), CRUD de proyectos (`/api/v2/projects`), Assets con
+  `IFileStorage`, **Save/reapertura** del documento, **versionado inmutable +
+  Restore**, **autosave idempotente**, **Mis proyectos** como landing, **ownership**
+  por usuario, y en S10 la verificación de punta a punta: release gate de
+  persistencia con reinicio real, fallos recuperables (Postgres/storage caídos →
+  503 controlado), cadena de migraciones, **backup/restore** y un verificador de
+  consistencia DB↔storage. Ver "Persistencia, backup y restore" más abajo,
+  `docs/ARQUITECTURA_PERSISTENCIA.md` y `docs/BACKUP_RESTORE.md`.
 
 ## Arquitectura
 
@@ -114,7 +124,23 @@ solo lectura y no persiste ningún resultado. Desde M2.2-S01, otro volumen
 nombrado (`vectorify_postgres_data`) cumple el mismo rol para los datos de
 PostgreSQL -- ver "PostgreSQL + EF Core" más abajo.
 
-Abrir http://localhost:5173 debería mostrar "API Online" y "Python Online".
+Abrir http://localhost:5173 muestra **Mis proyectos** (la landing por defecto
+desde M2.2-S08): la lista de proyectos guardados, con thumbnail, y desde ahí se
+reabren, duplican o eliminan. El flujo clásico de carga ("Nuevo proyecto": upload
+→ paleta → capas → Workspace, más el diagnóstico de servicios) vive en
+**http://localhost:5173/?view=new**; en esa pantalla debería verse "API Online" y
+"Python Online".
+
+Todavía no hay login: toda la API actúa como un único **usuario de desarrollo**
+(`DevelopmentUser__UserId`/`Email`/`DisplayName`, por defecto
+`00000000-0000-0000-0000-000000000001`), que la API siembra en la tabla `users` al
+arrancar. Esa identidad fija solo se activa en los entornos `Development`,
+`Testing` y `Test`: en cualquier otro (`Production`, `Staging`...) la API **se
+niega a arrancar** hasta que MVP 3.1 aporte un `IUserContext` autenticado (ver
+`docs/ARQUITECTURA_PERSISTENCIA.md`). El `Dockerfile` del backend fija
+`ASPNETCORE_ENVIRONMENT=Development`; `docker-compose.yml` lo expone como
+`ASPNETCORE_ENVIRONMENT` (default `Development`).
+
 Para probar la recuperación ante fallos:
 
 ```bash
@@ -200,9 +226,52 @@ Con Docker disponible: `python tests/e2e/docker_stack_test.py` construye una pil
 isolada y verifica health, CORS y recuperación. Para smoke sin Bash:
 `python tests/e2e/smoke_test.py`.
 
+**Persistencia (M2.2-S10)** — dos niveles:
+
+```bash
+# 1) Release gate automatizado (dentro de `dotnet test`, Docker requerido para Testcontainers):
+#    upload -> paleta -> capas -> mm -> operaciones -> Save -> REINICIO (host nuevo sobre la misma
+#    base y la misma carpeta de datos) -> Open -> Edit -> Autosave -> versiones -> Restore -> reabrir.
+dotnet test backend/Vectorify.sln --filter "FullyQualifiedName~PersistenceReleaseGateTests"
+#    Fallos recuperables, migraciones y verificador de consistencia:
+dotnet test backend/Vectorify.sln --filter "FullyQualifiedName~PersistenceFailureModesTests|FullyQualifiedName~MigrationChainTests|FullyQualifiedName~StorageConsistencyCheckerTests"
+
+# 2) E2E VIVO contra la pila Docker real (fuera de la suite por defecto: tarda minutos y construye imágenes).
+#    Levanta un proyecto Compose AISLADO (nombre y puertos propios), guarda un proyecto, hace
+#    `docker compose down` SIN -v + `up`, y comprueba que todo (SVG, original, thumbnail) vuelve idéntico;
+#    luego edita, autoguarda, restaura y corre el verificador de consistencia.
+python tests/e2e/docker_persistence_test.py
+#    Con --backup-cycle añade backup -> `down -v` (solo de ese proyecto aislado) -> restore -> reabrir:
+python tests/e2e/docker_persistence_test.py --backup-cycle --shell powershell   # o --shell bash
+```
+
 Ver `tests/README.md` para cobertura, comandos y resultados. **Docker y la
 comprobación en navegador real siguen pendientes de verificación**; los tests
 de React usan jsdom. El estado administrativo Done no acredita esos criterios.
+
+## Persistencia, backup y restore (MVP 2.2)
+
+Qué sobrevive a un `docker compose down`/`up` (sin `-v`) y cómo se respalda — el modelo completo, los flujos
+Save/Open/Autosave/Restore y las invariantes en `docs/ARQUITECTURA_PERSISTENCIA.md`:
+
+| Estado | Dónde | Volumen |
+|---|---|---|
+| Proyectos, versiones, capas, paleta, metadatos de assets | PostgreSQL | `vectorify_postgres_data` |
+| Original subido, SVG de capas, thumbnails, registros JSON del pipeline clásico | `App_Data/` del backend | `vectorify_backend_data` |
+
+- **Reiniciar la pila sin perder nada**: `docker compose down` y `docker compose up -d`. **`docker compose down -v`
+  BORRA ambos volúmenes** (todos los proyectos): usalo solo si querés empezar de cero o inmediatamente antes de un restore.
+- **Backup / restore** (dev/staging, manual): `scripts/backup.ps1|sh` crea una carpeta con `db.dump` (pg_dump) y
+  `backend_data.tar.gz` (el volumen); `scripts/restore.ps1|sh` los restaura y **pide confirmación** (`-Force`/`-f` para
+  omitirla). **La base y el storage se respaldan y restauran juntos**: uno solo deja referencias huérfanas. Comandos
+  exactos, orden, qué esperar y límites (sin cifrado, retención ni punto en el tiempo) en `docs/BACKUP_RESTORE.md`.
+- **Verificador de consistencia** DB↔storage (solo lectura; lista assets sin archivo y archivos huérfanos):
+  `scripts/check-consistency.ps1|sh` (`-VerifyChecksums` además compara SHA-256). No es un endpoint HTTP: corre dentro del contenedor.
+- **Fallos controlados**: con PostgreSQL caído los endpoints v2 responden `503` con `{"code":"database_unavailable",...}` (el
+  health lo refleja como `degraded`) y la API se recupera sola cuando vuelve; si el storage no responde, `503` con
+  `{"code":"storage_failure",...}`. Nunca un 500 con stack.
+- **Cómo correr el E2E**: ver "Tests" arriba (`dotnet test` para el release gate automatizado con reinicio real, y
+  `python tests/e2e/docker_persistence_test.py [--backup-cycle]` para el E2E vivo contra Docker).
 
 ## Variables de entorno
 
@@ -243,8 +312,18 @@ secretos reales.
 | `PYTHON_ENGINE_INTERNAL_URL` | `.env` (raíz) | `http://python-engine:8000` | URL interna (red de Docker) que usa el backend para llamar a Python |
 | `Postgres__ConnectionString` | `backend` (solo variable de entorno, NUNCA appsettings.*.json) | _(vacío)_ | Connection string Npgsql completa que usa `VectorizationDbContext` (M2.2-S01). Si no está seteada, la API arranca igual, omite la migración automática y el health check reporta Postgres "unavailable" |
 | `POSTGRES_PORT` / `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | `.env` (raíz) | `5432` / `vectorify` / `vectorify` / `vectorify_dev_password` | Credenciales/puerto de ejemplo (NO reales) que `docker-compose.yml` usa para el servicio `postgres` y para construir `Postgres__ConnectionString` del `backend` |
+| `COMPOSE_PROJECT_NAME` | entorno (opcional) | _(carpeta del repo)_ | Nombre del proyecto Compose: prefija contenedores y volúmenes. Usalo (junto con puertos propios) para correr una pila aislada sin pisar los volúmenes de otra; los scripts de backup/restore lo respetan |
+| `DevelopmentUser__UserId` / `DevelopmentUser__Email` / `DevelopmentUser__DisplayName` | `backend` (appsettings o env) | `00000000-0000-0000-0000-000000000001` / `dev@vectorify.local` / `Dev User` | Identidad fija del único usuario de desarrollo (M2.2-S09; sin login). Solo se acepta en entornos `Development`/`Testing`/`Test`: en otro la API no arranca |
+| `ASPNETCORE_ENVIRONMENT` | `.env` (raíz) / `backend` | `Development` | Entorno de ASP.NET Core; con la identidad de desarrollo fija solo `Development`/`Testing`/`Test` son válidos hasta MVP 3.1 |
+| `Asset__MaxFileSizeBytes` / `Asset__AllowedContentTypes` | `backend` (appsettings o env) | `15728640` (15 MB) / `image/png,image/jpeg,image/webp,image/svg+xml` | Límites de `POST /api/v2/projects/{id}/assets` (M2.2-S04) |
 
 ## PostgreSQL + EF Core (M2.2-S01)
+
+> **Nota histórica**: esta sección describe la tarjeta S01 tal como se entregó (migración inicial
+> mínima con una tabla marcador). Desde S02–S10 el modelo es el completo (`users`, `projects`,
+> `vector_documents`, `document_versions`, `layers`, `palette_colors`, `assets`) y `SchemaProbe`
+> quedó solo como tabla marcador legada: el estado vigente está en `docs/ARQUITECTURA_PERSISTENCIA.md`
+> y en "Persistencia, backup y restore" más arriba.
 
 Primera infraestructura de base de datos relacional real del proyecto. Hasta
 esta tarjeta, TODA la persistencia era en memoria o sidecars de archivos JSON

@@ -13,14 +13,16 @@ from smoke_test import verify
 
 def main():
     ports = set()
-    while len(ports) < 3:
+    while len(ports) < 4:
         ports.add(free_port())
-    frontend_port, backend_port, python_port = ports
+    frontend_port, backend_port, python_port, postgres_port = ports
     frontend = f"http://localhost:{frontend_port}"
     backend = f"http://localhost:{backend_port}"
     python = f"http://localhost:{python_port}"
+    # POSTGRES_PORT propio (desde M2.2-S01 la pila incluye Postgres): sin esto publicaría 5432 y chocaría con
+    # cualquier Postgres/pila ya levantado en la máquina.
     env = dict(os.environ, FRONTEND_PORT=str(frontend_port), BACKEND_PORT=str(backend_port),
-               PYTHON_PORT=str(python_port), VITE_API_BASE_URL=backend,
+               PYTHON_PORT=str(python_port), POSTGRES_PORT=str(postgres_port), VITE_API_BASE_URL=backend,
                CORS_ALLOWED_ORIGINS=frontend, PYTHON_ENGINE_INTERNAL_URL="http://python-engine:8000",
                PYTHON_ENGINE_TIMEOUT_SECONDS="5")
     command = ["docker", "compose", "--project-name", "vectorify-check-" + uuid.uuid4().hex[:8]]
@@ -54,7 +56,9 @@ def main():
         wait_for("online")
         print("OK: Compose build, frontend HTTP, API, CORS y recuperación. UI pendiente de revisión visual.")
     finally:
-        compose("down", "--remove-orphans")
+        # -v: borra también los volúmenes de ESTE proyecto aislado (nombre aleatorio propio); sin él cada corrida
+        # dejaba vectorify-check-*_vectorify_postgres_data/backend_data huérfanos desde que existe la persistencia.
+        compose("down", "-v", "--remove-orphans")
 
 
 if __name__ == "__main__":
