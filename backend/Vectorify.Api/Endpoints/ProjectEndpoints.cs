@@ -1,6 +1,7 @@
 using Vectorify.Api.Contracts;
 using Vectorify.Api.Projects;
 using Vectorify.Api.Storage;
+using Vectorify.Api.Users;
 
 namespace Vectorify.Api.Endpoints;
 
@@ -110,10 +111,12 @@ public static class ProjectEndpoints
         app.MapGet("/api/v1/projects/{projectId:guid}/images/{imageId:guid}", (
             Guid projectId,
             Guid imageId,
-            IProjectRegistry registry) =>
+            IProjectRegistry registry,
+            IUserContext userContext) =>
         {
+            // M2.2-S09: un registro de otro usuario es un 404 idéntico al de uno inexistente.
             var record = registry.Find(projectId, imageId);
-            if (record is null)
+            if (record is null || !record.IsAccessibleBy(userContext.GetEffectiveUserId()))
             {
                 return Results.NotFound(new ApiErrorResponse("not_found", "No existe un proyecto/imagen con esos IDs."));
             }
@@ -132,18 +135,22 @@ public static class ProjectEndpoints
         .WithTags("Projects")
         .Produces<UploadImageResponse>(StatusCodes.Status200OK)
         .Produces<ApiErrorResponse>(StatusCodes.Status404NotFound)
-        .WithSummary("Recupera la metadata (filename/dimensiones) de un proyecto/imagen ya cargada, sin su binario.");
+        .WithSummary("Recupera la metadata (filename/dimensiones) de un proyecto/imagen ya cargada, sin su binario.")
+        .WithDescription(
+            "404 uniforme si no existe O si fue subida por otro usuario (M2.2-S09). Los registros previos a esa " +
+            "tarjeta no tienen dueño y siguen siendo accesibles.");
 
         // Recupera el original guardado, sin procesarlo (fuera de alcance de este sprint).
         app.MapGet("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/original", async (
             Guid projectId,
             Guid imageId,
             IProjectRegistry registry,
+            IUserContext userContext,
             IFileStorage fileStorage,
             CancellationToken cancellationToken) =>
         {
             var record = registry.Find(projectId, imageId);
-            if (record is null)
+            if (record is null || !record.IsAccessibleBy(userContext.GetEffectiveUserId()))
             {
                 return Results.NotFound(new ApiErrorResponse("not_found", "No existe un proyecto/imagen con esos IDs."));
             }
@@ -164,7 +171,8 @@ public static class ProjectEndpoints
         .WithTags("Projects")
         .Produces(StatusCodes.Status200OK, contentType: "application/octet-stream")
         .Produces<ApiErrorResponse>(StatusCodes.Status404NotFound)
-        .WithSummary("Recupera el original de una imagen ya cargada, sin procesarla.");
+        .WithSummary("Recupera el original de una imagen ya cargada, sin procesarla.")
+        .WithDescription("Mismo criterio de ownership que la metadata: 404 uniforme si la imagen es de otro usuario (M2.2-S09).");
     }
 
     private static string OriginalImageUrl(Guid projectId, Guid imageId) =>

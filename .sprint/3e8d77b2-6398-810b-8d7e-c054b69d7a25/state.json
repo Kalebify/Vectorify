@@ -1,0 +1,21 @@
+{
+  "card_id": "3e8d77b2-6398-810b-8d7e-c054b69d7a25",
+  "card_url": "https://app.notion.com/p/3e8d77b26398810b8d7ec054b69d7a25",
+  "title": "M2.2-S09 · User Ownership + DevelopmentUserContext",
+  "stack": "ASP.NET Core, Infra -- cierra lo que falta de IUserContext (Email/IsAuthenticated), usuario dev configurable, guardrail anti-Production, auditoria de ownership con matriz de dos usuarios y guard del puente clasico -> v2",
+  "branch": "sprint/3e8d77b2-user-ownership",
+  "column": "Done",
+  "phase": "review",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "pr_url": "https://github.com/Kalebify/Vectorify/pull/45",
+  "started_at": "2026-10-04T00:00:00Z",
+  "exceptions": [
+    "Corrida en modo autonomo dentro del backlog MVP2.2 (confirmado explicitamente por el usuario para las 10 tarjetas del milestone; el usuario pidio 'segui con M2.2-S09').",
+    "OBSERVACION: IUserContext, User, Project.OwnerId, DevelopmentUserContext y el seeder ya existian desde M2.2-S02/S03 -- esta tarjeta cierra la brecha contra el criterio (Email/IsAuthenticated, usuario configurable, guardrail Production, tests de dos usuarios, puente clasico), no reconstruye.",
+    "DECISION TECNICA PROPIA: GetEffectiveUserId() se mantiene (no se renombra a UserId) para no tocar ~12 archivos; se agregan Email e IsAuthenticated.",
+    "DECISION TECNICA PROPIA: guardrail = fail-fast al arrancar fuera de Development/Testing (no existe IUserContext autenticado hasta MVP 3.1).",
+    "DECISION TECNICA PROPIA: ProjectRecord (flujo clasico) gana OwnerId nullable solo para cerrar el puente clasico->v2; el resto del pipeline clasico queda fuera de alcance.",
+    "HUECOS REALES ENCONTRADOS Y CORREGIDOS (auditoria de ownership, cada uno con test rojo previo): (1) Save v2 con el triple clasico de otro usuario; (2) GET /api/v1 de imagen/original sin chequeo de dueno; (3) upload clasico con Idempotency-Key ajena devolvia el proyecto de otro usuario; (4) Save v2 con idempotencyKey de otro usuario daba 500 y revelaba la existencia de la key -- ahora scoped por dueno. Mutacion manual del orquestador confirmo que los tests del puente no son vacuos."
+  ]
+}
