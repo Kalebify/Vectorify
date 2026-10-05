@@ -138,6 +138,37 @@ docker compose start python-engine
 # Comprobar recuperación en la misma página (polling cada 5 segundos).
 ```
 
+## Persistencia de MVP 2.2 (M2.2-S10)
+
+Release gate de que `Project`/`VectorDocument` son persistentes y sobreviven a reinicios. Dos niveles:
+
+### Automatizado (dentro de `dotnet test`, requiere Docker para Testcontainers)
+
+32 pruebas xUnit nuevas, todas contra la Web API real (`WebApplicationFactory`) y PostgreSQL real (nunca InMemory):
+
+| Archivo (`backend/Vectorify.Api.Tests/...`) | Pruebas | Qué cubre |
+|---|---|---|
+| `EndToEnd/PersistenceReleaseGateTests.cs` | 3 | Recorrido completo upload → paleta → capas → mm → CUT/ENGRAVE/IGNORE → Save → **reinicio real** (host nuevo sobre la MISMA base y la MISMA carpeta de datos; el motor Python ni siquiera se levanta) → Open → Edit (PATCH) → Autosave (idempotencyKey + replay) → versiones → Restore → segundo reinicio → reabrir. Compara contra lo guardado ANTES del reinicio: **bytes** del original, del thumbnail y del SVG de cada capa; valores de paleta/capas/IDs/mm/operaciones/versión actual; falla con un mensaje legible por cada diferencia. 2 pruebas de sensibilidad demuestran que el gate se pone ROJO si el segundo host apunta a otra carpeta de storage o a otra base. |
+| `EndToEnd/PersistenceFailureModesTests.cs` | 6 | Postgres caído (proxy TCP que corta/restablece la conexión): 503 `database_unavailable` en los endpoints v2, health `degraded`, recuperación sin reiniciar la API (con y sin requests durante la caída). Storage que no responde (lectura/escritura): Save con error controlado y sin filas a medias, descarga con 503, documento con un SVG faltante que abre igual (descarga de esa capa = 404). |
+| `Migrations/MigrationChainTests.cs` | 2 | Base vacía → cada migración en orden hasta la última (esquema == modelo, sin "pending model changes") y upgrade N-1 → N con datos representativos (versiones, capas, paleta, assets, thumbnail, idempotencyKey, proyecto eliminado y vacío). |
+| `Maintenance/StorageConsistencyCheckerTests.cs` | 9 | Verificador DB↔storage (`--check-consistency`): fila sin archivo, archivo huérfano, solo lectura por defecto, borrado solo con flag y respetando una edad mínima, checksums, soft-delete, códigos de salida y reporte del comando. |
+| `Middleware/DependencyFailureMiddlewareTests.cs` | 12 | Clasificación de excepciones: solo la falla de conectividad con Postgres es 503; errores de datos/consulta o bugs siguen siendo 500. |
+
+### E2E vivo contra la pila Docker (fuera de la suite por defecto)
+
+```bash
+python tests/e2e/docker_persistence_test.py                    # reinicio real: down (sin -v) + up
+python tests/e2e/docker_persistence_test.py --backup-cycle     # + backup -> down -v -> restore -> reabrir
+python tests/e2e/docker_persistence_test.py --backup-cycle --shell bash --project-name vectorify-s10-e2e-bash
+```
+
+Solo usa la biblioteca estándar de Python 3 y Docker Compose. Crea un proyecto Compose aislado (por defecto
+`vectorify-s10-e2e-<hex>`, con puertos libres propios para `frontend`/`backend`/`python-engine`/`postgres`, así que
+puede correr con otra pila del desarrollador levantada) y al terminar hace `down -v` **solo de ese proyecto**. Nunca
+usa `docker system prune` ni `volume prune`. Genera un PNG de tres colores sin dependencias, recorre el flujo por HTTP
+real (motor Python real incluido) y compara SVG/original/thumbnail por hash antes y después del reinicio y del
+restore. Ver `docs/BACKUP_RESTORE.md` para los scripts de respaldo.
+
 ## Estado de verificación
 
 M1-S01 (2026-09-24):
@@ -165,3 +196,12 @@ M1-S02 (2026-09-24), añadido sobre lo anterior:
 
 El sprint no tiene toda su Definition of Done verificada hasta completar
 Docker y la comprobación en navegador, independientemente de la columna del tablero.
+
+M2.2-S10 (2026-10-05), añadido sobre lo anterior:
+
+- Backend: 894/894 aprobadas (`dotnet test backend/Vectorify.sln`, 862 previas + 32 de persistencia), 0 advertencias de compilación.
+- Frontend: 444/444 aprobadas; `npm run build` correcto (sin cambios de frontend en esta tarjeta).
+- E2E vivo contra Docker (`tests/e2e/docker_persistence_test.py --backup-cycle`, variantes `--shell powershell` y
+  `--shell bash`): reinicio real `down`/`up` con volúmenes conservados, edición/autosave/restore y ciclo
+  backup -> `down -v` -> restore -> reabrir, todo idéntico byte a byte; verificador de consistencia en verde.
+- Pendiente (sin cambios): comprobación en navegador real.

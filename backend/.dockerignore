@@ -3,3 +3,9 @@
 **/.env
 **/.env.*
 !**/.env.example
+
+# M2.2-S10: sin esto, `COPY Vectorify.Api/ ...` metía en la imagen el App_Data/ local del desarrollador (originales
+# subidos, SVG, registros JSON) y encima era lo que más tardaba en transferirse al contexto de build. Como el volumen
+# vectorify_backend_data se inicializa con el contenido de /app/App_Data de la imagen la primera vez que se crea, esos
+# datos viajaban dentro de los volúmenes nuevos (y de sus respaldos).
+**/App_Data

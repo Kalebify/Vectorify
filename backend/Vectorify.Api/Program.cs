@@ -12,6 +12,7 @@ using Vectorify.Api.Dimensioning;
 using Vectorify.Api.Endpoints;
 using Vectorify.Api.Export;
 using Vectorify.Api.LayerLayout;
+using Vectorify.Api.Maintenance;
 using Vectorify.Api.ManufacturingOperations;
 using Vectorify.Api.Middleware;
 using Vectorify.Api.Options;
@@ -43,6 +44,12 @@ builder.Logging.AddJsonConsole(options =>
     options.IncludeScopes = true;
     options.TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffK ";
 });
+
+// Modo --check-consistency (M2.2-S10): la salida es el reporte legible del comando, no logs JSON de EF/ASP.NET mezclados.
+if (ConsistencyCheckCommand.IsRequested(args))
+{
+    builder.Logging.ClearProviders();
+}
 
 // Documentación OpenAPI/Swagger (Swashbuckle): genera el documento y sirve la UI en desarrollo.
 builder.Services.AddEndpointsApiExplorer();
@@ -567,6 +574,15 @@ builder.Services.AddScoped<IVectorDocumentService, VectorDocumentService>();
 
 var app = builder.Build();
 
+// Comando de mantenimiento (M2.2-S10): `dotnet Vectorify.Api.dll --check-consistency` verifica en SOLO LECTURA que
+// los Assets de la base y los archivos del storage se correspondan, imprime el reporte y termina SIN levantar el
+// servidor web (no es un endpoint: nada que exponer en ningún entorno). Va antes de migrar a propósito: no toca el
+// esquema. Ver Vectorify.Api.Maintenance y docs/BACKUP_RESTORE.md.
+if (ConsistencyCheckCommand.IsRequested(args))
+{
+    return await ConsistencyCheckCommand.RunAsync(app.Services, args, Console.Out);
+}
+
 // Aplica las migraciones de EF Core/PostgreSQL versionadas automáticamente al
 // arrancar -- flujo correcto que pide la tarjeta M2.2-S01 (Database.Migrate(),
 // NUNCA EnsureCreated(): EnsureCreated() no es compatible con un historial de
@@ -627,6 +643,10 @@ else
 }
 
 app.UseMiddleware<CorrelationIdMiddleware>();
+
+// Red de seguridad de la persistencia (M2.2-S10): PostgreSQL caído / storage que lanza -> 503 controlado
+// (ApiErrorResponse), nunca un 500 con stack. Va DESPUÉS del correlation ID (la respuesta de error ya lo lleva).
+app.UseMiddleware<DependencyFailureMiddleware>();
 
 app.UseCors(FrontendCorsOptions.PolicyName);
 
@@ -729,6 +749,7 @@ app.MapAssetEndpoints();
 app.MapVectorDocumentEndpoints();
 
 app.Run();
+return 0; // el modo --check-consistency de arriba devuelve su propio código de salida
 
 // Necesario para que WebApplicationFactory<Program> (tests de integración) pueda
 // referenciar este entry point de top-level statements.
