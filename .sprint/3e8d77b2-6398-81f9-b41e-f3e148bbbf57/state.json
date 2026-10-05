@@ -6,7 +6,7 @@
   "branch": "sprint/3e8d77b2-e2e-persistencia",
   "column": "Doing",
   "phase": "review",
-  "fix_rounds": 0,
+  "fix_rounds": 1,
   "preview_url": null,
   "pr_url": "https://github.com/Kalebify/Vectorify/pull/46",
   "started_at": "2026-10-05T00:00:00Z",
