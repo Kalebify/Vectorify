@@ -1,0 +1,18 @@
+{
+  "card_id": "3e8d77b2-6398-81c5-9257-ea063abbaa7e",
+  "card_url": "https://app.notion.com/p/3e8d77b2639881c59257ea063abbaa7e",
+  "title": "M3-S02 · Crop + Rotate + Flip",
+  "stack": "Frontend, Vector -- Crop del area de trabajo (DocumentFrame), Rotate 90 / Flip de seleccion o documento, flujo Apply/Cancel con preview y resumen",
+  "branch": "sprint/3e8d77b2-m3-s02-crop-rotate-flip",
+  "column": "Doing",
+  "phase": "implementation",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "pr_url": null,
+  "started_at": "2026-10-06T00:00:00Z",
+  "exceptions": [
+    "Corrida autonoma de MVP 3 (S01..S16) confirmada por el usuario: mergea el orquestador; ante un error la tarjeta pasa a Bloqueado y se sigue.",
+    "DECISION DE DOMINIO (la tarjeta pide documentarla): Crop modifica el area de trabajo (DocumentFrame) conservando la escala mm; objetos fuera se eliminan opcionalmente, los que cruzan el borde se conservan sin recortar (recorte exacto = Intersect de S08).",
+    "DECISION: Rotate/Flip actuan sobre la seleccion o, sin seleccion, sobre el documento completo (rechazado si hay capas bloqueadas). Rotacion libre ya existe en S01 (Inspector/Transformer)."
+  ]
+}
