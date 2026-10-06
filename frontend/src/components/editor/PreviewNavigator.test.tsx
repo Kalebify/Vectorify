@@ -83,4 +83,28 @@ describe("PreviewNavigator — documento multicolor", () => {
 
     expect(container.querySelector(".preview-navigator__viewport")).toBeInTheDocument();
   });
+
+  it("con el área de trabajo recortada (M3-S02) la miniatura toma su proporción y el viewport se calcula contra ella", () => {
+    // Marco 100×200 (recorte de un documento 320×240): la miniatura es 1:2 y un viewport de 100×200 a escala 1 la cubre ENTERA.
+    const { container } = render(
+      <PreviewNavigator
+        layers={[layer()]}
+        visibility={{ "group-a": true }}
+        sourceWidthPx={100}
+        sourceHeightPx={200}
+        transform={{ scale: 1, panX: 0, panY: 0 }}
+        viewportSize={{ width: 100, height: 200 }}
+        layerImageOverrides={{ "group-a": "data:image/svg+xml;charset=utf-8,recortada" }}
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: /1 de 1 capas visibles/ })).toHaveStyle({ aspectRatio: "100 / 200" });
+    const viewport = container.querySelector(".preview-navigator__viewport") as HTMLElement;
+    expect(viewport.style.left).toBe("0%");
+    expect(viewport.style.top).toBe("0%");
+    expect(viewport.style.width).toBe("100%");
+    expect(viewport.style.height).toBe("100%");
+    expect(container.querySelector(".preview-navigator__layer")).toHaveAttribute("width", "100");
+    expect(container.querySelector(".preview-navigator__layer")).toHaveAttribute("height", "200");
+  });
 });

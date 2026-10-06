@@ -1,23 +1,48 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCanvasTransform } from "../../hooks/useCanvasTransform";
-import { useEditableDocument, type ApplyEditResult } from "../../hooks/useEditableDocument";
+import { useEditableDocument, type ApplyEditResult, type EditProducer } from "../../hooks/useEditableDocument";
 import { useLaserWarnings } from "../../hooks/useLaserWarnings";
 import { useManufacturingOperations } from "../../hooks/useManufacturingOperations";
 import { useVectorDocument, type VectorDocumentLayer } from "../../hooks/useVectorDocument";
 import { useWorkspaceSave } from "../../hooks/useWorkspaceSave";
+import {
+  cropFrame as cropFrameOf,
+  cropProduction,
+  fitToContent,
+  frameSizeMm,
+  frameWithAspect,
+  framesEqual,
+  isValidFrame,
+  orientDocumentProduction,
+  sourceFrameOf,
+  summarizeCrop,
+  validateFrame,
+} from "../../lib/editor/frame";
 import { matrixRotationDegrees } from "../../lib/editor/matrix";
 import { serializeEditableLayer } from "../../lib/editor/objects";
-import { replaceObjects, resolveSelection, selectableObjects as selectableObjectsOf } from "../../lib/editor/selection";
+import {
+  composeOrientation,
+  IDENTITY_ORIENTATION,
+  isIdentityOrientation,
+  orientationLabel,
+  orientationVerb,
+  orientSelectionProduction,
+  type Orientation,
+  type OrientationStep,
+} from "../../lib/editor/orientation";
+import { replaceObjects, resolveSelection, selectableObjects as selectableObjectsOf, splitByLock } from "../../lib/editor/selection";
 import { groupBounds, groupCenter, rotateAbout, setBounds } from "../../lib/editor/transform";
-import type { Rect } from "../../lib/editor/types";
-import { mmPerUnit as mmPerUnitOf } from "../../lib/editor/units";
+import type { DocumentFrame, Rect } from "../../lib/editor/types";
+import { formatDisplayNumber, mmPerUnit as mmPerUnitOf, toMm } from "../../lib/editor/units";
 import { svgToDataUrl } from "../../lib/svgToDataUrl";
+import { CropPanel, type CropPreset } from "./CropPanel";
 import { EditorHeader } from "./EditorHeader";
 import { EditorLayersPanel } from "./EditorLayersPanel";
 import { EditorStatusBar } from "./EditorStatusBar";
 import { EditorToolbar, type EditorTool } from "./EditorToolbar";
 import { InspectorPanel } from "./InspectorPanel";
 import { ObjectInspector } from "./ObjectInspector";
+import { OrientationBar } from "./OrientationBar";
 import { PaletteBar } from "./PaletteBar";
 import { PreviewNavigator } from "./PreviewNavigator";
 import { VectorCanvas } from "./VectorCanvas";
@@ -46,6 +71,32 @@ export interface EditorShellProps {
 
 const EMPTY_LAYERS: VectorDocumentLayer[] = [];
 const EMPTY_ID_SET: ReadonlySet<string> = new Set();
+
+/** Rotate/Flip de la selección o del documento completo, en previsualización (gesto de S01) a la espera de Apply/Cancel. */
+interface PendingOrientation {
+  scope: "selection" | "document";
+  /** Objetos EDITABLES de la selección al empezar (solo `scope: "selection"`). */
+  ids: string[];
+  /** Objetos de la selección en capas bloqueadas: se informan, no se modifican. */
+  lockedCount: number;
+  /** Orientación ACUMULADA desde el estado original (exacta: ver `lib/editor/orientation.ts`). */
+  orientation: Orientation;
+}
+
+const DOCUMENT_LOCKED_MESSAGE = "Desbloqueá las capas para transformar el documento completo, o seleccioná objetos.";
+const SELECTION_LOCKED_MESSAGE = "La selección está en capas bloqueadas: no se puede modificar. Desbloqueá las capas en el panel de Capas.";
+const TRANSFORM_PENDING_MESSAGE = "Hay una transformación pendiente: aplicala (Apply) o cancelala (Cancel) antes de editar.";
+
+function plural(count: number, singular: string, pluralForm: string): string {
+  return `${count} ${count === 1 ? singular : pluralForm}`;
+}
+
+/** Productor del comando de una transformación pendiente: siempre parte del estado "antes" (el gesto lo garantiza). */
+function orientationProducer(pending: PendingOrientation): EditProducer {
+  return pending.scope === "document"
+    ? (state) => orientDocumentProduction(state, pending.orientation)
+    : (state) => orientSelectionProduction(state, new Set(pending.ids), pending.orientation);
+}
 
 const UNSAVED_GEOMETRY_CONFIRM =
   "Hay cambios de geometría sin guardar que se perderán al salir (la persistencia de geometría llega en una tarjeta posterior de MVP3). ¿Salir igual?";
@@ -156,8 +207,25 @@ export function EditorShell({
   // Estado editable + historial (la carga de los SVG de capa vive acá, ya no en VectorCanvas). La metadata de capas
   // (locked/visible) la sigue poseyendo useVectorDocument; este hook solo la lee para respetar locks y visibilidad.
   const documentLayers = document?.layers ?? EMPTY_LAYERS;
-  const editable = useEditableDocument(documentLayers, { visibility });
-  const { undo, redo, applyEdit, geometryDirty } = editable;
+  const sourceWidthPx = document?.sourceWidthPx ?? 0;
+  const sourceHeightPx = document?.sourceHeightPx ?? 0;
+  const editable = useEditableDocument(documentLayers, { visibility, sourceSize: { width: sourceWidthPx, height: sourceHeightPx } });
+  const { undo, redo, applyEdit, geometryDirty, frame, committedFrame } = editable;
+
+  // Estado de vista / herramienta (declarado arriba porque los atajos de undo/redo y el re-centrado tras un cambio de marco lo usan).
+  const [activeTool, setActiveTool] = useState<EditorTool>("select");
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+
+  // Tras un cambio de marco (crop, rotar el documento, o su undo/redo) el documento se vuelve a ajustar y centrar (M3-S02).
+  const refitTo = useCallback((target: DocumentFrame) => fitToScreen(canvasSize, { width: target.width, height: target.height }), [fitToScreen, canvasSize]);
+  const undoWithView = useCallback(() => {
+    const edit = undo();
+    if (edit?.frame) refitTo(edit.frame.before);
+  }, [undo, refitTo]);
+  const redoWithView = useCallback(() => {
+    const edit = redo();
+    if (edit?.frame) refitTo(edit.frame.after);
+  }, [redo, refitTo]);
 
   // Selección por ids de objeto. Se guarda cruda y se DEPURA contra los objetos seleccionables vigentes (capas
   // visibles que aún existen): ocultar una capa o borrar un objeto la actualiza sin código extra, y un undo del
@@ -177,16 +245,19 @@ export function EditorShell({
 
   // Miniatura (Preview): las capas con ediciones de geometría se dibujan desde su estado en memoria, serializado con el
   // mismo formato de origen (solo cuando cambia el estado CONFIRMADO: no por frame de un gesto en curso).
+  // Con el marco cambiado (crop / giro del documento) TODAS las capas se dibujan desde memoria: el SVG de origen tiene el
+  // viewBox original y no mostraría el área de trabajo vigente (ni los objetos que un giro llevó fuera del lienzo original).
   const { committedObjectsByLayer, editedLayerIds } = editable;
-  const sourceWidthPx = document?.sourceWidthPx ?? 0;
-  const sourceHeightPx = document?.sourceHeightPx ?? 0;
+  const frameChanged = !framesEqual(committedFrame, sourceFrameOf(sourceWidthPx, sourceHeightPx));
   const previewImageOverrides = useMemo(() => {
     const overrides: Record<string, string> = {};
-    for (const groupId of editedLayerIds) {
-      overrides[groupId] = svgToDataUrl(serializeEditableLayer(committedObjectsByLayer[groupId] ?? [], { width: sourceWidthPx, height: sourceHeightPx }));
+    const meta = { width: committedFrame.width, height: committedFrame.height, x: committedFrame.x, y: committedFrame.y };
+    const groupIds = frameChanged ? documentLayers.map((layer) => layer.groupId) : [...editedLayerIds];
+    for (const groupId of groupIds) {
+      overrides[groupId] = svgToDataUrl(serializeEditableLayer(committedObjectsByLayer[groupId] ?? [], meta));
     }
     return overrides;
-  }, [editedLayerIds, committedObjectsByLayer, sourceWidthPx, sourceHeightPx]);
+  }, [frameChanged, documentLayers, editedLayerIds, committedObjectsByLayer, committedFrame]);
 
   // mm por unidad de documento: el tamaño físico del documento guardado manda; si no, el de las dimensiones del flujo clásico.
   const mmFactor = mmPerUnitOf(document?.widthMm ?? dimensionWidthMm, document?.sourceWidthPx);
@@ -229,15 +300,15 @@ export function EditorShell({
       const key = event.key.toLowerCase();
       if (key === "z" && !event.shiftKey) {
         event.preventDefault();
-        undo();
+        undoWithView();
       } else if ((key === "z" && event.shiftKey) || key === "y") {
         event.preventDefault();
-        redo();
+        redoWithView();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [undo, redo]);
+  }, [undoWithView, redoWithView]);
 
   // Aviso al salir con geometría sin persistir (ADR D2): hasta M3-S13 las ediciones solo viven en memoria.
   useEffect(() => {
@@ -256,8 +327,11 @@ export function EditorShell({
     onClose();
   };
 
-  const objectEditMessage = (result: ApplyEditResult): string | null =>
-    result.reason === "blocked" ? "La capa está bloqueada: no se puede modificar. Desbloqueala en el panel de Capas." : null;
+  const objectEditMessage = (result: ApplyEditResult): string | null => {
+    if (result.reason === "blocked") return "La capa está bloqueada: no se puede modificar. Desbloqueala en el panel de Capas.";
+    if (result.reason === "gesture_active") return TRANSFORM_PENDING_MESSAGE;
+    return null;
+  };
 
   // Inspector numérico -> UN comando por edición confirmada (Enter/blur).
   const commitObjectBounds = (target: Rect): string | null => {
@@ -290,16 +364,217 @@ export function EditorShell({
       }),
     );
   };
-  const [activeTool, setActiveTool] = useState<EditorTool>("select");
-  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+
+  // ---- Rotate / Flip (M3-S02): previsualización (gesto de S01, sin tocar la pila de undo) + Apply/Cancel ----
+  const lockedLayerIds = useMemo(() => new Set(documentLayers.filter((layer) => layer.locked).map((layer) => layer.groupId)), [documentLayers]);
+  const hiddenLayerIds = useMemo(
+    () => new Set(documentLayers.filter((layer) => !(visibility[layer.groupId] ?? true)).map((layer) => layer.groupId)),
+    [documentLayers, visibility],
+  );
+  const [pending, setPending] = useState<PendingOrientation | null>(null);
+  const [orientationMessage, setOrientationMessage] = useState<string | null>(null);
+  /** Confirmación de la última acción aplicada (crop / rotar / reflejar): el usuario ve qué cambió sin tener que adivinarlo. */
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const { editable: editableSelection, locked: lockedSelection } = useMemo(() => splitByLock(selectedObjects, lockedLayerIds), [selectedObjects, lockedLayerIds]);
+
+  const blockedMessage = (scope: PendingOrientation["scope"]) => (scope === "document" ? DOCUMENT_LOCKED_MESSAGE : SELECTION_LOCKED_MESSAGE);
+
+  const cancelPending = () => {
+    editable.cancelGesture();
+    setPending(null);
+    setOrientationMessage(null);
+  };
+
+  const handleOrientationStep = (step: OrientationStep) => {
+    if (!document || cropDraft !== null) return;
+    setActionNotice(null);
+    setOrientationMessage(null);
+
+    let current = pending;
+    if (!current) {
+      // El alcance se fija al EMPEZAR (selección o documento completo) y se mantiene hasta Apply/Cancel.
+      if (selectedObjects.length > 0) {
+        if (editableSelection.length === 0) {
+          setOrientationMessage(SELECTION_LOCKED_MESSAGE);
+          return;
+        }
+        current = { scope: "selection", ids: editableSelection.map((object) => object.id), lockedCount: lockedSelection.length, orientation: IDENTITY_ORIENTATION };
+      } else {
+        // Documento completo con capas bloqueadas: rechazo claro, nada se transforma a medias.
+        const snapshot = editable.getSnapshot();
+        if (documentLayers.some((layer) => layer.locked && (snapshot.objectsByLayer[layer.groupId]?.length ?? 0) > 0)) {
+          setOrientationMessage(DOCUMENT_LOCKED_MESSAGE);
+          return;
+        }
+        if (!isValidFrame(committedFrame)) return;
+        current = { scope: "document", ids: [], lockedCount: 0, orientation: IDENTITY_ORIENTATION };
+      }
+      if (!editable.beginGesture()) return;
+    }
+
+    const next: PendingOrientation = { ...current, orientation: composeOrientation(current.orientation, step) };
+    const result = editable.previewEdit(orientationProducer(next));
+    if (!result.applied && result.reason === "blocked") {
+      editable.cancelGesture();
+      setPending(null);
+      setOrientationMessage(blockedMessage(next.scope));
+      return;
+    }
+    setPending(next);
+  };
+
+  const handleApplyPending = () => {
+    if (!pending) return;
+    if (isIdentityOrientation(pending.orientation)) {
+      cancelPending();
+      return;
+    }
+    // Se vuelve a evaluar contra los bloqueos/visibilidad VIGENTES justo antes de confirmar (pudieron cambiar desde la previsualización).
+    const preview = editable.previewEdit(orientationProducer(pending));
+    if (!preview.applied) {
+      editable.cancelGesture();
+      setPending(null);
+      setOrientationMessage(preview.reason === "blocked" ? blockedMessage(pending.scope) : "No hay cambios para aplicar.");
+      return;
+    }
+    const scopeLabel = pending.scope === "document" ? "documento completo" : plural(pending.ids.length, "objeto", "objetos");
+    const label = `${orientationLabel(pending.orientation)} (${scopeLabel})`;
+    const result = editable.commitGesture(label);
+    setPending(null);
+    setOrientationMessage(null);
+    if (!result.applied) return;
+    if (pending.scope === "document") refitTo(editable.getSnapshot().frame ?? committedFrame);
+    setActionNotice(
+      `${label} aplicado.${result.skippedLockedObjects > 0 ? ` ${plural(result.skippedLockedObjects, "objeto está", "objetos están")} en capas bloqueadas y no se modificó.` : ""}`,
+    );
+  };
+
+  const pendingText = pending
+    ? `Se ${orientationVerb(pending.orientation)} ${pending.scope === "document" ? "TODO el documento" : `la selección (${plural(pending.ids.length, "objeto", "objetos")})`}: ${orientationLabel(pending.orientation)}.${
+        pending.lockedCount > 0 ? ` ${plural(pending.lockedCount, "objeto está", "objetos están")} en capas bloqueadas y no se modificará.` : ""
+      }`
+    : null;
+  const orientationScopeText =
+    selectedObjects.length > 0
+      ? `Rotar y reflejar afectan a la selección (${plural(selectedObjects.length, "objeto", "objetos")}).`
+      : "Sin selección: rotar y reflejar afectan a TODO el documento.";
+
+  // ---- Crop (M3-S02): marco propuesto sobre el canvas + panel con resumen "Qué se va a modificar" ----
+  const [cropDraft, setCropDraft] = useState<DocumentFrame | null>(null);
+  const [cropKeepRatio, setCropKeepRatio] = useState(false);
+  const [cropRemoveOutside, setCropRemoveOutside] = useState(true);
+  const [cropError, setCropError] = useState<string | null>(null);
+
+  const cropSummary = useMemo(
+    () => (cropDraft ? summarizeCrop(committedObjectsByLayer, cropDraft, { lockedLayerIds, hiddenLayerIds }, cropRemoveOutside) : null),
+    [cropDraft, committedObjectsByLayer, lockedLayerIds, hiddenLayerIds, cropRemoveOutside],
+  );
+
+  const proposeCropFrame = (next: DocumentFrame): string | null => {
+    const error = validateFrame(next);
+    if (error) return error;
+    setCropDraft(next);
+    setCropError(null);
+    return null;
+  };
+
+  const handleCropPreset = (preset: CropPreset): string | null => {
+    let next: DocumentFrame | null;
+    if (preset === "content") next = fitToContent(selectableObjects);
+    else if (preset === "reset") next = committedFrame;
+    else next = frameWithAspect(committedFrame, preset === "1:1" ? 1 : preset === "4:3" ? 4 / 3 : 16 / 9);
+    if (!next) return "No hay contenido visible con tamaño suficiente para ajustar el marco.";
+    return proposeCropFrame({ ...next });
+  };
+
+  const formatFrameSize = (target: DocumentFrame) =>
+    mmFactor === null
+      ? `${formatDisplayNumber(target.width)} × ${formatDisplayNumber(target.height)} u`
+      : `${formatDisplayNumber(toMm(target.width, mmFactor))} × ${formatDisplayNumber(toMm(target.height, mmFactor))} mm`;
+
+  const closeCrop = () => {
+    setCropDraft(null);
+    setCropError(null);
+    setActiveTool("select");
+  };
+
+  const handleApplyCrop = () => {
+    if (!cropDraft || !cropSummary) return;
+    const checked = cropFrameOf(committedFrame, cropDraft);
+    if (!checked.ok) {
+      setCropError(checked.error);
+      return;
+    }
+    const target = checked.frame;
+    const label = `Recortar el área de trabajo a ${formatFrameSize(target)}`;
+    const result = applyEdit(label, (state) => cropProduction(state, target, cropRemoveOutside));
+    if (!result.applied) {
+      setCropError(
+        result.reason === "blocked"
+          ? "Los objetos fuera del área están en capas bloqueadas u ocultas: no se pueden eliminar. Desbloquealas o desmarcá 'Eliminar objetos fuera del área'."
+          : result.reason === "no_change"
+            ? "No hay cambios para aplicar."
+            : TRANSFORM_PENDING_MESSAGE,
+      );
+      return;
+    }
+    const parts = [`Área de trabajo recortada a ${formatFrameSize(target)}.`];
+    if (cropSummary.removable > 0) parts.push(`${plural(cropSummary.removable, "objeto eliminado", "objetos eliminados")}.`);
+    if (cropSummary.crossing > 0) parts.push(`${plural(cropSummary.crossing, "objeto cruza el borde y sigue completo", "objetos cruzan el borde y siguen completos")}.`);
+    if (result.skippedLockedObjects > 0) parts.push(`${plural(result.skippedLockedObjects, "objeto en una capa bloqueada se conservó", "objetos en capas bloqueadas se conservaron")}.`);
+    setActionNotice(parts.join(" "));
+    closeCrop();
+    refitTo(target);
+  };
+
+  const handleSelectTool = (tool: EditorTool) => {
+    if (tool === activeTool) return;
+    if (pending) cancelPending();
+    setActionNotice(null);
+    setOrientationMessage(null);
+    if (tool === "crop") {
+      // Sin documento medido no hay área de trabajo que recortar.
+      if (!document || !isValidFrame(committedFrame)) return;
+      setCropDraft({ ...committedFrame });
+      setCropError(null);
+    } else {
+      setCropDraft(null);
+      setCropError(null);
+    }
+    setActiveTool(tool);
+  };
+
+  // Apply = Enter, Cancel = Escape para Crop y para una transformación pendiente. Enter dentro de un campo o sobre un botón conserva su
+  // significado propio (confirmar el campo / activar el botón).
+  useEffect(() => {
+    if (!pending && !cropDraft) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        if (pending) cancelPending();
+        else closeCrop();
+      } else if (event.key === "Enter") {
+        if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.tagName === "BUTTON" || target.isContentEditable)) return;
+        event.preventDefault();
+        if (pending) handleApplyPending();
+        else handleApplyCrop();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
 
   const selectedLayer = document?.layers.find((layer) => layer.groupId === selectedGroupId) ?? null;
   const isSelectedVisible = selectedGroupId ? (visibility[selectedGroupId] ?? true) : false;
 
   const handleFit = () => {
     if (!document) return;
-    fitToScreen(canvasSize, { width: document.sourceWidthPx, height: document.sourceHeightPx });
+    // Ajusta el ÁREA DE TRABAJO vigente (M3-S02), no el viewBox original.
+    fitToScreen(canvasSize, { width: frame.width, height: frame.height });
   };
+  const frameSize = frameSizeMm(frame, mmFactor);
 
   // Cualquier mutación del VectorDocument marca "dirty" EN STAGING (M2.2-S05, idle/dirty ->
   // useWorkspaceSave; M2.2-S07: ese "dirty" ahora arranca el debounce que dispara el primer Save
@@ -339,19 +614,20 @@ export function EditorShell({
         saveErrorMessage={workspaceSave.errorMessage}
         canSave={status === "ready" && Boolean(document)}
         onSave={workspaceSave.save}
-        // TODO(M3-S13): persistir la geometría (serializeEditableLayer -> DocumentVersion nueva) y limpiar `geometryDirty`
-        // al confirmar el guardado. Hasta entonces el indicador debe seguir diciendo "Cambios de geometría sin guardar".
+        // TODO(M3-S13): persistir la geometría Y el marco del documento (serializeEditableLayer + serializeFrame -> DocumentVersion
+        // nueva con viewBox/mm) y limpiar `geometryDirty` al confirmar el guardado. Hasta entonces el indicador debe seguir diciendo
+        // "Cambios de geometría sin guardar" (un crop o un giro del documento también lo activan).
         geometryDirty={geometryDirty}
         canUndo={editable.canUndo}
         canRedo={editable.canRedo}
         undoLabel={editable.undoLabel}
         redoLabel={editable.redoLabel}
-        onUndo={undo}
-        onRedo={redo}
+        onUndo={undoWithView}
+        onRedo={redoWithView}
       />
 
       <div className="editor-shell__body">
-        <EditorToolbar activeTool={activeTool} onSelectTool={setActiveTool} />
+        <EditorToolbar activeTool={activeTool} onSelectTool={handleSelectTool} />
 
         <main className="editor-shell__canvas-area" aria-label="Canvas del documento">
           {status === "loading" || status === "idle" ? (
@@ -370,22 +646,47 @@ export function EditorShell({
               {EMPTY_REASON_COPY[emptyReason ?? ""] ?? "No hay contenido para mostrar todavía."}
             </p>
           ) : document ? (
-            <VectorCanvas
-              layers={document.layers}
-              visibility={visibility}
-              sourceWidthPx={document.sourceWidthPx}
-              sourceHeightPx={document.sourceHeightPx}
-              selectedGroupId={selectedGroupId}
-              editable={editable}
-              selectableObjects={selectableObjects}
-              selectedObjectIds={selectedObjectIds}
-              onSelectObjects={handleSelectObjects}
-              tool={activeTool}
-              transform={transform}
-              onZoomBy={zoomBy}
-              onPanBy={panBy}
-              onMeasure={setCanvasSize}
-            />
+            <>
+              {(activeTool === "select" || activeTool === "move") && (
+                <OrientationBar
+                  scopeText={orientationScopeText}
+                  pending={pending !== null}
+                  pendingText={pendingText}
+                  pendingIsIdentity={pending !== null && isIdentityOrientation(pending.orientation)}
+                  message={orientationMessage}
+                  onStep={handleOrientationStep}
+                  onApply={handleApplyPending}
+                  onCancel={cancelPending}
+                />
+              )}
+              <VectorCanvas
+                layers={document.layers}
+                visibility={visibility}
+                sourceWidthPx={document.sourceWidthPx}
+                sourceHeightPx={document.sourceHeightPx}
+                frame={frame}
+                selectedGroupId={selectedGroupId}
+                editable={editable}
+                selectableObjects={selectableObjects}
+                selectedObjectIds={selectedObjectIds}
+                onSelectObjects={handleSelectObjects}
+                tool={activeTool}
+                transform={transform}
+                onZoomBy={zoomBy}
+                onPanBy={panBy}
+                onMeasure={setCanvasSize}
+                editingSuspended={pending !== null}
+                cropFrame={cropDraft}
+                cropKeepRatio={cropKeepRatio}
+                onCropFrameChange={proposeCropFrame}
+                onOrientationShortcut={handleOrientationStep}
+              />
+              {actionNotice && (
+                <p className="editor-shell__action-notice" role="status">
+                  {actionNotice}
+                </p>
+              )}
+            </>
           ) : null}
         </main>
 
@@ -393,12 +694,31 @@ export function EditorShell({
           <PreviewNavigator
             layers={document?.layers ?? []}
             visibility={visibility}
-            sourceWidthPx={document?.sourceWidthPx ?? 0}
-            sourceHeightPx={document?.sourceHeightPx ?? 0}
+            // La miniatura sigue el ÁREA DE TRABAJO confirmada (sus imágenes se serializan con ese viewBox).
+            sourceWidthPx={committedFrame.width}
+            sourceHeightPx={committedFrame.height}
             transform={transform}
             viewportSize={canvasSize}
             layerImageOverrides={previewImageOverrides}
           />
+
+          {activeTool === "crop" && cropDraft && cropSummary && (
+            <CropPanel
+              frame={committedFrame}
+              draft={cropDraft}
+              mmPerUnit={mmFactor}
+              keepRatio={cropKeepRatio}
+              onKeepRatioChange={setCropKeepRatio}
+              removeOutside={cropRemoveOutside}
+              onRemoveOutsideChange={setCropRemoveOutside}
+              summary={cropSummary}
+              error={cropError}
+              onDraftChange={proposeCropFrame}
+              onPreset={handleCropPreset}
+              onApply={handleApplyCrop}
+              onCancel={closeCrop}
+            />
+          )}
 
           <EditorLayersPanel
             layers={document?.layers ?? []}
@@ -436,7 +756,7 @@ export function EditorShell({
             onChangeOperation={handleChangeOperation}
             mutatingGroupId={manufacturingMutatingGroupId}
             objectSection={
-              selectedObjects.length > 0 ? (
+              selectedObjects.length > 0 && activeTool !== "crop" ? (
                 <ObjectInspector
                   objects={selectedObjects}
                   layers={documentLayers}
@@ -455,8 +775,10 @@ export function EditorShell({
           scale={transform.scale}
           onZoomBy={zoomBy}
           onFit={handleFit}
-          sourceWidthPx={document?.sourceWidthPx ?? 0}
-          sourceHeightPx={document?.sourceHeightPx ?? 0}
+          sourceWidthPx={frame.width}
+          sourceHeightPx={frame.height}
+          widthMm={frameSize?.widthMm ?? null}
+          heightMm={frameSize?.heightMm ?? null}
         />
         <PaletteBar layers={document?.layers ?? []} selectedGroupId={selectedGroupId} onSelectGroup={handleSelectGroup} />
       </footer>

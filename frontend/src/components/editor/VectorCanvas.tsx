@@ -7,9 +7,11 @@ import type { ApplyEditResult, EditableDocumentApi } from "../../hooks/useEditab
 import type { VectorDocumentLayer } from "../../hooks/useVectorDocument";
 import { composeMatrices, invertMatrix, isFiniteMatrix, matricesAlmostEqual, matrixToKonvaProps } from "../../lib/editor/matrix";
 import { hitTestAll, objectsInRect, rectFromPoints } from "../../lib/editor/objects";
+import { dimRects, sourceFrameOf } from "../../lib/editor/frame";
+import type { OrientationStep } from "../../lib/editor/orientation";
 import { cycleHit, removeObjects, replaceObjects, resolveSelection, splitByLock, toggleId } from "../../lib/editor/selection";
 import { translate } from "../../lib/editor/transform";
-import type { EditableDocument, EditorObject, Point, Rect } from "../../lib/editor/types";
+import type { DocumentFrame, EditableDocument, EditorObject, Point, Rect } from "../../lib/editor/types";
 import { screenToleranceToDocument } from "../../lib/editor/units";
 import { screenToDocument, type ViewportParams } from "../../lib/editor/viewport";
 import { IDENTITY_MATRIX, type AffineMatrix } from "../../lib/svgTransform";
@@ -36,6 +38,10 @@ const MAX_SELECTION_OUTLINES = 300;
 const ACCENT = "#3a5cf5";
 const LOCKED_OUTLINE = "#7a808a";
 const ROTATION_SNAPS = Array.from({ length: 24 }, (_, index) => index * 15);
+/** Crop (M3-S02): exterior atenuado, relleno casi transparente del marco (para que Konva lo pueda arrastrar) y borde del área de trabajo. */
+const CROP_DIM_FILL = "rgba(15, 23, 42, 0.45)";
+const CROP_HIT_FILL = "rgba(58, 92, 245, 0.04)";
+const FRAME_OUTLINE = "#8a909c";
 const EMPTY_OBJECTS: readonly EditorObject[] = [];
 
 interface VectorCanvasProps {
@@ -58,6 +64,16 @@ interface VectorCanvasProps {
   onZoomBy: (factor: number, anchor?: { x: number; y: number }) => void;
   onPanBy: (dx: number, dy: number) => void;
   onMeasure: (size: { width: number; height: number }) => void;
+  /** Área de trabajo vigente (M3-S02, `DocumentFrame`): centra el documento y define la hoja. Sin ella: `0 0 sourceWidthPx sourceHeightPx`. */
+  frame?: DocumentFrame;
+  /** Hay una transformación (rotar/reflejar) esperando Apply/Cancel: el canvas no edita para no pisar la previsualización. */
+  editingSuspended?: boolean;
+  /** Marco PROPUESTO de la herramienta Crop (null/ausente = sin overlay) y su callback: el shell lo posee, el canvas solo lo dibuja y lo mueve. */
+  cropFrame?: DocumentFrame | null;
+  cropKeepRatio?: boolean;
+  onCropFrameChange?: (frame: DocumentFrame) => void;
+  /** Atajos R/Shift+R (girar 90°) y F/Shift+F (reflejar) con el foco en el canvas. */
+  onOrientationShortcut?: (step: OrientationStep) => void;
 }
 
 type Interaction =
@@ -151,10 +167,18 @@ export function VectorCanvas({
   onZoomBy,
   onPanBy,
   onMeasure,
+  frame,
+  editingSuspended = false,
+  cropFrame = null,
+  cropKeepRatio = false,
+  onCropFrameChange,
+  onOrientationShortcut,
 }: VectorCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<Konva.Stage | null>(null);
   const transformerRef = useRef<Konva.Transformer | null>(null);
+  const cropRectRef = useRef<Konva.Rect | null>(null);
+  const cropTransformerRef = useRef<Konva.Transformer | null>(null);
   const nodesRef = useRef<Map<string, Konva.Path>>(new Map());
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const dragStateRef = useRef<{ pointerId: number; lastX: number; lastY: number } | null>(null);
@@ -168,7 +192,11 @@ export function VectorCanvas({
   const [notice, setNotice] = useState<string | null>(null);
 
   const effectiveTool: EditorTool = spacePanHeld ? "pan" : tool;
-  const isEditingTool = effectiveTool === "select" || effectiveTool === "move";
+  const canOrient = effectiveTool === "select" || effectiveTool === "move";
+  // Con una transformación pendiente de Apply/Cancel (o con Crop) las herramientas de edición de objetos quedan suspendidas.
+  const isEditingTool = canOrient && !editingSuspended;
+  const cropActive = effectiveTool === "crop" && cropFrame !== null && onCropFrameChange !== undefined;
+  const docFrame = useMemo(() => frame ?? sourceFrameOf(sourceWidthPx, sourceHeightPx), [frame, sourceWidthPx, sourceHeightPx]);
   const { objectsByLayer, layerStatus, applyEdit, beginGesture, previewEdit, commitGesture, cancelGesture, retry } = editable;
 
   useEffect(() => {
@@ -242,7 +270,7 @@ export function VectorCanvas({
 
   const visibleLayers = useMemo(() => layers.filter((layer) => visibility[layer.groupId] ?? true), [layers, visibility]);
   const hasContainerSize = containerSize.width > 0 && containerSize.height > 0;
-  const showTransformer = effectiveTool === "select" && editableSelected.length > 0;
+  const showTransformer = effectiveTool === "select" && !editingSuspended && editableSelected.length > 0;
   const readyLayersKey = visibleLayers.map((layer) => `${layer.groupId}:${layerStatus[layer.groupId] ?? ""}`).join("|");
 
   const registerNode = useCallback((id: string, node: Konva.Path | null) => {
@@ -266,14 +294,25 @@ export function VectorCanvas({
     transformer.getLayer()?.batchDraw();
   }, [editableSelectionKey, showTransformer, hasContainerSize, readyLayersKey]);
 
+  // El Transformer del marco de Crop se engancha a su Rect mientras la herramienta está activa (el Rect se monta con ella).
+  useEffect(() => {
+    const cropTransformer = cropTransformerRef.current;
+    if (!cropTransformer) return;
+    const node = cropActive ? cropRectRef.current : null;
+    cropTransformer.nodes(node ? [node] : []);
+    cropTransformer.getLayer()?.batchDraw();
+  }, [cropActive, hasContainerSize]);
+
   const viewport: ViewportParams = {
     containerWidth: containerSize.width,
     containerHeight: containerSize.height,
     panX: transform.panX,
     panY: transform.panY,
     scale: transform.scale,
-    sourceWidth: sourceWidthPx,
-    sourceHeight: sourceHeightPx,
+    sourceWidth: docFrame.width,
+    sourceHeight: docFrame.height,
+    originX: docFrame.x,
+    originY: docFrame.y,
   };
 
   const toContainerPoint = (event: { clientX: number; clientY: number }): Point => {
@@ -553,6 +592,23 @@ export function VectorCanvas({
     if (result) reportEditResult(result);
   };
 
+  // ---- Crop (marco propuesto) ----
+
+  // Konva resuelve el resize del Transformer como ESCALA del Rect: se vuelve a ancho/alto reales (escala 1) en cada paso, así el
+  // nodo y el marco propuesto del shell coinciden siempre y el resumen "Qué se va a modificar" se actualiza en vivo.
+  const handleCropNodeChange = () => {
+    const node = cropRectRef.current;
+    if (!node || !onCropFrameChange) return;
+    const next: DocumentFrame = {
+      x: node.x(),
+      y: node.y(),
+      width: node.width() * Math.abs(node.scaleX()),
+      height: node.height() * Math.abs(node.scaleY()),
+    };
+    node.setAttrs({ width: next.width, height: next.height, scaleX: 1, scaleY: 1 });
+    onCropFrameChange(next);
+  };
+
   // ---- Teclado ----
 
   const selectAllObjects = () => {
@@ -592,6 +648,8 @@ export function VectorCanvas({
     }
 
     if (event.key === "Escape") {
+      // Crop o una transformación pendiente: Escape es "Cancel" y lo resuelve el shell (no limpia la selección).
+      if (tool === "crop" || editingSuspended) return;
       const interaction = interactionRef.current;
       if (interaction) {
         // Cancela un drag/marquee en curso sin tocar la selección.
@@ -611,6 +669,21 @@ export function VectorCanvas({
       return;
     }
 
+    // Atajos de Rotate/Flip (M3-S02): válidos también con una transformación pendiente (componen sobre el estado original).
+    if (canOrient && onOrientationShortcut && !modifier && !event.altKey) {
+      const key = event.key.toLowerCase();
+      if (key === "r") {
+        event.preventDefault();
+        onOrientationShortcut(event.shiftKey ? "rotate-ccw" : "rotate-cw");
+        return;
+      }
+      if (key === "f") {
+        event.preventDefault();
+        onOrientationShortcut(event.shiftKey ? "flip-vertical" : "flip-horizontal");
+        return;
+      }
+    }
+
     switch (event.key) {
       case " ":
       case "Spacebar":
@@ -624,7 +697,11 @@ export function VectorCanvas({
         event.preventDefault();
         const vertical = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
         const horizontal = event.key === "ArrowLeft" ? -1 : event.key === "ArrowRight" ? 1 : 0;
-        if (isEditingTool && selectedObjects.length > 0) {
+        if (cropActive && cropFrame && onCropFrameChange) {
+          // Crop: las flechas mueven el marco propuesto (1 unidad, Shift 10) -- misma convención que el nudge de objetos.
+          const step = event.shiftKey ? NUDGE_STEP_SHIFT : NUDGE_STEP;
+          onCropFrameChange({ ...cropFrame, x: cropFrame.x + horizontal * step, y: cropFrame.y + vertical * step });
+        } else if (isEditingTool && selectedObjects.length > 0) {
           // Con selección, las flechas mueven los objetos (nudge); sin selección siguen desplazando la vista.
           const step = event.shiftKey ? NUDGE_STEP_SHIFT : NUDGE_STEP;
           nudgeSelection(horizontal * step, vertical * step);
@@ -654,9 +731,10 @@ export function VectorCanvas({
     }
   };
 
+  // El documento se centra por el centro de su ÁREA DE TRABAJO (tras un crop o un giro del documento ya no es 0 0 w h).
   const documentLayerProps = {
-    offsetX: sourceWidthPx / 2,
-    offsetY: sourceHeightPx / 2,
+    offsetX: docFrame.x + docFrame.width / 2,
+    offsetY: docFrame.y + docFrame.height / 2,
     x: containerSize.width / 2 + transform.panX,
     y: containerSize.height / 2 + transform.panY,
     scaleX: transform.scale,
@@ -664,7 +742,9 @@ export function VectorCanvas({
   };
 
   const failedLayers = layers.filter((layer) => layerStatus[layer.groupId] === "error");
-  const toolLabel = effectiveTool === "pan" ? "Pan" : effectiveTool === "move" ? "Move" : "Select";
+  const toolLabel = effectiveTool === "pan" ? "Pan" : effectiveTool === "move" ? "Move" : effectiveTool === "crop" ? "Crop" : "Select";
+  // Margen del exterior atenuado de Crop: cubre cualquier vista razonable alrededor del área de trabajo y del marco propuesto.
+  const dimMargin = Math.max(docFrame.width, docFrame.height);
   const showOutlines = selectedObjects.length > 0 && selectedObjects.length <= MAX_SELECTION_OUTLINES;
   const layerHighlightId = selectedObjectIds.size === 0 ? selectedGroupId : null;
 
@@ -674,7 +754,7 @@ export function VectorCanvas({
       className={`vector-canvas-2 vector-canvas-2--${effectiveTool}`}
       tabIndex={0}
       role="application"
-      aria-label={`Canvas del documento. Herramienta activa: ${toolLabel}. Rueda del mouse para zoom. Mantené Espacio para pan temporal. Con foco: click o Control+A para seleccionar objetos, flechas para mover la selección (Shift: 10 unidades) o desplazar la vista si no hay selección, Suprimir para eliminar, Escape para limpiar, + y - para zoom.`}
+      aria-label={`Canvas del documento. Herramienta activa: ${toolLabel}. Rueda del mouse para zoom. Mantené Espacio para pan temporal. Con foco: click o Control+A para seleccionar objetos, flechas para mover la selección (Shift: 10 unidades) o desplazar la vista si no hay selección, Suprimir para eliminar, Escape para limpiar, + y - para zoom. R y Mayúscula+R giran 90° la selección (o todo el documento sin selección), F y Mayúscula+F la reflejan; Enter aplica y Escape cancela. Con Crop activo, las flechas mueven el marco de recorte.`}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -704,6 +784,18 @@ export function VectorCanvas({
               fuera de la escala del documento para que sus handles midan siempre lo mismo). */}
           <Layer>
             <Group {...documentLayerProps} listening={false}>
+              {/* Borde del área de trabajo (la "hoja"): tras un crop o un giro es lo único que dice dónde termina el documento. */}
+              <KonvaRect
+                name="document-frame"
+                x={docFrame.x}
+                y={docFrame.y}
+                width={docFrame.width}
+                height={docFrame.height}
+                stroke={FRAME_OUTLINE}
+                strokeWidth={1}
+                strokeScaleEnabled={false}
+                listening={false}
+              />
               {showOutlines &&
                 selectedObjects.map((object) => (
                   <Path
@@ -735,6 +827,53 @@ export function VectorCanvas({
                 />
               )}
             </Group>
+            {/* Crop (M3-S02): exterior atenuado + marco propuesto arrastrable/redimensionable (en espacio de documento). */}
+            {cropActive && cropFrame && (
+              <Group {...documentLayerProps}>
+                {dimRects(
+                  {
+                    x: Math.min(docFrame.x, cropFrame.x) - dimMargin,
+                    y: Math.min(docFrame.y, cropFrame.y) - dimMargin,
+                    width: Math.max(docFrame.x + docFrame.width, cropFrame.x + cropFrame.width) - Math.min(docFrame.x, cropFrame.x) + 2 * dimMargin,
+                    height: Math.max(docFrame.y + docFrame.height, cropFrame.y + cropFrame.height) - Math.min(docFrame.y, cropFrame.y) + 2 * dimMargin,
+                  },
+                  cropFrame,
+                ).map((rect, index) => (
+                  <KonvaRect key={index} name="crop-dim" x={rect.x} y={rect.y} width={rect.width} height={rect.height} fill={CROP_DIM_FILL} listening={false} />
+                ))}
+                <KonvaRect
+                  ref={cropRectRef}
+                  name="crop-frame"
+                  x={cropFrame.x}
+                  y={cropFrame.y}
+                  width={cropFrame.width}
+                  height={cropFrame.height}
+                  fill={CROP_HIT_FILL}
+                  stroke={ACCENT}
+                  strokeWidth={1.5}
+                  dash={[6, 4]}
+                  strokeScaleEnabled={false}
+                  draggable
+                  onDragMove={handleCropNodeChange}
+                  onDragEnd={handleCropNodeChange}
+                  onTransform={handleCropNodeChange}
+                  onTransformEnd={handleCropNodeChange}
+                />
+              </Group>
+            )}
+            {cropActive && (
+              <Transformer
+                ref={cropTransformerRef}
+                rotateEnabled={false}
+                flipEnabled={false}
+                keepRatio={cropKeepRatio}
+                borderStroke={ACCENT}
+                anchorStroke={ACCENT}
+                anchorFill="#ffffff"
+                anchorSize={9}
+                boundBoxFunc={(oldBox, newBox) => (Math.abs(newBox.width) < 4 || Math.abs(newBox.height) < 4 ? oldBox : newBox)}
+              />
+            )}
             <Transformer
               ref={transformerRef}
               visible={showTransformer}

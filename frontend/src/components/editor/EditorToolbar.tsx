@@ -1,4 +1,4 @@
-export type EditorTool = "select" | "pan" | "move";
+export type EditorTool = "select" | "pan" | "move" | "crop";
 
 interface ToolDefinition {
   id: EditorTool | string;
@@ -13,7 +13,8 @@ interface ToolDefinition {
  * (Select, Pan, Crop, Move, Fill, Color, Draw, Erase, Offset, Cut, Path):
  * TODAS presentes y visibles (nunca ocultas). M3-S01 habilita Select
  * (seleccionar + mover + escalar/rotar con handles) y Move; Pan ya existía.
- * El resto queda deshabilitado con `disabled` + `title`/`aria-describedby`
+ * M3-S02 habilita Crop (recorta el ÁREA DE TRABAJO del documento, nunca el
+ * original). El resto queda deshabilitado con `disabled` + `title`/`aria-describedby`
  * indicando que llega en MVP3 (cada una en su tarjeta).
  *
  * **Move (M3-S01)** = "mover sin handles": mismo arrastre, Shift+click y flechas
@@ -23,7 +24,7 @@ interface ToolDefinition {
 const TOOLS: ToolDefinition[] = [
   { id: "select", icon: "↖", label: "Select", enabled: true, shortcut: "V -- seleccionar, mover, escalar y rotar" },
   { id: "pan", icon: "✋", label: "Pan", enabled: true, shortcut: "Espacio (mantener) o H" },
-  { id: "crop", icon: "✂", label: "Crop", enabled: false },
+  { id: "crop", icon: "✂", label: "Crop", enabled: true, shortcut: "recortar el área de trabajo; el original no se toca" },
   { id: "move", icon: "↔", label: "Move", enabled: true, shortcut: "mover sin handles" },
   { id: "fill", icon: "▣", label: "Fill", enabled: false },
   { id: "color", icon: "◉", label: "Color", enabled: false },

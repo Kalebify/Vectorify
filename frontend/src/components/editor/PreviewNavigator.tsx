@@ -4,6 +4,7 @@ import type { VectorDocumentLayer } from "../../hooks/useVectorDocument";
 interface PreviewNavigatorProps {
   layers: VectorDocumentLayer[];
   visibility: Record<string, boolean>;
+  /** Tamaño del ÁREA DE TRABAJO confirmada (M3-S02): tras un crop o un giro del documento ya no es el viewBox original. */
   sourceWidthPx: number;
   sourceHeightPx: number;
   /** Transform vigente del VectorCanvas principal -- para dibujar el rectángulo de viewport (qué porción del documento se ve ahora mismo). */

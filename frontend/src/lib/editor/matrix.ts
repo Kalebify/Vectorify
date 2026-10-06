@@ -44,6 +44,14 @@ export function rotationAboutMatrix(pivot: Point, degrees: number): AffineMatrix
   };
 }
 
+/**
+ * Reflejo exacto respecto de un eje que pasa por `pivot`: `horizontal` invierte izquierda/derecha (x' = 2·px - x),
+ * `vertical` invierte arriba/abajo. Los coeficientes lineales son enteros: reflejar dos veces compone la identidad sin residuo.
+ */
+export function flipAboutMatrix(pivot: Point, axis: "horizontal" | "vertical"): AffineMatrix {
+  return axis === "horizontal" ? scaleAboutMatrix(pivot, -1, 1) : scaleAboutMatrix(pivot, 1, -1);
+}
+
 export function applyMatrixToPoint(matrix: AffineMatrix, point: Point): Point {
   return {
     x: matrix.a * point.x + matrix.c * point.y + matrix.e,

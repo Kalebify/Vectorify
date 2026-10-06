@@ -1,10 +1,12 @@
 import { StrictMode, useEffect } from "react";
 import { act, render, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cropProduction, orientDocumentProduction } from "../lib/editor/frame";
 import { bounds } from "../lib/editor/objects";
+import { composeOrientation, IDENTITY_ORIENTATION } from "../lib/editor/orientation";
 import { replaceObjects } from "../lib/editor/selection";
 import { translate } from "../lib/editor/transform";
-import type { EditorObject } from "../lib/editor/types";
+import type { DocumentFrame, EditableDocument, EditorObject } from "../lib/editor/types";
 import { abortAwareFetch, svgResponse } from "../test/abortableFetch";
 import { COALESCE_WINDOW_MS, countChangedObjects, MAX_UNDO_STEPS, useEditableDocument, type UseEditableDocumentOptions } from "./useEditableDocument";
 import type { VectorDocumentLayer } from "./useVectorDocument";
@@ -569,5 +571,389 @@ describe("countChangedObjects", () => {
     expect(countChangedObjects([a, b], [a])).toBe(1);
     expect(countChangedObjects([a], [a, base("c")])).toBe(1);
     expect(countChangedObjects([a, b], [b, a])).toBe(1);
+  });
+});
+
+describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-documento son UN comando atómico", () => {
+  const SOURCE = { x: 0, y: 0, width: 320, height: 240 };
+  const SIZE = { sourceSize: { width: 320, height: 240 } };
+  const CW = composeOrientation(IDENTITY_ORIENTATION, "rotate-cw");
+  const IDENTITY_MATRIX = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+
+  const cropTo = (target: DocumentFrame, removeOutside = true) => (state: EditableDocument) => cropProduction(state, target, removeOutside);
+  const rotateDocument = (state: EditableDocument) => orientDocumentProduction(state, CW);
+
+  beforeEach(() => {
+    installFetch();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("el marco inicial es el viewBox del documento y todavía no hay geometría sin guardar", async () => {
+    const { result } = await renderLoaded(LAYERS, SIZE);
+    expect(result.current.frame).toEqual(SOURCE);
+    expect(result.current.committedFrame).toEqual(SOURCE);
+    expect(result.current.geometryDirty).toBe(false);
+    expect(result.current.getSnapshot().frame).toEqual(SOURCE);
+  });
+
+  it("crop = UN comando: cambia el marco y elimina objetos de VARIAS capas; un solo undo restaura marco y objetos exactos (por referencia)", async () => {
+    const { result } = await renderLoaded(LAYERS, SIZE);
+    const originalA = result.current.objectsByLayer.A;
+    const originalB = result.current.objectsByLayer.B;
+    const target = { x: 0, y: 0, width: 15, height: 15 };
+
+    let outcome = { applied: false } as ReturnType<typeof result.current.applyEdit>;
+    act(() => {
+      outcome = result.current.applyEdit("Recortar", cropTo(target));
+    });
+    expect(outcome.applied).toBe(true);
+    expect(result.current.undoDepth).toBe(1); // UN comando, no uno por capa ni uno para el marco
+    expect(result.current.frame).toEqual(target);
+    expect(result.current.committedFrame).toEqual(target);
+    expect(result.current.objectsByLayer.A.map((o) => o.id)).toEqual(["a1"]);
+    expect(result.current.objectsByLayer.B).toEqual([]);
+    expect(result.current.geometryDirty).toBe(true);
+
+    act(() => void result.current.undo());
+    expect(result.current.frame).toEqual(SOURCE); // si el marco no se restaurara, esto fallaría
+    expect(result.current.objectsByLayer.A).toBe(originalA);
+    expect(result.current.objectsByLayer.B).toBe(originalB);
+    expect(result.current.undoDepth).toBe(0);
+    expect(result.current.geometryDirty).toBe(false);
+
+    act(() => void result.current.redo());
+    expect(result.current.frame).toEqual(target);
+    expect(result.current.objectsByLayer.A.map((o) => o.id)).toEqual(["a1"]);
+    expect(result.current.objectsByLayer.B).toEqual([]);
+    expect(result.current.undoDepth).toBe(1);
+  });
+
+  it("el comando guarda before/after del marco (serializable) y undo/redo devuelven ese comando", async () => {
+    const { result } = await renderLoaded(LAYERS, SIZE);
+    const target = { x: 10, y: 10, width: 100, height: 100 };
+    act(() => void result.current.applyEdit("Recortar", cropTo(target)));
+
+    let undone: ReturnType<typeof result.current.undo> = null;
+    let redone: ReturnType<typeof result.current.redo> = null;
+    act(() => {
+      undone = result.current.undo();
+    });
+    act(() => {
+      redone = result.current.redo();
+    });
+    expect(undone!.frame).toEqual({ before: SOURCE, after: target });
+    expect(redone!.frame).toEqual({ before: SOURCE, after: target });
+  });
+
+  it("un crop que solo cambia el marco (todo queda adentro) también es un comando y deja geometría sin guardar", async () => {
+    const { result } = await renderLoaded(LAYERS, SIZE);
+    act(() => void result.current.applyEdit("Recortar", cropTo({ x: 0, y: 0, width: 300, height: 200 })));
+    expect(result.current.undoDepth).toBe(1);
+    expect(result.current.frame).toEqual({ x: 0, y: 0, width: 300, height: 200 });
+    expect([...result.current.editedLayerIds]).toEqual([]); // ninguna capa cambió...
+    expect(result.current.geometryDirty).toBe(true); // ...pero el marco sí
+
+    act(() => void result.current.undo());
+    expect(result.current.frame).toEqual(SOURCE);
+    expect(result.current.geometryDirty).toBe(false);
+  });
+
+  it("retrocompatibilidad: un comando de S01 (sin marco) no trae la clave `frame` y no toca el marco", async () => {
+    const { result } = await renderLoaded(LAYERS, SIZE);
+    act(() => void result.current.applyEdit("Mover", moveIds(["a1"], 5)));
+    let undone: ReturnType<typeof result.current.undo> = null;
+    act(() => {
+      undone = result.current.undo();
+    });
+    expect(undone).not.toBeNull();
+    expect("frame" in undone!).toBe(false);
+    expect(result.current.frame).toEqual(SOURCE);
+  });
+
+  it("una edición de objetos DESPUÉS de un crop y su undo respetan el marco recortado (el marco no se pierde ni se pisa)", async () => {
+    const { result } = await renderLoaded(LAYERS, SIZE);
+    const target = { x: 0, y: 0, width: 300, height: 200 };
+    act(() => void result.current.applyEdit("Recortar", cropTo(target)));
+    act(() => void result.current.applyEdit("Mover", moveIds(["a1"], 5)));
+    expect(result.current.frame).toEqual(target);
+    act(() => void result.current.undo()); // deshace el Mover
+    expect(result.current.frame).toEqual(target);
+    act(() => void result.current.undo()); // deshace el crop
+    expect(result.current.frame).toEqual(SOURCE);
+  });
+
+  it("las ráfagas fundidas (nudge con coalesceKey) después de un crop no arrastran el marco al fundirse", async () => {
+    const { result } = await renderLoaded(LAYERS, SIZE);
+    const target = { x: 0, y: 0, width: 300, height: 200 };
+    act(() => void result.current.applyEdit("Recortar", cropTo(target)));
+    act(() => void result.current.applyEdit("Mover", moveIds(["a1"], 1), { coalesceKey: "nudge" }));
+    act(() => void result.current.applyEdit("Mover", moveIds(["a1"], 1), { coalesceKey: "nudge" }));
+    expect(result.current.undoDepth).toBe(2); // crop + ráfaga fundida
+    act(() => void result.current.undo());
+    expect(result.current.frame).toEqual(target);
+    act(() => void result.current.undo());
+    expect(result.current.frame).toEqual(SOURCE);
+  });
+
+  it("rotar el documento: objetos de todas las capas + marco en UN comando (320×240 -> 240×320, valores a mano)", async () => {
+    const { result } = await renderLoaded(LAYERS, SIZE);
+    const originalA = result.current.objectsByLayer.A;
+    act(() => void result.current.applyEdit("Rotar 90° horario (documento completo)", rotateDocument));
+
+    expect(result.current.undoDepth).toBe(1);
+    expect(result.current.frame).toEqual({ x: 40, y: -40, width: 240, height: 320 });
+    // a1 (0..10) -> esquina (0,0) a (280,-40) y (10,10) a (270,-30): arriba a la derecha del marco nuevo.
+    expect(layerBounds(result, "A", "a1")).toEqual({ x: 270, y: -40, width: 10, height: 10 });
+    expect(result.current.objectsByLayer.B).toHaveLength(1);
+    expect(result.current.objectsByLayer.B[0].matrix).not.toEqual(IDENTITY_MATRIX);
+
+    act(() => void result.current.undo());
+    expect(result.current.frame).toEqual(SOURCE);
+    expect(result.current.objectsByLayer.A).toBe(originalA);
+  });
+
+  it("rotar el documento 90° cuatro veces (4 comandos separados) vuelve al marco y a las matrices originales EXACTOS", async () => {
+    const { result } = await renderLoaded(LAYERS, SIZE);
+    for (let turn = 0; turn < 4; turn += 1) {
+      act(() => void result.current.applyEdit(`Rotar ${turn + 1}`, rotateDocument));
+    }
+    expect(result.current.undoDepth).toBe(4);
+    expect(result.current.frame).toEqual(SOURCE);
+    for (const object of [...result.current.objectsByLayer.A, ...result.current.objectsByLayer.B]) {
+      for (const key of ["a", "b", "c", "d", "e", "f"] as const) expect(object.matrix[key] === IDENTITY_MATRIX[key], `${object.id}.${key}=${object.matrix[key]}`).toBe(true);
+    }
+  });
+
+  it("reflejar el documento dos veces = identidad exacta y el marco no cambia en ningún momento", async () => {
+    const { result } = await renderLoaded(LAYERS, SIZE);
+    const flip = (state: EditableDocument) => orientDocumentProduction(state, composeOrientation(IDENTITY_ORIENTATION, "flip-horizontal"));
+    act(() => void result.current.applyEdit("Reflejar", flip));
+    expect(result.current.frame).toEqual(SOURCE);
+    expect(layerBounds(result, "A", "a1")).toEqual({ x: 310, y: 0, width: 10, height: 10 }); // x' = 320 - x
+    act(() => void result.current.applyEdit("Reflejar", flip));
+    expect(layerBounds(result, "A", "a1")).toEqual({ x: 0, y: 0, width: 10, height: 10 });
+    expect(result.current.objectsByLayer.A[0].matrix.e === 0).toBe(true);
+    expect(result.current.objectsByLayer.A[0].matrix.a === 1).toBe(true);
+  });
+
+  it("la previsualización de rotar el documento NO llena la pila y la vista muestra el marco rotado; Cancel no deja rastro", async () => {
+    const { result } = await renderLoaded(LAYERS, SIZE);
+    const originalA = result.current.objectsByLayer.A;
+
+    act(() => void result.current.beginGesture());
+    act(() => void result.current.previewEdit(rotateDocument));
+    expect(result.current.undoDepth).toBe(0);
+    expect(result.current.canUndo).toBe(false);
+    expect(result.current.frame).toEqual({ x: 40, y: -40, width: 240, height: 320 }); // la vista SÍ lo muestra
+    expect(result.current.committedFrame).toEqual(SOURCE); // pero no es lo confirmado
+    expect(result.current.getSnapshot().frame).toEqual(SOURCE);
+    expect(layerBounds(result, "A", "a1")).toEqual({ x: 270, y: -40, width: 10, height: 10 });
+
+    act(() => result.current.cancelGesture());
+    expect(result.current.frame).toEqual(SOURCE);
+    expect(result.current.objectsByLayer.A).toBe(originalA);
+    expect(result.current.undoDepth).toBe(0);
+    expect(result.current.canRedo).toBe(false);
+    expect(result.current.geometryDirty).toBe(false);
+    expect(result.current.gestureActive).toBe(false);
+  });
+
+  it("confirmar la previsualización (Apply) crea UN comando con el marco y un undo lo revierte todo", async () => {
+    const { result } = await renderLoaded(LAYERS, SIZE);
+    act(() => void result.current.beginGesture());
+    act(() => void result.current.previewEdit(rotateDocument));
+    let outcome = { applied: false } as ReturnType<typeof result.current.commitGesture>;
+    act(() => {
+      outcome = result.current.commitGesture("Rotar 90° horario (documento completo)");
+    });
+    expect(outcome.applied).toBe(true);
+    expect(result.current.undoDepth).toBe(1);
+    expect(result.current.committedFrame).toEqual({ x: 40, y: -40, width: 240, height: 320 });
+
+    act(() => void result.current.undo());
+    expect(result.current.frame).toEqual(SOURCE);
+    expect(layerBounds(result, "A", "a1")).toEqual({ x: 0, y: 0, width: 10, height: 10 });
+  });
+
+  it("repetir pasos en la previsualización compone SIEMPRE sobre el estado original: 4 giros = sin cambios (no_change), sin error acumulado", async () => {
+    const { result } = await renderLoaded(LAYERS, SIZE);
+    act(() => void result.current.beginGesture());
+    let orientation = IDENTITY_ORIENTATION;
+    for (let turn = 1; turn <= 4; turn += 1) {
+      orientation = composeOrientation(orientation, "rotate-cw");
+      const current = orientation;
+      let outcome = { applied: false } as ReturnType<typeof result.current.previewEdit>;
+      act(() => {
+        outcome = result.current.previewEdit((state) => orientDocumentProduction(state, current));
+      });
+      if (turn < 4) expect(outcome.applied).toBe(true);
+      else expect(outcome).toMatchObject({ applied: false, reason: "no_change" });
+    }
+    expect(result.current.frame).toEqual(SOURCE);
+    expect(layerBounds(result, "A", "a1")).toEqual({ x: 0, y: 0, width: 10, height: 10 });
+    let committed = { applied: true } as ReturnType<typeof result.current.commitGesture>;
+    act(() => {
+      committed = result.current.commitGesture("Rotar");
+    });
+    expect(committed).toMatchObject({ applied: false, reason: "no_change" });
+    expect(result.current.undoDepth).toBe(0);
+  });
+
+  it("documento completo con una capa BLOQUEADA: rechazo, NADA se transforma a medias (ni objetos de otras capas ni el marco)", async () => {
+    const lockedA = [layer({ locked: true }), LAYERS[1]];
+    const { result } = await renderLoaded(lockedA, SIZE);
+    const originalB = result.current.objectsByLayer.B;
+
+    let outcome = { applied: true } as ReturnType<typeof result.current.applyEdit>;
+    act(() => {
+      outcome = result.current.applyEdit("Rotar documento", rotateDocument);
+    });
+    expect(outcome).toMatchObject({ applied: false, reason: "blocked" });
+    expect(outcome.skippedLockedObjects).toBeGreaterThan(0);
+    expect(result.current.objectsByLayer.B).toBe(originalB); // la capa B (desbloqueada) NO se rotó
+    expect(result.current.frame).toEqual(SOURCE);
+    expect(result.current.undoDepth).toBe(0);
+    expect(result.current.geometryDirty).toBe(false);
+  });
+
+  it("lo mismo en la previsualización: bloqueada -> 'blocked', la vista no muestra nada transformado", async () => {
+    const { result } = await renderLoaded([layer({ locked: true }), LAYERS[1]], SIZE);
+    act(() => void result.current.beginGesture());
+    let outcome = { applied: true } as ReturnType<typeof result.current.previewEdit>;
+    act(() => {
+      outcome = result.current.previewEdit(rotateDocument);
+    });
+    expect(outcome).toMatchObject({ applied: false, reason: "blocked" });
+    expect(result.current.frame).toEqual(SOURCE);
+    expect(layerBounds(result, "B", "b1")).toEqual({ x: 0, y: 20, width: 10, height: 10 });
+    let committed = { applied: true } as ReturnType<typeof result.current.commitGesture>;
+    act(() => {
+      committed = result.current.commitGesture("Rotar");
+    });
+    expect(committed.applied).toBe(false);
+    expect(result.current.undoDepth).toBe(0);
+  });
+
+  it("una capa bloqueada SIN objetos no impide rotar el documento (no hay nada que transformar a medias)", async () => {
+    installFetch({ "/svg/B": () => svgResponse('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"></svg>') });
+    const { result } = await renderLoaded([LAYERS[0], layer({ groupId: "B", svgUrl: "/svg/B", locked: true, order: 1 })], SIZE);
+    let outcome = { applied: false } as ReturnType<typeof result.current.applyEdit>;
+    act(() => {
+      outcome = result.current.applyEdit("Rotar documento", rotateDocument);
+    });
+    expect(outcome.applied).toBe(true);
+  });
+
+  it("documento completo con una capa OCULTA: se transforma igual (ocultar es de vista; si no quedaría descolocada respecto del marco)", async () => {
+    const { result } = await renderLoaded(LAYERS, { ...SIZE, visibility: { A: true, B: false } });
+    let outcome = { applied: false } as ReturnType<typeof result.current.applyEdit>;
+    act(() => {
+      outcome = result.current.applyEdit("Rotar documento", rotateDocument);
+    });
+    expect(outcome).toMatchObject({ applied: true, skippedHiddenObjects: 0 });
+    expect(result.current.objectsByLayer.B[0].matrix).not.toEqual(IDENTITY_MATRIX);
+    expect(result.current.frame).toEqual({ x: 40, y: -40, width: 240, height: 320 });
+
+    // En cambio una edición normal (S01) sobre una capa oculta se sigue omitiendo e informando.
+    let normal = { applied: true } as ReturnType<typeof result.current.applyEdit>;
+    act(() => {
+      normal = result.current.applyEdit("Mover", moveIds(["b1"], 5));
+    });
+    expect(normal).toMatchObject({ applied: false, reason: "blocked", skippedHiddenObjects: 1 });
+  });
+
+  it("crop con una capa bloqueada: el marco cambia, los objetos bloqueados fuera del área se CONSERVAN y se informa cuántos", async () => {
+    const { result } = await renderLoaded(
+      [layer(), layer({ groupId: "B", vectorId: "vector-b", svgUrl: "/svg/B", colorHex: "#0000ff", order: 1, locked: true })],
+      SIZE,
+    );
+    const originalB = result.current.objectsByLayer.B;
+    const target = { x: 0, y: 0, width: 15, height: 15 };
+    let outcome = { applied: false } as ReturnType<typeof result.current.applyEdit>;
+    act(() => {
+      outcome = result.current.applyEdit("Recortar", cropTo(target));
+    });
+    expect(outcome).toMatchObject({ applied: true, skippedLockedObjects: 1 });
+    expect(result.current.frame).toEqual(target);
+    expect(result.current.objectsByLayer.A.map((o) => o.id)).toEqual(["a1"]); // a2 estaba fuera y se eliminó
+    expect(result.current.objectsByLayer.B).toBe(originalB); // b1 (bloqueado, fuera) sigue ahí
+  });
+
+  it("un marco inválido (ancho 0, NaN) en la producción rechaza TODO: ni objetos ni marco cambian", async () => {
+    const { result } = await renderLoaded(LAYERS, SIZE);
+    const bad = (frame: DocumentFrame) => () => ({ layers: { A: [] }, frame });
+    let first = { applied: true } as ReturnType<typeof result.current.applyEdit>;
+    let second = { applied: true } as ReturnType<typeof result.current.applyEdit>;
+    act(() => {
+      first = result.current.applyEdit("mal", bad({ x: 0, y: 0, width: 0, height: 10 }));
+      second = result.current.applyEdit("mal", bad({ x: Number.NaN, y: 0, width: 10, height: 10 }));
+    });
+    expect(first.applied).toBe(false);
+    expect(second.applied).toBe(false);
+    expect(result.current.objectsByLayer.A).toHaveLength(2);
+    expect(result.current.frame).toEqual(SOURCE);
+    expect(result.current.undoDepth).toBe(0);
+  });
+
+  it("un marco igual al vigente no es un cambio (no_change, nada en la pila)", async () => {
+    const { result } = await renderLoaded(LAYERS, SIZE);
+    let outcome = { applied: true } as ReturnType<typeof result.current.applyEdit>;
+    act(() => {
+      outcome = result.current.applyEdit("igual", () => ({ layers: {}, frame: { ...SOURCE } }));
+    });
+    expect(outcome).toMatchObject({ applied: false, reason: "no_change" });
+    expect(result.current.undoDepth).toBe(0);
+  });
+
+  it("sin ediciones de marco, el marco sigue al tamaño del documento (p. ej. se midió después); con un crop hecho no lo pisa", async () => {
+    const { result, rerender } = await renderLoaded(LAYERS, { sourceSize: { width: 100, height: 50 } });
+    expect(result.current.frame).toEqual({ x: 0, y: 0, width: 100, height: 50 });
+    rerender({ layers: LAYERS, options: { sourceSize: { width: 320, height: 240 } } });
+    expect(result.current.frame).toEqual(SOURCE);
+    expect(result.current.geometryDirty).toBe(false);
+
+    act(() => void result.current.applyEdit("Recortar", cropTo({ x: 0, y: 0, width: 300, height: 200 })));
+    expect(result.current.frame).toEqual({ x: 0, y: 0, width: 300, height: 200 });
+  });
+
+  it("si una capa ya cargada cambia de svgUrl (documento regenerado) el marco también vuelve al original junto con el historial", async () => {
+    installFetch({ "/svg/A2": () => svgResponse(SVG_B) });
+    const { result, rerender } = await renderLoaded(LAYERS, SIZE);
+    act(() => void result.current.applyEdit("Recortar", cropTo({ x: 0, y: 0, width: 300, height: 200 })));
+    expect(result.current.frame.width).toBe(300);
+
+    rerender({ layers: [layer({ svgUrl: "/svg/A2" }), LAYERS[1]], options: SIZE });
+    await waitFor(() => expect(result.current.objectsByLayer.A.map((o) => o.id)).toEqual(["b1"]));
+    expect(result.current.frame).toEqual(SOURCE);
+    expect(result.current.canUndo).toBe(false);
+    expect(result.current.geometryDirty).toBe(false);
+  });
+
+  it("React StrictMode (efectos dobles + cargas abortadas): el crop y su undo atómico funcionan igual", async () => {
+    const fetchMock = installFetch();
+    let latest: ReturnType<typeof useEditableDocument> | null = null;
+    function Probe() {
+      const api = useEditableDocument(LAYERS, SIZE);
+      useEffect(() => {
+        latest = api;
+      });
+      return null;
+    }
+    render(
+      <StrictMode>
+        <Probe />
+      </StrictMode>,
+    );
+    await waitFor(() => expect(latest?.layerStatus.A).toBe("ready"));
+    await waitFor(() => expect(latest?.layerStatus.B).toBe("ready"));
+    expect(fetchMock.signals.some((signal) => signal?.aborted)).toBe(true);
+
+    const target = { x: 0, y: 0, width: 15, height: 15 };
+    act(() => void latest!.applyEdit("Recortar", cropTo(target)));
+    await waitFor(() => expect(latest!.frame).toEqual(target));
+    expect(latest!.undoDepth).toBe(1);
+    act(() => void latest!.undo());
+    await waitFor(() => expect(latest!.frame).toEqual(SOURCE));
+    expect(latest!.objectsByLayer.A).toHaveLength(2);
   });
 });
