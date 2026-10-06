@@ -11,13 +11,14 @@ describe("EditorToolbar — shell completo del wireframe", () => {
     }
   });
 
-  it("solo Select y Pan están habilitados; el resto está deshabilitado pero VISIBLE, con tooltip de MVP3", () => {
+  it("Select, Pan y Move (M3-S01) están habilitados; el resto está deshabilitado pero VISIBLE, con tooltip de MVP3", () => {
     render(<EditorToolbar activeTool="select" onSelectTool={vi.fn()} />);
 
     expect(screen.getByRole("button", { name: /^Select/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Pan/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Move/ })).toBeEnabled();
 
-    for (const label of ["Crop", "Move", "Fill", "Color", "Draw", "Erase", "Offset", "Cut", "Path"]) {
+    for (const label of ["Crop", "Fill", "Color", "Draw", "Erase", "Offset", "Cut", "Path"]) {
       const button = screen.getByRole("button", { name: new RegExp(`^${label}`) });
       expect(button).toBeDisabled();
       expect(button).toHaveAttribute("title", expect.stringContaining("MVP3"));
@@ -39,6 +40,18 @@ describe("EditorToolbar — shell completo del wireframe", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^Pan/ }));
     expect(onSelectTool).toHaveBeenCalledWith("pan");
+  });
+
+  it("Move (mover sin handles) se activa con aria-pressed y llama a onSelectTool('move')", () => {
+    const onSelectTool = vi.fn();
+    const { rerender } = render(<EditorToolbar activeTool="select" onSelectTool={onSelectTool} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Move/ }));
+    expect(onSelectTool).toHaveBeenCalledWith("move");
+
+    rerender(<EditorToolbar activeTool="move" onSelectTool={onSelectTool} />);
+    expect(screen.getByRole("button", { name: /^Move/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /^Select/ })).toHaveAttribute("aria-pressed", "false");
   });
 
   it("clickear una herramienta deshabilitada no llama a onSelectTool", () => {

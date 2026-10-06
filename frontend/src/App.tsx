@@ -513,6 +513,7 @@ function App() {
         projectName={activeProject.filename}
         savedProjectId={savedProjectId}
         dimensionId={readyDimension?.dimensionId ?? null}
+        dimensionWidthMm={readyDimension?.widthMm ?? null}
         onSaved={(newSavedProjectId) => {
           setSavedProjectId(newSavedProjectId);
           // Agrega savedProjectId a la URL SIN recargar la página (M2.2-S05, "Reapertura") --

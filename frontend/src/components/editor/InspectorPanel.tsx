@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { LayerInfoPanel } from "../layers/LayerInfoPanel";
 import { ManufacturingOperationSummary } from "../layers/ManufacturingOperationSummary";
 import type { UseLaserWarningsState } from "../../hooks/useLaserWarnings";
@@ -32,6 +32,8 @@ interface InspectorPanelProps {
   onChangeOperation: (groupId: string, operation: ManufacturingOperationChoice) => void;
   /** groupId de la capa cuya operación se está guardando, para deshabilitar su selector mientras la request está en curso. */
   mutatingGroupId: string | null;
+  /** Sección de la selección de OBJETOS (M3-S01, `ObjectInspector`): posición/tamaño/rotación. Se muestra arriba del Inspector de capa, que no cambia. */
+  objectSection?: ReactNode;
 }
 
 function summarize(layers: VectorDocumentLayer[]): ManufacturingOperationSummaryPayload {
@@ -94,6 +96,7 @@ export function InspectorPanel({
   operations,
   onChangeOperation,
   mutatingGroupId,
+  objectSection,
 }: InspectorPanelProps) {
   const [operationFilter, setOperationFilter] = useState<ManufacturingOperationValue | "all">("all");
   const summary = useMemo(() => summarize(layers), [layers]);
@@ -115,6 +118,8 @@ export function InspectorPanel({
       <h3 id="inspector-heading" className="editor-panel__heading">
         Inspector
       </h3>
+
+      {objectSection}
 
       <LayerInfoPanel
         selectedLayer={

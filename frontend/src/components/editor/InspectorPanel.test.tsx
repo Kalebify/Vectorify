@@ -56,6 +56,22 @@ function defaultProps() {
   };
 }
 
+describe("InspectorPanel — sección de objetos (M3-S01)", () => {
+  it("renderiza la sección de objetos arriba del Inspector de capa, sin alterar este último", () => {
+    render(<InspectorPanel {...defaultProps()} objectSection={<div data-testid="object-section">Objeto</div>} />);
+
+    const section = screen.getByTestId("object-section");
+    const layerHex = screen.getByText("#ff0000");
+    expect(section.compareDocumentPosition(layerHex) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "Operación de fabricación de la capa Rojo" })).toHaveValue("cut");
+  });
+
+  it("sin objectSection no agrega nada", () => {
+    render(<InspectorPanel {...defaultProps()} />);
+    expect(screen.queryByTestId("object-section")).not.toBeInTheDocument();
+  });
+});
+
 describe("InspectorPanel — sin selección", () => {
   it("muestra el hint de LayerInfoPanel sin inventar datos de ninguna capa", () => {
     render(<InspectorPanel {...defaultProps()} layers={[]} selectedLayer={null} isVisible={false} />);
