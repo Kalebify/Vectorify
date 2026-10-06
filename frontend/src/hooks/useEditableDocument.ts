@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { framesEqual, isValidFrame, sourceFrameOf } from "../lib/editor/frame";
 import { parseEditableLayerStrict } from "../lib/editor/objects";
-import type { EditableDocument, EditorEdit, EditorLayerChange, EditorObject, EditProduction } from "../lib/editor/types";
+import type { DocumentFrame, EditableDocument, EditorEdit, EditorLayerChange, EditorObject, EditProduction } from "../lib/editor/types";
 import type { VectorDocumentLayer } from "./useVectorDocument";
 
 /**
@@ -14,6 +15,10 @@ import type { VectorDocumentLayer } from "./useVectorDocument";
  *
  * Limitación intermedia documentada (ADR D2/D5): hasta M3-S13 las ediciones
  * viven solo en memoria. `geometryDirty` lo refleja con honestidad.
+ *
+ * Marco del documento (M3-S02): además de los objetos, el hook posee el área de trabajo (`DocumentFrame`). Un
+ * comando puede traer un cambio de marco OPCIONAL (`EditorEdit.frame`) que viaja junto con los objetos: crop y
+ * rotar-documento son UN comando con undo/redo atómico. Los comandos de S01 no traen marco y se comportan igual.
  */
 
 export type EditableLayerStatus = "loading" | "ready" | "error";
@@ -49,6 +54,8 @@ export interface UseEditableDocumentOptions {
   limit?: number;
   /** Generador de ids para paths sin `data-vid` (default `crypto.randomUUID`); inyectable en tests. */
   createId?: () => string;
+  /** Tamaño original del documento (viewBox, M3-S02): el marco inicial es `0 0 ancho alto`. Sin él (0 × 0) el marco no es utilizable. */
+  sourceSize?: { width: number; height: number };
 }
 
 export interface EditableDocumentApi {
@@ -79,8 +86,12 @@ export interface EditableDocumentApi {
   cancelGesture: () => void;
   gestureActive: boolean;
 
-  /** Hay ediciones de geometría sin persistir (ADR D2: hasta M3-S13 la persistencia no existe, así que significa "alguna capa difiere de lo cargado"). */
+  /** Hay ediciones de geometría sin persistir (ADR D2: hasta M3-S13 la persistencia no existe, así que significa "alguna capa o el marco difieren de lo cargado"). */
   geometryDirty: boolean;
+  /** Área de trabajo EN VIVO (M3-S02): incluye la previsualización de un gesto en curso (p. ej. rotar el documento). */
+  frame: DocumentFrame;
+  /** Área de trabajo CONFIRMADA (sin previsualización): base de miniatura, mm y zoom de ajuste. */
+  committedFrame: DocumentFrame;
   /** Snapshot SÍNCRONO del estado confirmado (sin previsualización), para handlers de eventos. */
   getSnapshot: () => EditableDocument;
   /** Estado CONFIRMADO por capa (sin la previsualización de un gesto en curso), reactivo: base de miniaturas/serialización. */
@@ -103,6 +114,8 @@ interface CommittedState {
    * undo no puede hacer olvidar que hay cambios sin persistir (a diferencia de contar comandos).
    */
   baseline: Record<string, EditorObject[]>;
+  /** Marco confirmado, o `null` = el marco original del documento (`sourceFrame`): así un documento sin ediciones de marco no depende de cuándo se midió. */
+  frame: DocumentFrame | null;
   past: HistoryEntry[];
   future: HistoryEntry[];
 }
@@ -116,13 +129,27 @@ interface LoadResult {
 
 interface GestureState {
   base: Record<string, EditorObject[]>;
+  /** Marco vigente al empezar el gesto: la previsualización siempre parte de él (nunca del frame anterior). */
+  baseFrame: DocumentFrame;
   /** Capas tocadas por la última previsualización (lista completa ya modificada). */
   after: Record<string, EditorObject[]>;
+  /** Marco de la última previsualización, o `null` si no cambia el marco. */
+  afterFrame: DocumentFrame | null;
   skippedLockedObjects: number;
   skippedHiddenObjects: number;
 }
 
-const EMPTY_STATE: CommittedState = { objectsByLayer: {}, baseline: {}, past: [], future: [] };
+const EMPTY_STATE: CommittedState = { objectsByLayer: {}, baseline: {}, frame: null, past: [], future: [] };
+
+/**
+ * Une el cambio de marco de un comando con el del siguiente al fundirlos (nudge): `before` del primero que lo traiga,
+ * `after` del último. `undefined` si ninguno cambia el marco (el caso de S01).
+ */
+function mergeFrameChange(previous: EditorEdit["frame"], next: EditorEdit["frame"]): EditorEdit["frame"] {
+  if (!previous) return next;
+  if (!next) return previous;
+  return { before: previous.before, after: next.after };
+}
 
 function sameList(left: readonly EditorObject[], right: readonly EditorObject[]): boolean {
   return left.length === right.length && left.every((object, index) => object === right[index]);
@@ -162,23 +189,44 @@ export function countChangedObjects(before: readonly EditorObject[], after: read
   return changed === 0 && !sameOrder ? 1 : changed;
 }
 
+/** Arma el comando de una producción ya filtrada (sin la clave `frame` si no cambia el marco: los comandos de S01 quedan idénticos). */
+function buildEdit(
+  label: string,
+  base: Record<string, EditorObject[]>,
+  baseFrame: DocumentFrame,
+  after: Record<string, EditorObject[]>,
+  afterFrame: DocumentFrame | null,
+): EditorEdit {
+  const touched: Record<string, EditorLayerChange> = {};
+  for (const layerId of Object.keys(after)) touched[layerId] = { before: base[layerId] ?? [], after: after[layerId] };
+  return afterFrame ? { label, touched, frame: { before: baseFrame, after: afterFrame } } : { label, touched };
+}
+
 export function useEditableDocument(layers: VectorDocumentLayer[], options: UseEditableDocumentOptions = {}): EditableDocumentApi {
   const { visibility, limit = MAX_UNDO_STEPS, createId } = options;
+  const sourceWidth = options.sourceSize?.width ?? 0;
+  const sourceHeight = options.sourceSize?.height ?? 0;
+  // Marco original del documento: referencia estable mientras no cambie el tamaño medido.
+  const sourceFrame = useMemo(() => sourceFrameOf(sourceWidth, sourceHeight), [sourceWidth, sourceHeight]);
 
   const [committed, setCommitted] = useState<CommittedState>(EMPTY_STATE);
   const committedRef = useRef<CommittedState>(EMPTY_STATE);
   const [results, setResults] = useState<Record<string, LoadResult>>({});
   const [gestureView, setGestureView] = useState<Record<string, EditorObject[]> | null>(null);
+  const [gestureFrame, setGestureFrame] = useState<DocumentFrame | null>(null);
   const [gestureActive, setGestureActive] = useState(false);
   const gestureRef = useRef<GestureState | null>(null);
   const [retryNonce, setRetryNonce] = useState(0);
 
   // Último valor de layers/visibility/límite en refs (patrón "latest ref" de useWorkspaceSave): los
   // handlers de abajo son ESTABLES pero siempre leen lo vigente al momento de la edición.
-  const latestRef = useRef({ layers, visibility, limit, createId });
+  const latestRef = useRef({ layers, visibility, limit, createId, sourceFrame });
   useEffect(() => {
-    latestRef.current = { layers, visibility, limit, createId };
+    latestRef.current = { layers, visibility, limit, createId, sourceFrame };
   });
+
+  /** Marco confirmado del estado `state` (sin override = el original). */
+  const frameOf = useCallback((state: CommittedState): DocumentFrame => state.frame ?? latestRef.current.sourceFrame, []);
 
   // groupId -> url ya cargada con éxito. Solo se marca al terminar: así el doble efecto de
   // StrictMode (efecto -> cleanup/abort -> efecto) reinicia las cargas abortadas en vez de darlas por hechas.
@@ -208,7 +256,8 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
         const loaded = { objectsByLayer: { ...current.objectsByLayer, [groupId]: objects }, baseline: { ...current.baseline, [groupId]: objects } };
         // Si una capa YA cargada cambia de svgUrl (el documento se regeneró por debajo), los comandos del
         // historial dejan de ser coherentes con la nueva geometría: se reinicia el historial.
-        commit(previousUrl !== undefined ? { ...loaded, past: [], future: [] } : { ...current, ...loaded });
+        // El marco también vuelve al original: un recorte hecho sobre la geometría anterior ya no describe este documento.
+        commit(previousUrl !== undefined ? { ...loaded, frame: null, past: [], future: [] } : { ...current, ...loaded });
         setResults((all) => ({ ...all, [groupId]: { status: "ready", url: svgUrl, attempt: retryNonce } }));
       };
       const fail = () => {
@@ -254,11 +303,15 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
 
   // ---- Filtro de bloqueo / visibilidad ----
   const filterProduction = useCallback(
-    (base: Record<string, EditorObject[]>, production: EditProduction | null) => {
+    (base: Record<string, EditorObject[]>, baseFrame: DocumentFrame, production: EditProduction | null) => {
       const { layers: currentLayers, visibility: currentVisibility } = latestRef.current;
       const after: Record<string, EditorObject[]> = {};
       let skippedLockedObjects = 0;
       let skippedHiddenObjects = 0;
+      const documentWide = production?.documentWide === true;
+
+      // Un marco inválido (NaN, tamaño 0...) es un error del productor: se rechaza TODA la producción, no solo el marco.
+      if (production?.frame && !isValidFrame(production.frame)) return { after, afterFrame: null, skippedLockedObjects, skippedHiddenObjects };
 
       for (const [layerId, nextObjects] of Object.entries(production?.layers ?? {})) {
         const previousObjects = base[layerId] ?? [];
@@ -269,13 +322,19 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
           skippedLockedObjects += countChangedObjects(previousObjects, nextObjects);
           continue;
         }
-        if (meta && !(currentVisibility?.[layerId] ?? meta.visible)) {
+        // Documento completo: una capa oculta es parte del documento (ocultar es de vista) y se transforma igual.
+        if (!documentWide && meta && !(currentVisibility?.[layerId] ?? meta.visible)) {
           skippedHiddenObjects += countChangedObjects(previousObjects, nextObjects);
           continue;
         }
         after[layerId] = nextObjects;
       }
-      return { after, skippedLockedObjects, skippedHiddenObjects };
+
+      // Documento completo con alguna capa bloqueada: se rechaza TODO (objetos y marco) -- nunca se transforma a medias.
+      if (documentWide && skippedLockedObjects > 0) return { after: {}, afterFrame: null, skippedLockedObjects, skippedHiddenObjects };
+
+      const afterFrame = production?.frame && !framesEqual(production.frame, baseFrame) ? production.frame : null;
+      return { after, afterFrame, skippedLockedObjects, skippedHiddenObjects };
     },
     [],
   );
@@ -288,20 +347,27 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
       const last = past[past.length - 1];
       // Capas que quedan con el estado "antes" (solo cambia si un comando fundido resulta no-op).
       let restoreBefore: Record<string, EditorObject[]> | null = null;
+      let restoreFrameBefore: DocumentFrame | null = null;
 
       if (editOptions?.coalesceKey && last?.coalesceKey === editOptions.coalesceKey && now - last.at <= COALESCE_WINDOW_MS) {
         const merged: Record<string, EditorLayerChange> = { ...last.edit.touched };
         for (const [layerId, change] of Object.entries(edit.touched)) {
           merged[layerId] = merged[layerId] ? { before: merged[layerId].before, after: change.after } : change;
         }
+        const mergedFrame = mergeFrameChange(last.edit.frame, edit.frame);
         // Si el comando fundido queda en no-op se descarta del todo (ir y volver con flechas no deja basura) y la
         // geometría vuelve EXACTAMENTE a los snapshots originales.
-        const isNoop = Object.values(merged).every((change) => sameListContent(change.before, change.after));
+        const isNoop = Object.values(merged).every((change) => sameListContent(change.before, change.after)) && (!mergedFrame || framesEqual(mergedFrame.before, mergedFrame.after));
         if (isNoop) {
           past.pop();
           restoreBefore = Object.fromEntries(Object.entries(merged).map(([layerId, change]) => [layerId, change.before]));
+          restoreFrameBefore = mergedFrame?.before ?? null;
         } else {
-          past[past.length - 1] = { edit: { label: edit.label, touched: merged }, coalesceKey: editOptions.coalesceKey, at: now };
+          past[past.length - 1] = {
+            edit: mergedFrame ? { label: edit.label, touched: merged, frame: mergedFrame } : { label: edit.label, touched: merged },
+            coalesceKey: editOptions.coalesceKey,
+            at: now,
+          };
         }
       } else {
         past.push({ edit, coalesceKey: editOptions?.coalesceKey, at: now });
@@ -311,7 +377,8 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
 
       const objectsByLayer = { ...state.objectsByLayer };
       for (const [layerId, change] of Object.entries(edit.touched)) objectsByLayer[layerId] = restoreBefore?.[layerId] ?? change.after;
-      commit({ ...state, objectsByLayer, past, future: [] });
+      const frame = restoreFrameBefore ?? (edit.frame ? edit.frame.after : state.frame);
+      commit({ ...state, objectsByLayer, frame, past, future: [] });
     },
     [commit],
   );
@@ -323,20 +390,22 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
         return { applied: false, reason: "gesture_active", skippedLockedObjects: 0, skippedHiddenObjects: 0 };
       }
       const state = committedRef.current;
-      const { after, skippedLockedObjects, skippedHiddenObjects } = filterProduction(state.objectsByLayer, producer({ objectsByLayer: state.objectsByLayer }));
+      const baseFrame = frameOf(state);
+      const { after, afterFrame, skippedLockedObjects, skippedHiddenObjects } = filterProduction(
+        state.objectsByLayer,
+        baseFrame,
+        producer({ objectsByLayer: state.objectsByLayer, frame: baseFrame }),
+      );
 
-      const touchedLayers = Object.keys(after);
-      if (touchedLayers.length === 0) {
+      if (Object.keys(after).length === 0 && afterFrame === null) {
         const blocked = skippedLockedObjects + skippedHiddenObjects > 0;
         return { applied: false, reason: blocked ? "blocked" : "no_change", skippedLockedObjects, skippedHiddenObjects };
       }
 
-      const touched: Record<string, EditorLayerChange> = {};
-      for (const layerId of touchedLayers) touched[layerId] = { before: state.objectsByLayer[layerId] ?? [], after: after[layerId] };
-      pushEdit({ label, touched }, editOptions);
+      pushEdit(buildEdit(label, state.objectsByLayer, baseFrame, after, afterFrame), editOptions);
       return { applied: true, skippedLockedObjects, skippedHiddenObjects };
     },
-    [filterProduction, pushEdit],
+    [filterProduction, pushEdit, frameOf],
   );
 
   // ---- undo / redo ----
@@ -349,7 +418,8 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
     // bloquear una capa después de editarla no debe dejar el historial trabado (ver IMPL de M3-S01).
     const objectsByLayer = { ...state.objectsByLayer };
     for (const [layerId, change] of Object.entries(entry.edit.touched)) objectsByLayer[layerId] = change.before;
-    commit({ ...state, objectsByLayer, past: state.past.slice(0, -1), future: [...state.future, entry] });
+    // El marco vuelve junto con los objetos (atómico): un undo de crop/rotar-documento no deja el marco a medias.
+    commit({ ...state, objectsByLayer, frame: entry.edit.frame ? entry.edit.frame.before : state.frame, past: state.past.slice(0, -1), future: [...state.future, entry] });
     return entry.edit;
   }, [commit]);
 
@@ -360,17 +430,24 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
     if (!entry) return null;
     const objectsByLayer = { ...state.objectsByLayer };
     for (const [layerId, change] of Object.entries(entry.edit.touched)) objectsByLayer[layerId] = change.after;
-    commit({ ...state, objectsByLayer, past: [...state.past, entry], future: state.future.slice(0, -1) });
+    commit({ ...state, objectsByLayer, frame: entry.edit.frame ? entry.edit.frame.after : state.frame, past: [...state.past, entry], future: state.future.slice(0, -1) });
     return entry.edit;
   }, [commit]);
 
   // ---- Gestos continuos ----
   const beginGesture = useCallback((): boolean => {
     if (gestureRef.current) return false;
-    gestureRef.current = { base: committedRef.current.objectsByLayer, after: {}, skippedLockedObjects: 0, skippedHiddenObjects: 0 };
+    gestureRef.current = {
+      base: committedRef.current.objectsByLayer,
+      baseFrame: frameOf(committedRef.current),
+      after: {},
+      afterFrame: null,
+      skippedLockedObjects: 0,
+      skippedHiddenObjects: 0,
+    };
     setGestureActive(true);
     return true;
-  }, []);
+  }, [frameOf]);
 
   const previewEdit = useCallback(
     (producer: EditProducer): ApplyEditResult => {
@@ -378,12 +455,18 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
       if (!gesture) return { applied: false, reason: "no_gesture", skippedLockedObjects: 0, skippedHiddenObjects: 0 };
       // El productor SIEMPRE parte del estado "antes" del gesto, nunca del frame anterior: el resultado
       // depende solo de (antes, gesto) y no acumula error de punto flotante.
-      const { after, skippedLockedObjects, skippedHiddenObjects } = filterProduction(gesture.base, producer({ objectsByLayer: gesture.base }));
+      const { after, afterFrame, skippedLockedObjects, skippedHiddenObjects } = filterProduction(
+        gesture.base,
+        gesture.baseFrame,
+        producer({ objectsByLayer: gesture.base, frame: gesture.baseFrame }),
+      );
       gesture.after = after;
+      gesture.afterFrame = afterFrame;
       gesture.skippedLockedObjects = skippedLockedObjects;
       gesture.skippedHiddenObjects = skippedHiddenObjects;
-      const touched = Object.keys(after).length > 0;
-      setGestureView(touched ? { ...gesture.base, ...after } : null);
+      const touched = Object.keys(after).length > 0 || afterFrame !== null;
+      setGestureView(Object.keys(after).length > 0 ? { ...gesture.base, ...after } : null);
+      setGestureFrame(afterFrame);
       return touched
         ? { applied: true, skippedLockedObjects, skippedHiddenObjects }
         : { applied: false, reason: skippedLockedObjects + skippedHiddenObjects > 0 ? "blocked" : "no_change", skippedLockedObjects, skippedHiddenObjects };
@@ -394,6 +477,7 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
   const endGesture = useCallback(() => {
     gestureRef.current = null;
     setGestureView(null);
+    setGestureFrame(null);
     setGestureActive(false);
   }, []);
 
@@ -403,16 +487,13 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
       if (!gesture) return { applied: false, reason: "no_gesture", skippedLockedObjects: 0, skippedHiddenObjects: 0 };
       endGesture();
 
-      const touchedLayers = Object.keys(gesture.after);
       const { skippedLockedObjects, skippedHiddenObjects } = gesture;
-      if (touchedLayers.length === 0) {
+      if (Object.keys(gesture.after).length === 0 && gesture.afterFrame === null) {
         const blocked = skippedLockedObjects + skippedHiddenObjects > 0;
         return { applied: false, reason: blocked ? "blocked" : "no_change", skippedLockedObjects, skippedHiddenObjects };
       }
 
-      const touched: Record<string, EditorLayerChange> = {};
-      for (const layerId of touchedLayers) touched[layerId] = { before: gesture.base[layerId] ?? [], after: gesture.after[layerId] };
-      pushEdit({ label, touched });
+      pushEdit(buildEdit(label, gesture.base, gesture.baseFrame, gesture.after, gesture.afterFrame));
       return { applied: true, skippedLockedObjects, skippedHiddenObjects };
     },
     [endGesture, pushEdit],
@@ -422,9 +503,11 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
     if (gestureRef.current) endGesture();
   }, [endGesture]);
 
-  const getSnapshot = useCallback((): EditableDocument => ({ objectsByLayer: committedRef.current.objectsByLayer }), []);
+  const getSnapshot = useCallback((): EditableDocument => ({ objectsByLayer: committedRef.current.objectsByLayer, frame: frameOf(committedRef.current) }), [frameOf]);
 
   const objectsByLayer = gestureView ?? committed.objectsByLayer;
+  const committedFrame = committed.frame ?? sourceFrame;
+  const frameDirty = !framesEqual(committedFrame, sourceFrame);
   const isLoading = useMemo(() => Object.values(layerStatus).some((status) => status === "loading"), [layerStatus]);
   const editedLayerIds = useMemo(() => {
     const edited = new Set<string>();
@@ -454,7 +537,9 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
     commitGesture,
     cancelGesture,
     gestureActive,
-    geometryDirty: editedLayerIds.size > 0,
+    geometryDirty: editedLayerIds.size > 0 || frameDirty,
+    frame: gestureFrame ?? committedFrame,
+    committedFrame,
     getSnapshot,
     committedObjectsByLayer: committed.objectsByLayer,
     editedLayerIds,

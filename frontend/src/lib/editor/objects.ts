@@ -22,6 +22,9 @@ export interface LayerSvgMeta {
   /** Ancho/alto del lienzo de la capa en unidades de documento (el `<svg width/height>` de origen). */
   width: number;
   height: number;
+  /** Origen del lienzo (M3-S02, marco del documento): por defecto 0 -- el `viewBox` de origen es `0 0 width height`. */
+  x?: number;
+  y?: number;
 }
 
 const VID_ATTRIBUTE = "data-vid";
@@ -135,7 +138,9 @@ export function serializeEditableLayer(objects: EditorObject[], meta: LayerSvgMe
 
   const width = finiteOrZero(meta.width);
   const height = finiteOrZero(meta.height);
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${paths.join("")}</svg>`;
+  const originX = finiteOrZero(meta.x ?? 0);
+  const originY = finiteOrZero(meta.y ?? 0);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${originX} ${originY} ${width} ${height}">${paths.join("")}</svg>`;
 }
 
 // ---- Bounds ----

@@ -1,11 +1,17 @@
+import { formatDisplayNumber } from "../../lib/editor/units";
+
 const ZOOM_BUTTON_FACTOR = 1.25;
 
 interface EditorStatusBarProps {
   scale: number;
   onZoomBy: (factor: number) => void;
   onFit: () => void;
+  /** Tamaño del ÁREA DE TRABAJO vigente en unidades de documento (M3-S02: cambia con Crop y con Rotate 90° del documento). */
   sourceWidthPx: number;
   sourceHeightPx: number;
+  /** Tamaño físico del área de trabajo en mm (`ancho * mmPerUnit`), o ausente si el documento no tiene escala física conocida. */
+  widthMm?: number | null;
+  heightMm?: number | null;
 }
 
 /**
@@ -14,16 +20,15 @@ interface EditorStatusBarProps {
  * mismo `<footer>` de `EditorShell` -- acá van zoom/fit/dimensiones/grid-snap.
  *
  * Dimensiones: se muestran en PX (tamaño interno real del SVG, siempre
- * disponible desde `VectorDocument`) en vez de mm -- mostrar "210 × 297 mm"
- * sin que el proyecto tenga una `DimensionVersion` aplicada (M1-S09) sería
- * un dato inventado (spec.md, DoD: "no hay datos falsos"). Si más adelante
- * el Workspace conoce una `DimensionVersion` vigente, este componente puede
- * extenderse para mostrarla -- documentado como decisión en IMPL.md, no
- * implementado en esta tarjeta (fuera del alcance explícito del spec, que
- * solo pide mm "si ya hay una versión con dimensión aplicada").
+ * disponible desde `VectorDocument`) y, SOLO si el documento tiene escala
+ * física conocida (M3-S01: `mmPerUnit`), también en mm -- mostrar "210 × 297 mm"
+ * sin que el proyecto tenga dimensiones aplicadas (M1-S09) sería un dato
+ * inventado (spec.md, DoD: "no hay datos falsos"). Desde M3-S02 son las del
+ * ÁREA DE TRABAJO vigente: un Crop o un giro de 90° del documento las cambia.
  */
-export function EditorStatusBar({ scale, onZoomBy, onFit, sourceWidthPx, sourceHeightPx }: EditorStatusBarProps) {
+export function EditorStatusBar({ scale, onZoomBy, onFit, sourceWidthPx, sourceHeightPx, widthMm = null, heightMm = null }: EditorStatusBarProps) {
   const zoomPercent = Math.round(scale * 100);
+  const hasPhysicalSize = widthMm !== null && heightMm !== null;
 
   return (
     <div className="editor-status-bar" role="group" aria-label="Controles de zoom y documento">
@@ -55,8 +60,16 @@ export function EditorStatusBar({ scale, onZoomBy, onFit, sourceWidthPx, sourceH
         FIT
       </button>
 
-      <span className="editor-status-bar__dimensions" aria-label={`Tamaño del documento: ${sourceWidthPx} por ${sourceHeightPx} píxeles`}>
-        {sourceWidthPx} × {sourceHeightPx} px
+      {hasPhysicalSize && (
+        <span
+          className="editor-status-bar__dimensions"
+          aria-label={`Tamaño físico del área de trabajo: ${formatDisplayNumber(widthMm, 2)} por ${formatDisplayNumber(heightMm, 2)} milímetros`}
+        >
+          {formatDisplayNumber(widthMm, 2)} × {formatDisplayNumber(heightMm, 2)} mm
+        </span>
+      )}
+      <span className="editor-status-bar__dimensions" aria-label={`Tamaño del documento: ${formatDisplayNumber(sourceWidthPx, 2)} por ${formatDisplayNumber(sourceHeightPx, 2)} píxeles`}>
+        {formatDisplayNumber(sourceWidthPx, 2)} × {formatDisplayNumber(sourceHeightPx, 2)} px
       </span>
 
       <button

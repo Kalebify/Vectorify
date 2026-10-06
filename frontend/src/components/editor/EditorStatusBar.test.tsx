@@ -37,4 +37,25 @@ describe("EditorStatusBar — zoom/fit/dimensiones", () => {
     expect(screen.getByRole("button", { name: /Grilla/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: /Ajuste a grilla/ })).toBeDisabled();
   });
+
+  it("con escala física conocida (M3-S02) muestra también los mm del área de trabajo, además de los px", () => {
+    render(<EditorStatusBar scale={1} onZoomBy={vi.fn()} onFit={vi.fn()} sourceWidthPx={200} sourceHeightPx={100} widthMm={100} heightMm={50} />);
+    expect(screen.getByText("100 × 50 mm")).toBeInTheDocument();
+    expect(screen.getByLabelText("Tamaño físico del área de trabajo: 100 por 50 milímetros")).toBeInTheDocument();
+    expect(screen.getByText("200 × 100 px")).toBeInTheDocument();
+  });
+
+  it("sin escala física NO muestra mm (nunca datos inventados) y redondea los decimales de un recorte", () => {
+    render(<EditorStatusBar scale={1} onZoomBy={vi.fn()} onFit={vi.fn()} sourceWidthPx={123.456789} sourceHeightPx={99.5} />);
+    expect(screen.queryByText(/mm/)).not.toBeInTheDocument();
+    expect(screen.getByText("123.46 × 99.5 px")).toBeInTheDocument();
+  });
+
+  it("los mm acompañan los cambios del área de trabajo (rerender tras un crop)", () => {
+    const { rerender } = render(<EditorStatusBar scale={1} onZoomBy={vi.fn()} onFit={vi.fn()} sourceWidthPx={400} sourceHeightPx={200} widthMm={200} heightMm={100} />);
+    expect(screen.getByText("200 × 100 mm")).toBeInTheDocument();
+    rerender(<EditorStatusBar scale={1} onZoomBy={vi.fn()} onFit={vi.fn()} sourceWidthPx={200} sourceHeightPx={200} widthMm={100} heightMm={100} />);
+    expect(screen.getByText("100 × 100 mm")).toBeInTheDocument();
+    expect(screen.queryByText("200 × 100 mm")).not.toBeInTheDocument();
+  });
 });

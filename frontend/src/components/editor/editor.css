@@ -196,6 +196,8 @@
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
+  /* M3-S02: la barra contextual de Rotate/Flip va arriba del canvas. */
+  flex-direction: column;
   background: var(--editor-canvas-bg);
   position: relative;
 }
@@ -234,8 +236,115 @@
 }
 
 .vector-canvas-2--select,
-.vector-canvas-2--move {
+.vector-canvas-2--move,
+.vector-canvas-2--crop {
   cursor: default;
+}
+
+/* ---------- M3-S02: Rotate/Flip (barra contextual) y Crop (panel) ---------- */
+
+.orientation-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--editor-space-3);
+  padding: var(--editor-space-2) var(--editor-space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--editor-panel-bg);
+}
+
+.orientation-bar__buttons,
+.orientation-bar__confirm,
+.crop-panel__actions,
+.crop-panel__presets {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--editor-space-1);
+}
+
+.orientation-bar__button,
+.orientation-bar__apply,
+.orientation-bar__cancel,
+.crop-panel__preset,
+.crop-panel__apply,
+.crop-panel__cancel {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: var(--editor-space-1) var(--editor-space-2);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 28px;
+}
+
+.orientation-bar__apply,
+.crop-panel__apply {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.orientation-bar__apply:disabled,
+.crop-panel__apply:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.orientation-bar__scope {
+  flex: 1 1 200px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.orientation-bar__message {
+  flex: 1 0 100%;
+  margin: 0;
+}
+
+.editor-shell__action-notice {
+  position: absolute;
+  right: var(--editor-space-2);
+  bottom: var(--editor-space-2);
+  margin: 0;
+  max-width: 60%;
+  padding: var(--editor-space-1) var(--editor-space-2);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-h);
+  background: var(--editor-panel-bg);
+  border: 1px solid var(--border);
+  pointer-events: none;
+}
+
+.crop-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-2);
+  padding-bottom: var(--editor-space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.crop-panel__domain,
+.crop-panel__summary ul {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.crop-panel__summary ul {
+  padding-left: var(--editor-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-1);
+}
+
+.crop-panel__actions {
+  justify-content: flex-end;
 }
 
 /* ---------- M3-S01: feedback del canvas editable ---------- */

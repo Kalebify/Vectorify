@@ -14,22 +14,29 @@ export interface ViewportParams {
   panX: number;
   panY: number;
   scale: number;
-  /** Tamaño del documento en unidades de viewBox. */
+  /** Tamaño del documento (su marco de trabajo) en unidades de viewBox. */
   sourceWidth: number;
   sourceHeight: number;
+  /** Origen del marco de trabajo en unidades de documento (M3-S02: tras rotar/recortar ya no es (0,0)). Por defecto 0. */
+  originX?: number;
+  originY?: number;
 }
 
 /** `point` está en px relativos a la esquina arriba-izquierda del contenedor. */
 export function screenToDocument(point: Point, viewport: ViewportParams): Point {
+  const centerX = (viewport.originX ?? 0) + viewport.sourceWidth / 2;
+  const centerY = (viewport.originY ?? 0) + viewport.sourceHeight / 2;
   return {
-    x: (point.x - (viewport.containerWidth / 2 + viewport.panX)) / viewport.scale + viewport.sourceWidth / 2,
-    y: (point.y - (viewport.containerHeight / 2 + viewport.panY)) / viewport.scale + viewport.sourceHeight / 2,
+    x: (point.x - (viewport.containerWidth / 2 + viewport.panX)) / viewport.scale + centerX,
+    y: (point.y - (viewport.containerHeight / 2 + viewport.panY)) / viewport.scale + centerY,
   };
 }
 
 export function documentToScreen(point: Point, viewport: ViewportParams): Point {
+  const centerX = (viewport.originX ?? 0) + viewport.sourceWidth / 2;
+  const centerY = (viewport.originY ?? 0) + viewport.sourceHeight / 2;
   return {
-    x: (point.x - viewport.sourceWidth / 2) * viewport.scale + viewport.containerWidth / 2 + viewport.panX,
-    y: (point.y - viewport.sourceHeight / 2) * viewport.scale + viewport.containerHeight / 2 + viewport.panY,
+    x: (point.x - centerX) * viewport.scale + viewport.containerWidth / 2 + viewport.panX,
+    y: (point.y - centerY) * viewport.scale + viewport.containerHeight / 2 + viewport.panY,
   };
 }

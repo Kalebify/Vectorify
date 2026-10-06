@@ -4,6 +4,7 @@ import { multiplyMatrices, parseSvgTransformAttribute, type AffineMatrix } from 
 import {
   applyMatrixToPoint,
   composeMatrices,
+  flipAboutMatrix,
   invertMatrix,
   isFiniteMatrix,
   isIdentityMatrix,
@@ -15,6 +16,36 @@ import {
   scaleAboutMatrix,
   translationMatrix,
 } from "./matrix";
+
+describe("flipAboutMatrix (M3-S02) — reflejo exacto", () => {
+  it("horizontal alrededor de x = 100: x' = 200 - x y el eje queda fijo (coeficientes enteros)", () => {
+    const flip = flipAboutMatrix({ x: 100, y: 50 }, "horizontal");
+    expect(flip).toEqual({ a: -1, b: 0, c: 0, d: 1, e: 200, f: 0 });
+    expect(applyMatrixToPoint(flip, { x: 100, y: 7 })).toEqual({ x: 100, y: 7 });
+    expect(applyMatrixToPoint(flip, { x: 130, y: 7 })).toEqual({ x: 70, y: 7 });
+  });
+
+  it("vertical alrededor de y = 50: y' = 100 - y", () => {
+    const flip = flipAboutMatrix({ x: 100, y: 50 }, "vertical");
+    expect(flip).toEqual({ a: 1, b: 0, c: 0, d: -1, e: 0, f: 100 });
+    expect(applyMatrixToPoint(flip, { x: 3, y: 80 })).toEqual({ x: 3, y: 20 });
+  });
+
+  it("reflejar dos veces = identidad EXACTA (coeficientes y traslación, también con pivotes fraccionarios)", () => {
+    for (const axis of ["horizontal", "vertical"] as const) {
+      for (const pivot of [{ x: 100, y: 50 }, { x: 33.5, y: -7.25 }, { x: 0.1, y: 0.2 }]) {
+        const flip = flipAboutMatrix(pivot, axis);
+        const twice = composeMatrices(flip, flip);
+        for (const key of ["a", "b", "c", "d", "e", "f"] as const) expect(twice[key] === (key === "a" || key === "d" ? 1 : 0), `${axis} ${pivot.x}: ${key}=${twice[key]}`).toBe(true);
+      }
+    }
+  });
+
+  it("el determinante es -1 (es un reflejo, no una rotación)", () => {
+    expect(matrixDeterminant(flipAboutMatrix({ x: 1, y: 2 }, "horizontal"))).toBe(-1);
+    expect(matrixDeterminant(flipAboutMatrix({ x: 1, y: 2 }, "vertical"))).toBe(-1);
+  });
+});
 
 describe("matrices base", () => {
   it("translación y escala alrededor de un pivote dejan el pivote fijo", () => {
