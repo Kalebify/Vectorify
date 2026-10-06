@@ -154,6 +154,16 @@ Release gate de que `Project`/`VectorDocument` son persistentes y sobreviven a r
 | `Maintenance/StorageConsistencyCheckerTests.cs` | 9 | Verificador DB↔storage (`--check-consistency`): fila sin archivo, archivo huérfano, solo lectura por defecto, borrado solo con flag y respetando una edad mínima, checksums, soft-delete, códigos de salida y reporte del comando. |
 | `Middleware/DependencyFailureMiddlewareTests.cs` | 12 | Clasificación de excepciones: solo la falla de conectividad con Postgres es 503; errores de datos/consulta o bugs siguen siendo 500. |
 
+### Portabilidad de los scripts de backup (sin Docker)
+
+```bash
+python -m unittest discover -s tests/scripts -v
+```
+
+2 pruebas (biblioteca estándar; la segunda se salta si no hay PowerShell): ningún `scripts/*.ps1` puede depender de
+`Get-FileHash` (no existe en todos los hosts de PowerShell; el QA de M2.2-S10 falló justamente ahí) y el helper
+`Get-Sha256Hex` de `backup.ps1` produce el mismo SHA-256 que `hashlib` sobre un archivo binario de 1 MiB.
+
 ### E2E vivo contra la pila Docker (fuera de la suite por defecto)
 
 ```bash

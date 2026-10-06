@@ -42,6 +42,16 @@ function Invoke-Native {
     if ($LASTEXITCODE -ne 0) { throw "Falló: $Description (código $LASTEXITCODE)" }
 }
 
+# SHA-256 con .NET puro: Get-FileHash no existe en todos los hosts de PowerShell (PowerShell < 4, hosts restringidos);
+# en M2.2-S10 un host así hizo fallar el manifiesto ("Get-FileHash no se reconoce") y el ciclo de backup no se pudo verificar.
+function Get-Sha256Hex {
+    param([Parameter(Mandatory)][string]$Path)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($Path)
+    try { return ([System.BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', '').ToLowerInvariant() }
+    finally { $stream.Dispose(); $sha.Dispose() }
+}
+
 $composeArgs = @('compose')
 if ($ProjectName) { $composeArgs += @('-p', $ProjectName) }
 
@@ -91,7 +101,7 @@ SELECT 'projects=' || (SELECT count(*) FROM projects) || ' assets=' || (SELECT c
     $pgVersion = (('SHOW server_version;' | & docker @composeArgs exec -T postgres sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -At') -join ' ').Trim()
     $files = foreach ($name in 'db.dump', 'backend_data.tar.gz') {
         $path = Join-Path $target $name
-        '{0}  {1}  {2} bytes' -f (Get-FileHash -Algorithm SHA256 $path).Hash.ToLowerInvariant(), $name, (Get-Item $path).Length
+        '{0}  {1}  {2} bytes' -f (Get-Sha256Hex $path), $name, (Get-Item $path).Length
     }
     @(
         "vectorify-backup creado: $(Get-Date -Format o)",
