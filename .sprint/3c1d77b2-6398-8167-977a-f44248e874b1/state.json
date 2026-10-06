@@ -1,0 +1,18 @@
+{
+  "card_id": "3c1d77b2-6398-8167-977a-f44248e874b1",
+  "card_url": "https://app.notion.com/p/3c1d77b263988167977af44248e874b1",
+  "title": "M3-S01 · Selección + Move + Transform",
+  "stack": "Frontend, Vector -- base del editor MVP3: modelo EditorObject, comandos undo/redo (applyEdit), geometria pura en lib/editor, seleccion single/multi/marquee, move/scale/rotate, Inspector en mm",
+  "branch": "sprint/3e8d77b2-m3-s01-seleccion-transform",
+  "column": "Doing",
+  "phase": "implementation",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "pr_url": null,
+  "started_at": "2026-10-06T00:00:00Z",
+  "exceptions": [
+    "Corrida autonoma de MVP 3 (S01..S16) confirmada explicitamente por el usuario: el orquestador mergea sin pedir permiso; ante un error la tarjeta pasa a Bloqueado y se sigue con la siguiente.",
+    "DECISION DE ARQUITECTURA PROPIA (docs/ADR_EDITOR_MVP3.md): objeto editable = path de una capa; mutaciones por applyEdit con snapshots before/after; geometria pesada (S08-S11) en Shapely via endpoints sin estado; persistencia de geometria recien en S13.",
+    "LIMITACION INTERMEDIA ACEPTADA: hasta M3-S13 las ediciones de geometria viven en memoria; el editor no afirma 'Guardado' y avisa con beforeunload (geometryDirty)."
+  ]
+}
