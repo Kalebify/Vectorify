@@ -10,6 +10,12 @@ interface PreviewNavigatorProps {
   transform: CanvasTransform;
   /** Tamaño en pantalla del contenedor del VectorCanvas principal (mismo `onMeasure` que alimenta fitToScreen). */
   viewportSize: { width: number; height: number };
+  /**
+   * groupId -> data URL del SVG de la capa YA EDITADA (M3-S01): la miniatura sigue mostrando el `svgUrl` original de
+   * las capas intactas, pero una capa con ediciones de geometría sin persistir se dibuja desde su estado en memoria
+   * (si no, la miniatura mostraría el documento anterior a las ediciones).
+   */
+  layerImageOverrides?: Record<string, string>;
 }
 
 /**
@@ -23,7 +29,7 @@ interface PreviewNavigatorProps {
  * el mismo criterio de "defensa en profundidad" (nunca SVG inline +
  * dangerouslySetInnerHTML) que el resto del visualizador.
  */
-export function PreviewNavigator({ layers, visibility, sourceWidthPx, sourceHeightPx, transform, viewportSize }: PreviewNavigatorProps) {
+export function PreviewNavigator({ layers, visibility, sourceWidthPx, sourceHeightPx, transform, viewportSize, layerImageOverrides }: PreviewNavigatorProps) {
   const visibleLayers = layers.filter((layer) => visibility[layer.groupId] ?? true);
   const hasDocumentSize = sourceWidthPx > 0 && sourceHeightPx > 0;
 
@@ -67,7 +73,7 @@ export function PreviewNavigator({ layers, visibility, sourceWidthPx, sourceHeig
           {visibleLayers.map((layer) => (
             <img
               key={layer.groupId}
-              src={layer.svgUrl}
+              src={layerImageOverrides?.[layer.groupId] ?? layer.svgUrl}
               alt=""
               aria-hidden="true"
               className="preview-navigator__layer"

@@ -558,6 +558,9 @@ describe("useVectorDocument — reapertura vía savedProjectId (M2.2-S05)", () =
     });
     expect(result.current.document?.sourceWidthPx).toBe(320);
     expect(result.current.document?.sourceHeightPx).toBe(240);
+    // M3-S01: el tamaño físico del documento guardado llega al editor (base del factor mm por unidad del Inspector).
+    expect(result.current.document?.widthMm).toBe(savedDocumentResponse().widthMm);
+    expect(result.current.document?.heightMm).toBe(savedDocumentResponse().heightMm);
 
     // Ninguna llamada al flujo clásico de 3 endpoints (paleta/layers/consolidado).
     expect(fetch.mock.calls.some((call) => String(call[0]).includes("/color-palette/"))).toBe(false);

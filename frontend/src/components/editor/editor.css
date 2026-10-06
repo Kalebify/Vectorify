@@ -92,6 +92,12 @@
   color: var(--error);
 }
 
+/* M3-S01: geometría editada que todavía no se persiste (hasta M3-S13) -- nunca se oculta ni dice "Guardado". */
+.editor-header__dirty-state--geometry {
+  color: var(--warn);
+  font-weight: 600;
+}
+
 .editor-header__actions {
   display: flex;
   align-items: center;
@@ -227,8 +233,56 @@
   cursor: grabbing;
 }
 
-.vector-canvas-2--select {
+.vector-canvas-2--select,
+.vector-canvas-2--move {
   cursor: default;
+}
+
+/* ---------- M3-S01: feedback del canvas editable ---------- */
+
+.vector-canvas-2__lock-badge,
+.vector-canvas-2__notice,
+.vector-canvas-2__layer-error {
+  position: absolute;
+  left: var(--editor-space-2);
+  margin: 0;
+  max-width: calc(100% - 2 * var(--editor-space-2));
+  padding: var(--editor-space-1) var(--editor-space-2);
+  border-radius: 4px;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.vector-canvas-2__lock-badge {
+  bottom: var(--editor-space-2);
+  color: var(--warn);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn);
+}
+
+.vector-canvas-2__notice {
+  bottom: calc(var(--editor-space-2) + 32px);
+  color: var(--error);
+  background: var(--error-bg);
+  border: 1px solid var(--error);
+}
+
+.vector-canvas-2__layer-error {
+  top: var(--editor-space-2);
+  color: var(--error);
+  background: var(--error-bg);
+  border: 1px solid var(--error);
+  pointer-events: auto;
+}
+
+/* Solo para lectores de pantalla (cantidad de objetos seleccionados). */
+.vector-canvas-2__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .vector-canvas-2__empty {
@@ -421,6 +475,63 @@
   opacity: 0.6;
 }
 
+/* ---------- Inspector: objetos seleccionados (M3-S01) ---------- */
+
+.object-inspector {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-2);
+  padding-bottom: var(--editor-space-3);
+  margin-bottom: var(--editor-space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.object-inspector__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--editor-space-2);
+}
+
+.object-inspector__field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.object-inspector__field input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--editor-space-1) var(--editor-space-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+  color: var(--text-h);
+  background: var(--bg);
+}
+
+.object-inspector__field input[aria-invalid="true"] {
+  border-color: var(--error);
+}
+
+.object-inspector__field input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.object-inspector__ratio {
+  display: flex;
+  align-items: center;
+  gap: var(--editor-space-2);
+  font-size: 12px;
+}
+
+.object-inspector__locked {
+  margin: 0;
+  font-size: 12px;
+  color: var(--warn);
+}
+
 /* ---------- Inspector: extras M2.1-S07 (lock/select all/warnings láser) ---------- */
 
 .inspector-panel__extra {
@@ -567,7 +678,7 @@
   }
 
   .editor-header__project-name,
-  .editor-header__dirty-state {
+  .editor-header__dirty-state:not(.editor-header__dirty-state--geometry) {
     display: none;
   }
 }

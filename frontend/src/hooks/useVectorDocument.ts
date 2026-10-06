@@ -80,6 +80,13 @@ export interface VectorDocument {
   version: number;
   sourceWidthPx: number;
   sourceHeightPx: number;
+  /**
+   * Tamaño físico del documento en mm (M3-S01), solo cuando el backend lo informa (documento YA guardado:
+   * `GET /api/v2/projects/{id}/document`). `null`/ausente = desconocido en esta agregación del cliente: el
+   * Inspector entonces edita en unidades de documento (ver `lib/editor/units.ts`) en vez de inventar mm.
+   */
+  widthMm?: number | null;
+  heightMm?: number | null;
   /** Siempre ordenadas por `order` ascendente -- el ÚNICO lugar donde se aplica ese orden, ningún panel necesita volver a ordenar. */
   layers: VectorDocumentLayer[];
 }
@@ -289,6 +296,8 @@ function fromSavedDocument(classicProjectId: string, imageId: string, paletteId:
     version: response.versionNumber,
     sourceWidthPx: Number.isFinite(viewBoxWidth) ? viewBoxWidth : 0,
     sourceHeightPx: Number.isFinite(viewBoxHeight) ? viewBoxHeight : 0,
+    widthMm: response.widthMm,
+    heightMm: response.heightMm,
     layers,
   };
 }
