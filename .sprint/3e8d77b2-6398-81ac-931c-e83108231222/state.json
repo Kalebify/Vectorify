@@ -1,0 +1,18 @@
+{
+  "card_id": "3e8d77b2-6398-81ac-931c-e83108231222",
+  "card_url": "https://app.notion.com/p/3e8d77b2639881ac931ce83108231222",
+  "title": "M3-S03 · Fill + Recolor + Eyedropper",
+  "stack": "Frontend, Vector -- Fill/Recolor/Eyedropper con identidad por capa (no por hex), estructura de capas editable y undoable (EditableLayerMeta), capas nuevas creadas explicitamente",
+  "branch": "sprint/3e8d77b2-m3-s03-fill-recolor",
+  "column": "Doing",
+  "phase": "implementation",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "pr_url": null,
+  "started_at": "2026-10-07T00:00:00Z",
+  "exceptions": [
+    "Corrida autonoma de MVP 3 (S01..S16) confirmada por el usuario: mergea el orquestador; ante un error la tarjeta pasa a Bloqueado y se sigue.",
+    "DECISION DE DOMINIO: capa = color de paleta (1:1); identidad por groupId, nunca por hex. Fill con color nuevo crea una capa nueva explicita (isNew) en el mismo comando; recolor de capa cambia el color de la propia capa; fusion solo explicita.",
+    "EXTENSION DE ARQUITECTURA: EditorEdit gana layers? (estructura de capas undoable) ademas de frame? (S02); la persistencia de la estructura llega en M3-S13."
+  ]
+}
