@@ -122,3 +122,31 @@ def test_process_propaga_los_errores_controlados_del_nucleo():
 
     with pytest.raises(InvalidParametersError):
         GeometryService(Settings()).process(_request(operation="intersection", operands=[]))
+
+
+def test_process_intersection_all_devuelve_un_resultado_combinado_con_el_area_comun():
+    # Común a [0,40]², [10,50]x[0,40] y [20,60]x[0,40]: x 20..40 -> 20 x 40 = 800 en una sola pieza (M3-S08).
+    request = _request(
+        operation="intersection_all",
+        subjects=[
+            {"type": "polygon", "coordinates": [[[0, 0], [40, 0], [40, 40], [0, 40]]]},
+            {"type": "polygon", "coordinates": [[[10, 0], [50, 0], [50, 40], [10, 40]]]},
+        ],
+        operands=[{"type": "polygon", "coordinates": [[[20, 0], [60, 0], [60, 40], [20, 40]]]}],
+    )
+
+    response = GeometryService(Settings()).process(request)
+
+    assert response.operation == "intersection_all"
+    assert response.scope == "combined"
+    assert [item.subject_index for item in response.results] == [None]
+    assert response.piece_count == 1
+    ring = response.results[0].geometries[0].coordinates[0]
+    assert sorted(set(ring)) == [(20.0, 0.0), (20.0, 40.0), (40.0, 0.0), (40.0, 40.0)]
+
+
+def test_process_intersection_all_con_una_sola_geometria_es_un_error_de_parametros():
+    from app.core.errors import InvalidParametersError
+
+    with pytest.raises(InvalidParametersError):
+        GeometryService(Settings()).process(_request(operation="intersection_all", operands=[]))

@@ -1226,3 +1226,192 @@
     border-top: 1px solid var(--border);
   }
 }
+
+/* ---------- M3-S08: Booleanas (barra, panel y overlay) ---------- */
+
+.boolean-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--editor-space-2) var(--editor-space-3);
+  padding: var(--editor-space-2) var(--editor-space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--editor-panel-bg);
+}
+
+.boolean-bar__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.boolean-bar__buttons {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--editor-space-1);
+}
+
+.boolean-bar__button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--editor-space-1);
+  min-height: 28px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: var(--editor-space-1) var(--editor-space-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.boolean-bar__button--active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.boolean-bar__button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.boolean-bar__hint,
+.boolean-bar__status {
+  flex: 1 1 200px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.boolean-bar__message {
+  flex: 1 0 100%;
+  margin: 0;
+}
+
+.boolean-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-2);
+  padding-bottom: var(--editor-space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.boolean-panel__formula,
+.boolean-panel__hint,
+.boolean-panel__resolved,
+.boolean-panel__state {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.boolean-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-1);
+  margin: 0 0 var(--editor-space-1);
+  padding: 0;
+  list-style: none;
+}
+
+.boolean-panel__operand {
+  display: flex;
+  align-items: center;
+  gap: var(--editor-space-1);
+  font-size: 12px;
+}
+
+.boolean-panel__operand-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.boolean-panel__sr-letter {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.boolean-panel__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.boolean-panel__swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+.boolean-panel__move {
+  min-width: 24px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.boolean-panel__move:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.boolean-panel__target {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-1);
+  margin: 0;
+  padding: var(--editor-space-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.boolean-panel__target legend {
+  padding: 0 var(--editor-space-1);
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.boolean-panel__new-layer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-1);
+}
+
+.boolean-panel__advanced summary {
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.boolean-panel__error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--editor-space-1);
+}
+
+.boolean-overlay {
+  position: absolute;
+  inset: 0;
+  display: block;
+  pointer-events: none;
+}

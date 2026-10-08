@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCanvasTransform } from "../../hooks/useCanvasTransform";
 import { useClipboard } from "../../hooks/useClipboard";
 import { describeEditFailure, useDrawEraseTools } from "../../hooks/useDrawEraseTools";
+import { useBooleanOperation } from "../../hooks/useBooleanOperation";
 import { useEditableDocument, type ApplyEditResult, type EditProducer } from "../../hooks/useEditableDocument";
 import { usePathTool } from "../../hooks/usePathTool";
 import { useLaserWarnings } from "../../hooks/useLaserWarnings";
@@ -18,6 +19,24 @@ import {
   type AlignReference,
   type ArrangeActionId,
 } from "../../lib/editor/arrange";
+import {
+  applyBooleanResult,
+  booleanAvailability,
+  booleanLabel,
+  booleanNotice,
+  booleanOutcome,
+  booleanTargetCandidates,
+  DEFAULT_BOOLEAN_TOLERANCE_MM,
+  describeOperand,
+  moveOperand,
+  operandLetter,
+  paintOrderIds,
+  planBoolean,
+  reverseOperands,
+  toleranceFromMm,
+  type BooleanOp,
+  type BooleanTargetChoice,
+} from "../../lib/editor/boolean";
 import {
   buildClipboard,
   clipboardAvailability,
@@ -81,6 +100,8 @@ import type { DocumentFrame, EditorEdit, EditProduction, Point, Rect } from "../
 import { formatDisplayNumber, mmPerUnit as mmPerUnitOf, toMm } from "../../lib/editor/units";
 import { svgToDataUrl } from "../../lib/svgToDataUrl";
 import { ArrangeBar, type ArrangeNotice } from "./ArrangeBar";
+import { BooleanBar, type BooleanNotice } from "./BooleanBar";
+import { BooleanPanel, NEW_LAYER_VALUE } from "./BooleanPanel";
 import { ClipboardBar, type ClipboardNotice } from "./ClipboardBar";
 import { ColorPanel, EyedropperPanel } from "./ColorPanel";
 import { CropPanel, type CropPreset } from "./CropPanel";
@@ -156,6 +177,25 @@ interface ColorSession {
    * previsualización encima y parecería que no hizo nada) hasta la siguiente interacción.
    */
   armed: boolean;
+}
+
+/**
+ * Booleana abierta (M3-S08). Los OPERANDOS se congelan al abrirla (ids en el orden A, B, C...): mientras está abierta el canvas no edita ni cambia la
+ * selección, así que el panel, el overlay y el cálculo hablan siempre de los mismos objetos. Nada de esto toca el documento: aplicar es UN comando.
+ */
+interface BooleanSession {
+  op: BooleanOp;
+  /** Ids de los operandos en el orden efectivo (A = el primero). Por defecto, el de pintado. */
+  order: string[];
+  /** Capa destino elegida: "" (ninguna todavía), un groupId o NEW_LAYER_VALUE. Con operandos en capas distintas NO hay valor por defecto. */
+  target: string;
+  newHex: string;
+  /** Id de la capa que se creará si se elige «capa nueva» (fijo durante la sesión). */
+  newGroupId: string;
+  keepOriginals: boolean;
+  toleranceMm: number;
+  /** Último intento de aplicar que falló (resultado vacío, documento cambió...). */
+  message: string | null;
 }
 
 const SCOPE_ORDER: RecolorScope[] = ["selection", "layer", "document"];
@@ -339,11 +379,21 @@ export function EditorShell({
   const [storedArrangeNotice, setArrangeNotice] = useState<(ArrangeNotice & { scope: string }) | null>(null);
   const arrangeNotice = storedArrangeNotice?.scope === clipboardScope ? storedArrangeNotice : null;
 
+  // Booleanas (M3-S08): sesión abierta (operandos congelados) y último mensaje de la barra, que pertenece al documento donde se produjo.
+  const [booleanSession, setBooleanSession] = useState<BooleanSession | null>(null);
+  const [booleanApplying, setBooleanApplying] = useState(false);
+  const [storedBooleanNotice, setBooleanNotice] = useState<(BooleanNotice & { scope: string }) | null>(null);
+  const booleanNoticeShown = storedBooleanNotice?.scope === clipboardScope ? storedBooleanNotice : null;
+  const booleanOpen = booleanSession !== null;
+  // Cerrar sin rastro: el hook cancela el cálculo en vuelo al quedarse sin petición; nada de esto toca el documento ni la pila de undo.
+  const closeBooleanSession = useCallback(() => setBooleanSession(null), []);
+
   // Tras un cambio de marco (crop, rotar el documento, o su undo/redo) el documento se vuelve a ajustar y centrar (M3-S02).
   const refitTo = useCallback((target: DocumentFrame) => fitToScreen(canvasSize, { width: target.width, height: target.height }), [fitToScreen, canvasSize]);
   const undoWithView = useCallback(() => {
     const edit = undo();
     if (edit) {
+      closeBooleanSession();
       disarmColorPreview();
       setClipboardNotice(null);
       setArrangeNotice(null);
@@ -351,10 +401,11 @@ export function EditorShell({
       if (selection) setRawSelectedObjectIds(selection.before);
     }
     if (edit?.frame) refitTo(edit.frame.before);
-  }, [undo, refitTo, disarmColorPreview, selectionJournal]);
+  }, [undo, refitTo, disarmColorPreview, selectionJournal, closeBooleanSession]);
   const redoWithView = useCallback(() => {
     const edit = redo();
     if (edit) {
+      closeBooleanSession();
       disarmColorPreview();
       setClipboardNotice(null);
       setArrangeNotice(null);
@@ -362,7 +413,7 @@ export function EditorShell({
       if (selection) setRawSelectedObjectIds(selection.after);
     }
     if (edit?.frame) refitTo(edit.frame.after);
-  }, [redo, refitTo, disarmColorPreview, selectionJournal]);
+  }, [redo, refitTo, disarmColorPreview, selectionJournal, closeBooleanSession]);
 
   const selectableObjects = useMemo(
     () => selectableObjectsOf(editable.objectsByLayer, documentLayers, visibility),
@@ -523,7 +574,7 @@ export function EditorShell({
   };
 
   const handleOrientationStep = (step: OrientationStep) => {
-    if (!document || cropDraft !== null) return;
+    if (!document || cropDraft !== null || booleanSession !== null) return;
     setActionNotice(null);
     setOrientationMessage(null);
 
@@ -667,6 +718,9 @@ export function EditorShell({
   const handleSelectTool = (tool: EditorTool) => {
     if (tool === activeTool) return;
     if (pending) cancelPending();
+    // Cambiar de herramienta con una booleana abierta la cancela sin dejar rastro (el preview no entró a la pila de undo).
+    closeBooleanSession();
+    setBooleanNotice(null);
     // Cambiar de herramienta con Fill/Color a medias cancela la previsualización sin dejar rastro (nada entró a la pila de undo).
     if (colorSession) endColorSession();
     setColorMessage(null);
@@ -721,7 +775,9 @@ export function EditorShell({
   // Portapapeles INTERNO de la sesión (ver lib/editor/clipboard.ts); se vacía al cambiar de documento. Copiar NO es un comando (no entra al historial ni
   // activa geometryDirty); cortar, pegar, duplicar y eliminar son UN comando cada uno (atómico: lo que no se puede aplicar se omite y se informa).
   const clipboard = useClipboard(clipboardScope);
-  const clipboardTool = activeTool === "select" || activeTool === "move";
+  // Con una booleana abierta los atajos y las barras de portapapeles/organizar se apagan: los operandos están congelados hasta Apply/Cancel.
+  const selectMoveTool = activeTool === "select" || activeTool === "move";
+  const clipboardTool = selectMoveTool && !booleanOpen;
   const clipboardAvail = useMemo(
     () =>
       clipboardAvailability({
@@ -1062,6 +1118,197 @@ export function EditorShell({
     return () => window.removeEventListener("keydown", onKeyDown);
   });
 
+  // ---- Booleanas (M3-S08) ----
+  // Unión / Diferencia / Intersección / XOR sobre 2+ formas rellenas, con orden de operandos explícito (A, B, C...), capa destino que SIEMPRE decide el
+  // usuario cuando los operandos están en capas distintas, preview del servidor (debounce + AbortController, una petición viva) y Apply/Cancel. Aplicar es
+  // UN comando atómico (objetos + capa nueva); Cancel y el preview no dejan rastro (nada entra a la pila de undo). Ver lib/editor/boolean.ts.
+  const booleanBarReason = useMemo(
+    () => booleanAvailability(selectedObjects, colorState, { suspended: pending !== null }),
+    [selectedObjects, colorState, pending],
+  );
+  const reportBoolean = (kind: BooleanNotice["kind"], text: string) => setBooleanNotice({ scope: clipboardScope, kind, text });
+
+  const startBoolean = (op: BooleanOp) => {
+    if (!document) return;
+    setActionNotice(null);
+    if (booleanSession) {
+      // Ya hay una abierta: elegir otra operación solo cambia la operación (los operandos y su orden se conservan).
+      setBooleanSession({ ...booleanSession, op, message: null });
+      return;
+    }
+    if (booleanBarReason) {
+      reportBoolean("error", booleanBarReason);
+      return;
+    }
+    setBooleanNotice(null);
+    setBooleanSession({
+      op,
+      order: paintOrderIds(
+        selectedObjects.map((object) => object.id),
+        colorState,
+      ),
+      target: "",
+      newHex: "",
+      newGroupId: createId?.() ?? crypto.randomUUID(),
+      keepOriginals: false,
+      toleranceMm: DEFAULT_BOOLEAN_TOLERANCE_MM,
+      message: null,
+    });
+  };
+
+  const updateBoolean = (patch: Partial<BooleanSession>) => setBooleanSession((current) => (current ? { ...current, message: null, ...patch } : current));
+
+  const booleanOperandObjects = useMemo(() => {
+    if (!booleanSession) return [];
+    const byId = new Map<string, (typeof selectableObjects)[number]>();
+    for (const objects of Object.values(colorState.objectsByLayer)) for (const object of objects) byId.set(object.id, object);
+    return booleanSession.order.flatMap((id) => {
+      const object = byId.get(id);
+      return object ? [object] : [];
+    });
+  }, [booleanSession, colorState.objectsByLayer]);
+
+  let booleanTargetChoice: BooleanTargetChoice | null = null;
+  if (booleanSession && booleanSession.target !== "") {
+    booleanTargetChoice =
+      booleanSession.target === NEW_LAYER_VALUE
+        ? { kind: "new", hex: booleanSession.newHex, groupId: booleanSession.newGroupId }
+        : { kind: "layer", groupId: booleanSession.target };
+  }
+  const booleanOp = booleanSession?.op ?? null;
+  const booleanOrder = booleanSession?.order ?? null;
+  const booleanKeep = booleanSession?.keepOriginals ?? false;
+  const booleanToleranceMm = booleanSession?.toleranceMm ?? DEFAULT_BOOLEAN_TOLERANCE_MM;
+  const booleanTargetKey = booleanTargetChoice ? JSON.stringify(booleanTargetChoice) : "";
+  const booleanPlanResult = useMemo(() => {
+    if (booleanOp === null || booleanOrder === null) return null;
+    if (booleanOperandObjects.length < booleanOrder.length) {
+      return { ok: false as const, reason: "missing" as const, message: "Algún operando ya no existe en el documento. No se modificó nada." };
+    }
+    return planBoolean(booleanOperandObjects, colorState, {
+      op: booleanOp,
+      order: booleanOrder,
+      targetLayer: booleanTargetKey ? (JSON.parse(booleanTargetKey) as BooleanTargetChoice) : null,
+      keepOriginals: booleanKeep,
+      tolerance: toleranceFromMm(booleanToleranceMm, mmFactor),
+    });
+  }, [booleanOp, booleanOrder, booleanOperandObjects, colorState, booleanTargetKey, booleanKeep, booleanToleranceMm, mmFactor]);
+  const booleanPlan = booleanPlanResult?.ok ? booleanPlanResult.plan : null;
+  const booleanRejection = booleanPlanResult && !booleanPlanResult.ok ? booleanPlanResult.message : null;
+
+  const booleanPreview = useBooleanOperation({ request: booleanPlan?.request ?? null, requestKey: booleanPlan?.requestKey ?? null });
+  const booleanOutcomeResult = useMemo(
+    () => (booleanPlan && booleanPreview.response ? booleanOutcome(booleanPlan, booleanPreview.response) : null),
+    [booleanPlan, booleanPreview.response],
+  );
+  const booleanOutcomeValue = booleanOutcomeResult?.ok ? booleanOutcomeResult.outcome : null;
+  const booleanPreviewError = booleanPreview.errorMessage ?? (booleanOutcomeResult && !booleanOutcomeResult.ok ? booleanOutcomeResult.error : null);
+
+  // Lo último, para el Apply asíncrono (tras esperar al servidor el estado puede ser otro).
+  const booleanLatest = useRef({ session: booleanSession, plan: booleanPlan });
+  useEffect(() => {
+    booleanLatest.current = { session: booleanSession, plan: booleanPlan };
+  });
+  const booleanApplyingRef = useRef(false);
+
+  const booleanReadyText = (() => {
+    if (!booleanOutcomeValue) return null;
+    const dropped = booleanOutcomeValue.discarded > 0 ? ` (${plural(booleanOutcomeValue.discarded, "pieza despreciable descartada", "piezas despreciables descartadas")}.)` : "";
+    if (booleanOutcomeValue.kind === "empty") return `El resultado está vacío: la operación no deja ninguna forma. No se puede aplicar.${dropped}`;
+    if (booleanOutcomeValue.kind === "unchanged") return "El resto de los operandos no toca a A: A se conserva intacto, con sus curvas.";
+    return `Resultado: ${plural(booleanOutcomeValue.shapes.length, "pieza", "piezas")}.${dropped}`;
+  })();
+
+  const booleanApplyDisabledReason = (() => {
+    if (!booleanSession) return "No hay una operación abierta.";
+    if (booleanRejection) return `Corregí la selección: ${booleanRejection}`;
+    if (!booleanPlan) return "No hay una operación para aplicar.";
+    if (booleanPlan.target === null) return booleanPlan.targetIssue;
+    if (booleanPreviewError) return "El cálculo falló: reintentalo o cambiá la operación.";
+    if (booleanOutcomeValue?.kind === "empty") return "El resultado está vacío: no hay nada que aplicar.";
+    if (booleanOutcomeValue?.kind === "unchanged" && booleanPlan.keepOriginals) return "El resultado es idéntico a A: no hay nada que agregar.";
+    return null;
+  })();
+
+  const handleBooleanApply = async () => {
+    const started = booleanLatest.current;
+    if (!started.session || !started.plan || booleanApplyingRef.current) return;
+    if (started.plan.target === null) {
+      updateBoolean({ message: started.plan.targetIssue });
+      return;
+    }
+    booleanApplyingRef.current = true;
+    setBooleanApplying(true);
+    try {
+      // Si cambió algo desde el último preview, se recalcula primero; si ya está calculado, se usa tal cual.
+      const ensured = await booleanPreview.ensure();
+      const latest = booleanLatest.current;
+      if (!latest.session || !latest.plan) return;
+      if (!ensured.ok) {
+        if (!ensured.aborted) updateBoolean({ message: ensured.message });
+        return;
+      }
+      if (latest.plan.requestKey !== started.plan.requestKey) {
+        updateBoolean({ message: "La operación cambió mientras se calculaba: revisá el resultado y volvé a aplicar." });
+        return;
+      }
+      const plan = latest.plan;
+      const before = selectedObjectIds;
+      const fresh = editable.getSnapshot();
+      const applied = applyBooleanResult(plan, fresh, ensured.response, createId);
+      if (!applied.ok) {
+        updateBoolean({ message: applied.error });
+        return;
+      }
+      const production = applied.production;
+      const result = applyEdit(booleanLabel(applied.summary), (current) => (current.objectsByLayer === fresh.objectsByLayer ? production : null));
+      if (!result.applied) {
+        updateBoolean({ message: result.reason === "blocked" ? "Alguna capa está bloqueada u oculta: no se puede modificar. No se hizo ningún cambio." : describeEditFailure(result) });
+        return;
+      }
+      if (result.edit) selectionJournal.set(result.edit, { before, after: new Set(applied.resultIds) });
+      handleSelectObjects(applied.resultIds, applied.targetGroupId);
+      closeBooleanSession();
+      reportBoolean("ok", booleanNotice(applied.summary));
+    } finally {
+      booleanApplyingRef.current = false;
+      setBooleanApplying(false);
+    }
+  };
+
+  // Apply = Enter, Cancel = Escape (como Crop y Fill/Color). Enter dentro de un campo, lista desplegable o sobre un botón conserva su significado propio.
+  useEffect(() => {
+    if (!booleanOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeBooleanSession();
+      } else if (event.key === "Enter") {
+        if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.tagName === "BUTTON" || target.isContentEditable)) return;
+        event.preventDefault();
+        if (booleanApplyDisabledReason === null) void handleBooleanApply();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
+
+  const booleanPanelOperands = booleanOperandObjects.map((object, index) => ({
+    id: object.id,
+    letter: operandLetter(index),
+    name: describeOperand(object, index, colorState).name,
+    colorHex: colorState.layers.find((layer) => layer.groupId === object.layerGroupId)?.colorHex ?? "#999999",
+  }));
+  const booleanOverlay = booleanSession
+    ? {
+        operands: booleanOperandObjects.map((object, index) => ({ letter: operandLetter(index), object })),
+        shapes: booleanOutcomeValue?.shapes ?? [],
+        color: booleanPlan?.target?.colorHex ?? null,
+      }
+    : undefined;
+
   // ---- Draw / Erase (M3-S04) ----
   // Toda geometría nueva pertenece a una capa identificada (la activa, o una «Dibujo» nueva en el mismo comando); Erase resta geometría real en el
   // servidor. La orquestación (borrador de la pluma, pipelines trazo -> servidor -> UN comando, teclado) vive en `useDrawEraseTools`.
@@ -1255,6 +1502,7 @@ export function EditorShell({
                   onAction={performArrangeAction}
                 />
               )}
+              {selectMoveTool && <BooleanBar unavailableReason={booleanBarReason} activeOp={booleanSession?.op ?? null} notice={booleanNoticeShown} onStart={startBoolean} />}
               <VectorCanvas
                 layers={documentLayers}
                 visibility={visibility}
@@ -1271,7 +1519,7 @@ export function EditorShell({
                 onZoomBy={zoomBy}
                 onPanBy={panBy}
                 onMeasure={setCanvasSize}
-                editingSuspended={pending !== null}
+                editingSuspended={pending !== null || booleanOpen}
                 cropFrame={cropDraft}
                 cropKeepRatio={cropKeepRatio}
                 onCropFrameChange={proposeCropFrame}
@@ -1282,6 +1530,7 @@ export function EditorShell({
                 onDeleteSelection={() => performClipboardAction("delete")}
                 toolSurface={drawEraseSurface}
                 pathSurface={pathSurface}
+                booleanOverlay={booleanOverlay}
                 onEditPath={(objectId, layerGroupId) => {
                   handleSelectObjects([objectId], layerGroupId);
                   handleSelectTool("path");
@@ -1323,6 +1572,47 @@ export function EditorShell({
               onPreset={handleCropPreset}
               onApply={handleApplyCrop}
               onCancel={closeCrop}
+            />
+          )}
+
+          {booleanSession && (
+            <BooleanPanel
+              op={booleanSession.op}
+              onOpChange={(op) => updateBoolean({ op })}
+              operands={booleanPanelOperands}
+              onMoveOperand={(index, delta) => updateBoolean({ order: moveOperand(booleanSession.order, index, delta) })}
+              onReverse={() => updateBoolean({ order: reverseOperands(booleanSession.order) })}
+              layersDiffer={booleanPlan?.layersDiffer ?? new Set(booleanOperandObjects.map((object) => object.layerGroupId)).size > 1}
+              resolvedTarget={booleanPlan?.target ?? null}
+              targetCandidates={booleanTargetCandidates(booleanOperandObjects, colorState.layers).map(({ layer, isOperandLayer }) => ({
+                groupId: layer.groupId,
+                name: layer.name,
+                colorHex: layer.colorHex,
+                isOperandLayer,
+              }))}
+              targetValue={booleanSession.target}
+              onTargetChange={(value) => updateBoolean({ target: value })}
+              newColorHex={booleanSession.newHex}
+              onNewColorChange={(hex) => updateBoolean({ newHex: hex })}
+              targetIssue={booleanPlan?.targetIssue ?? null}
+              keepOriginals={booleanSession.keepOriginals}
+              onKeepOriginalsChange={(value) => updateBoolean({ keepOriginals: value })}
+              toleranceMm={booleanSession.toleranceMm}
+              unitLabel={mmFactor === null ? "u" : "mm"}
+              onToleranceChange={(value) => updateBoolean({ toleranceMm: value })}
+              preview={{
+                status: booleanPreviewError ? "error" : booleanPreview.status,
+                readyText: booleanReadyText,
+                empty: booleanOutcomeValue?.kind === "empty",
+                errorMessage: booleanPreviewError,
+              }}
+              rejection={booleanRejection}
+              message={booleanSession.message}
+              applying={booleanApplying}
+              applyDisabledReason={booleanApplyDisabledReason}
+              onApply={() => void handleBooleanApply()}
+              onCancel={closeBooleanSession}
+              onRetry={booleanPreview.retry}
             />
           )}
 

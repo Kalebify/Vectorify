@@ -6,6 +6,8 @@ public enum GeometryOperation
     Union,
     Difference,
     Intersection,
+    /// <summary>M3-S08: región común a TODAS las geometrías (subjects + operands), resultado combinado. Wire: <c>intersection_all</c>.</summary>
+    IntersectionAll,
     Xor,
     Normalize,
 }
@@ -17,6 +19,7 @@ public static class GeometryOperationNames
         GeometryOperation.Union => "union",
         GeometryOperation.Difference => "difference",
         GeometryOperation.Intersection => "intersection",
+        GeometryOperation.IntersectionAll => "intersection_all",
         GeometryOperation.Xor => "xor",
         GeometryOperation.Normalize => "normalize",
         _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, null),
@@ -29,6 +32,7 @@ public static class GeometryOperationNames
             case "union": operation = GeometryOperation.Union; return true;
             case "difference": operation = GeometryOperation.Difference; return true;
             case "intersection": operation = GeometryOperation.Intersection; return true;
+            case "intersection_all": operation = GeometryOperation.IntersectionAll; return true;
             case "xor": operation = GeometryOperation.Xor; return true;
             case "normalize": operation = GeometryOperation.Normalize; return true;
             default: operation = default; return false;

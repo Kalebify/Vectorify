@@ -302,7 +302,7 @@ builder.Services.AddSingleton<ICheckParameterValidator, CheckParameterValidator>
 builder.Services.AddScoped<ICheckService, CheckService>();
 
 // Servicio de geometría del editor (M3-S04, ADR D4 de docs/ADR_EDITOR_MVP3.md): operaciones booleanas SIN estado
-// (union/difference/intersection/xor/normalize) sobre anillos de polígonos y polilíneas en unidades de documento,
+// (union/difference/intersection/intersection_all/xor/normalize) sobre anillos de polígonos y polilíneas en unidades de documento,
 // calculadas con Shapely en el motor Python. A diferencia de Check no localiza ningún SVG ni toca el storage: recibe
 // coordenadas y devuelve coordenadas, así que no necesita IUserContext ni base de datos. Límites de entrada
 // (Geometry:*) validados acá antes de llamar a Python, cliente Python dedicado con su propio timeout. Lo reusan

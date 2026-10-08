@@ -16,6 +16,7 @@ import type { DocumentFrame, EditableDocument, EditorObject, Point, Rect } from 
 import { screenToleranceToDocument } from "../../lib/editor/units";
 import { screenToDocument, type ViewportParams } from "../../lib/editor/viewport";
 import { IDENTITY_MATRIX, type AffineMatrix } from "../../lib/svgTransform";
+import { BooleanOverlay, type BooleanOverlayProps } from "./BooleanOverlay";
 import { EditorLayerNodes } from "./EditorLayerNodes";
 import type { EditorTool } from "./EditorToolbar";
 import { PathSurface, type PathSurfaceProps } from "./PathSurface";
@@ -87,6 +88,8 @@ interface VectorCanvasProps {
   toolSurface?: Omit<ToolSurfaceProps, "viewport" | "suspended" | "pool" | "lockedLayerIds">;
   /** Path (M3-S05): la superficie de edición de nodos del objeto seleccionado. Igual que `toolSurface`, el shell posee el estado; el canvas aporta viewport, pool de hit-test y locks. */
   pathSurface?: Omit<PathSurfaceProps, "viewport" | "suspended" | "pool">;
+  /** Booleana abierta (M3-S08): insignias A/B/C de los operandos + preview del resultado. Solo lectura (no captura el puntero); el shell posee todo el estado. */
+  booleanOverlay?: Omit<BooleanOverlayProps, "viewport">;
   /** Doble click sobre un objeto con Select (M3-S05): el shell lo selecciona y pasa a la herramienta Path. */
   onEditPath?: (objectId: string, layerGroupId: string) => void;
   /**
@@ -198,6 +201,7 @@ export function VectorCanvas({
   onToolShortcut,
   toolSurface,
   pathSurface,
+  booleanOverlay,
   onEditPath,
   onDeleteSelection,
 }: VectorCanvasProps) {
@@ -1001,6 +1005,7 @@ export function VectorCanvas({
       {hasContainerSize && toolSurface && tool === toolSurface.tool && (
         <ToolSurface {...toolSurface} viewport={viewport} suspended={spacePanHeld || editingSuspended} pool={selectableObjects} lockedLayerIds={lockedLayerIds} />
       )}
+      {hasContainerSize && booleanOverlay && <BooleanOverlay {...booleanOverlay} viewport={viewport} />}
       {hasContainerSize && pathSurface && tool === "path" && <PathSurface {...pathSurface} viewport={viewport} suspended={spacePanHeld || editingSuspended} pool={selectableObjects} />}
 
       {lockedSelected.length > 0 && (

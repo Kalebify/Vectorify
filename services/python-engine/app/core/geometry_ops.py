@@ -29,6 +29,20 @@ Garantías del resultado (lo que el cliente da por cierto):
   disjunto de los operandos vuelve IDÉNTICO (`changed: false`); uno totalmente
   cubierto vuelve vacío; uno partido vuelve en varias piezas.
 
+Contrato N-ARIO (M3-S08, booleanas del editor). Los operandos de la UI (A, B, C, ...) viajan así:
+- `union`: A ∪ B ∪ C ... = unión de subjects + operands (un resultado `combined`).
+- `difference`: subjects = [A], operands = [B, C, ...] -> A − (B ∪ C ∪ ...). A es la base y el orden
+  importa (A − B != B − A); `changed: false` si ningún operando toca a A.
+- `intersection`: sigue siendo "cada subject ∩ la UNIÓN de los operands" (lo que dejó S04; no se
+  reinterpreta para no romper a los clientes que ya lo usan).
+- `intersection_all` (NUEVA): región común a TODAS las geometrías (subjects + operands, >= 2); un
+  resultado `combined`. Si alguna es vacía o dos no se solapan, el resultado es vacío. Dos polígonos
+  que solo comparten un borde NO dan resultado (un borde común no es un área): las líneas/puntos
+  resultantes de entradas poligonales se descartan.
+- `xor`: región cubierta por un número IMPAR de geometrías (subjects + operands). La diferencia
+  simétrica es asociativa y conmutativa, así que el pliegue de a pares da exactamente esa paridad
+  impar (con 2 operandos es el XOR clásico; con 3, A+B+C menos las zonas cubiertas exactamente 2 veces).
+
 Nunca "arregla" en silencio nada que no deba: la geometría de ENTRADA
 autointersectante se hace válida (`make_valid`) como parte del contrato (es la
 operación `normalize`, y los trazos a mano alzada la necesitan), pero el
@@ -52,6 +66,7 @@ MIN_QUAD_SEGS = 2
 MAX_QUAD_SEGS = 64
 
 _PER_SUBJECT_OPERATIONS = ("difference", "intersection", "normalize")
+_COMBINED_OPERATIONS = ("union", "xor", "intersection_all")
 
 
 def _dedupe(points: list, closed: bool) -> list[tuple[float, float]]:
@@ -217,11 +232,32 @@ def _same_geometry(left: BaseGeometry, right: BaseGeometry) -> bool:
         return False
 
 
+def _run_intersection_all(subjects: list[dict], operands: list[dict], geometries: list[BaseGeometry], tolerance: float) -> dict:
+    """Región común a TODAS las geometrías (subjects + operands). Una geometría vacía/degenerada
+    hace vacía la intersección (a diferencia de union/xor, donde "no aporta nada"): participa como
+    el conjunto vacío, que es lo que dice la matemática."""
+    if len(geometries) < 2:
+        raise InvalidParametersError("La intersección común necesita al menos dos geometrías (subjects + operands).")
+    common: BaseGeometry = geometries[0]
+    for geometry in geometries[1:]:
+        if common.is_empty or geometry.is_empty:
+            common = GeometryCollection()
+            break
+        common = common.intersection(geometry)
+    # Un borde o un vértice compartido entre polígonos no es un área: solo hay líneas si alguna entrada lo es.
+    any_line = any(item["type"] in ("line", "bufferedLine") for item in [*subjects, *operands])
+    pieces = _finalize(common, tolerance, polygons=not any_line, lines=any_line)
+    return {"scope": "combined", "results": [{"subject_index": None, "changed": True, "geometries": pieces}]}
+
+
 def run_boolean(operation: str, subjects: list[dict], operands: list[dict], tolerance: float) -> dict:
     """Ejecuta `operation` y devuelve `{"scope", "results"}` con `results` = lista de
     `{"subject_index", "changed", "geometries"}` (una entrada por subject en difference/intersection/
-    normalize; una sola entrada con `subject_index: None` en union/xor). `subjects`/`operands` son los
-    dicts del contrato (`type` + `coordinates`/`points`+`radius`), ya validados por el esquema."""
+    normalize; una sola entrada con `subject_index: None` en union/xor/intersection_all). `subjects`/
+    `operands` son los dicts del contrato (`type` + `coordinates`/`points`+`radius`), ya validados por
+    el esquema."""
+    if operation not in (*_PER_SUBJECT_OPERATIONS, *_COMBINED_OPERATIONS):
+        raise InvalidParametersError(f"Operación desconocida: {operation!r}.")
     if tolerance <= 0 or not math.isfinite(tolerance):
         raise InvalidParametersError("La tolerancia debe ser un número finito mayor que 0.")
 
@@ -255,6 +291,8 @@ def run_boolean(operation: str, subjects: list[dict], operands: list[dict], tole
         return {"scope": "per_subject", "results": results}
 
     everything = [*subject_geometries, *operand_geometries]
+    if operation == "intersection_all":
+        return _run_intersection_all(subjects, operands, everything, tolerance)
     if operation == "union":
         combined = _union(everything)
     else:  # xor: se pliega en orden (definido) sobre subjects y luego operands

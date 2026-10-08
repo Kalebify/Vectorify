@@ -77,12 +77,12 @@ public static class GeometryEndpoints
         .Produces(StatusCodes.Status415UnsupportedMediaType)
         .Produces<ApiErrorResponse>(StatusCodes.Status503ServiceUnavailable)
         .Produces<ApiErrorResponse>(StatusCodes.Status504GatewayTimeout)
-        .WithSummary("Operaciones booleanas sobre anillos de polígonos y polilíneas (union, difference, intersection, xor, normalize).")
+        .WithSummary("Operaciones booleanas sobre anillos de polígonos y polilíneas (union, difference, intersection, intersection_all, xor, normalize).")
         .WithDescription(
             "Intercambia coordenadas puras en unidades de documento (nunca path data): el cliente aplana sus curvas con " +
             "una tolerancia explícita y manda `subjects` (polygon = anillos con regla par-impar / line) y `operands` " +
             "(además bufferedLine = pincel de borrador con radio). La respuesta trae, por subject (difference/" +
-            "intersection/normalize) o en conjunto (union/xor), 0 o más piezas ya validadas, sin NaN y en orden " +
+            "intersection/normalize) o en conjunto (union/xor/intersection_all), 0 o más piezas ya validadas, sin NaN y en orden " +
             "determinista; `changed` es false cuando el resultado es igual al subject. Sin estado: no persiste nada. " +
             "Límites: 500 subjects y 500 000 vértices en total (400 con código claro). Python caído => 503 " +
             "engine_unavailable; timeout => 504.");

@@ -4,7 +4,7 @@ namespace Vectorify.Api.Contracts;
 
 /// <summary>
 /// Cuerpo JSON de POST /api/v2/geometry/boolean (M3-S04, ADR D4). <see cref="Operation"/>: union | difference |
-/// intersection | xor | normalize (case-insensitive). <see cref="Subjects"/> son polygon/line; <see cref="Operands"/>
+/// intersection | intersection_all | xor | normalize (case-insensitive; intersection_all = región común a TODAS las formas, M3-S08). <see cref="Subjects"/> son polygon/line; <see cref="Operands"/>
 /// además admiten bufferedLine (pincel de borrador). <see cref="Tolerance"/> &gt; 0 está en UNIDADES DE DOCUMENTO.
 /// Los campos son anulables y <c>JsonElement</c> a propósito: la validación es explícita y devuelve
 /// <see cref="ApiErrorResponse"/> en vez de un 400 genérico del binder (ver GeometryRequestValidator).
