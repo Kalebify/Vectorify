@@ -1,0 +1,18 @@
+{
+  "card_id": "3c1d77b2-6398-819b-938f-c94545aaa5ff",
+  "card_url": "https://app.notion.com/p/3c1d77b26398819b938fc94545aaa5ff",
+  "title": "M3-S05 · Path / Nodes / Bézier",
+  "stack": "Frontend, Vector -- modo Path: modelo de nodos puro (lib/editor/nodes.ts), mover anchors/handles, De Casteljau, agregar/eliminar nodos, cerrar/abrir, Inspector en mm; un gesto = un comando",
+  "branch": "sprint/3e8d77b2-m3-s05-path-nodes",
+  "column": "Doing",
+  "phase": "implementation",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "pr_url": null,
+  "started_at": "2026-10-08T00:00:00Z",
+  "exceptions": [
+    "Corrida autonoma de MVP 3 (S01..S16) confirmada por el usuario: mergea el orquestador; ante un error la tarjeta pasa a Bloqueado y se sigue.",
+    "DECISION: edicion de nodos en el espacio local del objeto (la matrix no se hornea); sin reserializacion de objetos no editados; precision plena (6 decimales) documentada.",
+    "DECISION: eliminar un nodo cambia la forma (se unen los vecinos conservando sus handles externos); eliminacion minima protege subpaths con pocos nodos."
+  ]
+}
