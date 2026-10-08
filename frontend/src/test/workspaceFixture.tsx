@@ -66,6 +66,8 @@ export interface WorkspaceOptions {
   lockedB?: boolean;
   /** Responde al servicio de geometría; el cuerpo ya viene parseado. Puede devolver una promesa que el test resuelve a mano. */
   geometry?: (body: Record<string, unknown>) => Response | Promise<Response>;
+  /** SVG propio de una capa (M3-S05: los tests de Path necesitan curvas, compuestos y matrices); sin él se usa el SVG por defecto de la capa. */
+  svg?: Partial<Record<"A" | "B" | "C", string>>;
 }
 
 function layerState(groupId: string, options: WorkspaceOptions) {
@@ -88,7 +90,7 @@ export function installWorkspaceFetch(options: WorkspaceOptions = {}) {
     }
     if (method !== "GET") return jsonResponse({ entries: GROUPS.map((group, index) => ({ groupId: group.groupId, order: index, visible: true, locked: false, name: null })) });
     for (const group of GROUPS) {
-      if (url.endsWith(`/vectors/${group.vectorId}`)) return svgResponse(group.svg);
+      if (url.endsWith(`/vectors/${group.vectorId}`)) return svgResponse(options.svg?.[group.groupId === GROUP_A_ID ? "A" : group.groupId === GROUP_B_ID ? "B" : "C"] ?? group.svg);
     }
     if (url.includes("/layers/consolidated")) {
       return jsonResponse({

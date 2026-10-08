@@ -72,12 +72,12 @@ function defaultCreateId(): string {
   return crypto.randomUUID();
 }
 
-function isTextEntry(target: EventTarget | null): boolean {
+export function isTextEntry(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null;
   return Boolean(element && (element.tagName === "INPUT" || element.tagName === "TEXTAREA" || element.tagName === "SELECT" || element.tagName === "BUTTON" || element.isContentEditable));
 }
 
-function describeEditFailure(result: ApplyEditResult): string {
+export function describeEditFailure(result: ApplyEditResult): string {
   if (result.reason === "blocked") return "La capa está bloqueada u oculta: no se puede modificar. Desbloqueala o mostrala en el panel de Capas. No se hizo ningún cambio.";
   if (result.reason === "gesture_active") return "Hay una transformación pendiente: aplicala (Apply) o cancelala (Cancel) antes de editar.";
   return "No hubo cambios para aplicar.";
