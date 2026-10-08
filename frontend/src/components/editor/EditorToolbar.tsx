@@ -1,4 +1,4 @@
-export type EditorTool = "select" | "pan" | "move" | "crop";
+export type EditorTool = "select" | "pan" | "move" | "crop" | "fill" | "color" | "eyedropper";
 
 interface ToolDefinition {
   id: EditorTool | string;
@@ -14,7 +14,9 @@ interface ToolDefinition {
  * TODAS presentes y visibles (nunca ocultas). M3-S01 habilita Select
  * (seleccionar + mover + escalar/rotar con handles) y Move; Pan ya existía.
  * M3-S02 habilita Crop (recorta el ÁREA DE TRABAJO del documento, nunca el
- * original). El resto queda deshabilitado con `disabled` + `title`/`aria-describedby`
+ * original). M3-S03 habilita Fill (aplicar un color a la selección: mueve los objetos a la capa de ese color) y Color (panel de
+ * Recolor con alcance explícito selección/capa/documento) y AGREGA el Eyedropper (atajo I; el wireframe obligatorio original no lo
+ * traía: se hace visible acá porque Fill/Recolor lo necesitan para tomar un color EXISTENTE del documento). El resto queda deshabilitado con `disabled` + `title`/`aria-describedby`
  * indicando que llega en MVP3 (cada una en su tarjeta).
  *
  * **Move (M3-S01)** = "mover sin handles": mismo arrastre, Shift+click y flechas
@@ -26,8 +28,9 @@ const TOOLS: ToolDefinition[] = [
   { id: "pan", icon: "✋", label: "Pan", enabled: true, shortcut: "Espacio (mantener) o H" },
   { id: "crop", icon: "✂", label: "Crop", enabled: true, shortcut: "recortar el área de trabajo; el original no se toca" },
   { id: "move", icon: "↔", label: "Move", enabled: true, shortcut: "mover sin handles" },
-  { id: "fill", icon: "▣", label: "Fill", enabled: false },
-  { id: "color", icon: "◉", label: "Color", enabled: false },
+  { id: "fill", icon: "▣", label: "Fill", enabled: true, shortcut: "aplicar un color a la selección" },
+  { id: "color", icon: "◉", label: "Color", enabled: true, shortcut: "recolorear la selección, una capa o el documento" },
+  { id: "eyedropper", icon: "💧", label: "Eyedropper", enabled: true, shortcut: "I -- tomar el color de la capa de un objeto" },
   { id: "draw", icon: "✎", label: "Draw", enabled: false },
   { id: "erase", icon: "⌫", label: "Erase", enabled: false },
   { id: "offset", icon: "⤢", label: "Offset", enabled: false },

@@ -3,23 +3,26 @@ import { describe, expect, it, vi } from "vitest";
 import { EditorToolbar } from "./EditorToolbar";
 
 describe("EditorToolbar — shell completo del wireframe", () => {
-  it("muestra los 11 íconos del wireframe, todos con nombre accesible", () => {
+  it("muestra los 11 íconos del wireframe + el Eyedropper (M3-S03), todos con nombre accesible", () => {
     render(<EditorToolbar activeTool="select" onSelectTool={vi.fn()} />);
 
-    for (const label of ["Select", "Pan", "Crop", "Move", "Fill", "Color", "Draw", "Erase", "Offset", "Cut", "Path"]) {
+    for (const label of ["Select", "Pan", "Crop", "Move", "Fill", "Color", "Eyedropper", "Draw", "Erase", "Offset", "Cut", "Path"]) {
       expect(screen.getByRole("button", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
   });
 
-  it("Select, Pan, Move (M3-S01) y Crop (M3-S02) están habilitados; el resto está deshabilitado pero VISIBLE, con tooltip de MVP3", () => {
+  it("Select, Pan, Move (M3-S01), Crop (M3-S02) y Fill, Color, Eyedropper (M3-S03) están habilitados; el resto está deshabilitado pero VISIBLE, con tooltip de MVP3", () => {
     render(<EditorToolbar activeTool="select" onSelectTool={vi.fn()} />);
 
     expect(screen.getByRole("button", { name: /^Select/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Pan/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Move/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Crop/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Fill/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Color/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Eyedropper/ })).toBeEnabled();
 
-    for (const label of ["Fill", "Color", "Draw", "Erase", "Offset", "Cut", "Path"]) {
+    for (const label of ["Draw", "Erase", "Offset", "Cut", "Path"]) {
       const button = screen.getByRole("button", { name: new RegExp(`^${label}`) });
       expect(button).toBeDisabled();
       expect(button).toHaveAttribute("title", expect.stringContaining("MVP3"));
@@ -67,6 +70,24 @@ describe("EditorToolbar — shell completo del wireframe", () => {
     rerender(<EditorToolbar activeTool="crop" onSelectTool={onSelectTool} />);
     expect(screen.getByRole("button", { name: /^Crop/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: /^Select/ })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("Fill, Color y Eyedropper (M3-S03) llaman a onSelectTool, se marcan con aria-pressed y el Eyedropper anuncia su atajo I", () => {
+    const onSelectTool = vi.fn();
+    const { rerender } = render(<EditorToolbar activeTool="select" onSelectTool={onSelectTool} />);
+
+    expect(screen.getByRole("button", { name: /^Eyedropper/ })).toHaveAttribute("title", expect.stringContaining("I --"));
+    for (const [label, tool] of [
+      ["Fill", "fill"],
+      ["Color", "color"],
+      ["Eyedropper", "eyedropper"],
+    ] as const) {
+      fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${label}`) }));
+      expect(onSelectTool).toHaveBeenLastCalledWith(tool);
+      rerender(<EditorToolbar activeTool={tool} onSelectTool={onSelectTool} />);
+      expect(screen.getByRole("button", { name: new RegExp(`^${label}`) })).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByRole("button", { name: /^Select/ })).toHaveAttribute("aria-pressed", "false");
+    }
   });
 
   it("clickear una herramienta deshabilitada no llama a onSelectTool", () => {

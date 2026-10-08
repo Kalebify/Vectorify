@@ -1,6 +1,7 @@
 import { useId, useMemo, useState } from "react";
 import type { VectorDocumentLayer } from "../../hooks/useVectorDocument";
 import { matrixRotationDegrees } from "../../lib/editor/matrix";
+import { normalizeHex } from "../../lib/editor/colors";
 import { groupBounds, proportionalBounds } from "../../lib/editor/transform";
 import type { EditorObject, Rect } from "../../lib/editor/types";
 import { formatDisplayNumber, fromMm, parseNumericInput, toMm } from "../../lib/editor/units";
@@ -60,6 +61,8 @@ export function ObjectInspector({ objects, layers, mmPerUnit, onApplyBounds, onR
   const lockedLayers = layerIds.filter((id) => layerById.get(id)?.locked);
   const isLocked = lockedLayers.length > 0;
   const layerLabel = layerIds.length === 1 ? (layerById.get(layerIds[0])?.name ?? "—") : `Varias (${layerIds.length})`;
+  // Color (M3-S03): el de la CAPA del objeto (la identidad del color), tomado de la lista efectiva -- se actualiza apenas Fill/Recolor lo cambian.
+  const singleLayer = layerIds.length === 1 ? layerById.get(layerIds[0]) : undefined;
 
   const currentRotation = !isMulti && objects[0] ? matrixRotationDegrees(objects[0].matrix) : null;
   const currentValues: Record<FieldName, number | null> = {
@@ -205,6 +208,20 @@ export function ObjectInspector({ objects, layers, mmPerUnit, onApplyBounds, onR
         <div>
           <dt>Capa</dt>
           <dd>{layerLabel}</dd>
+        </div>
+        <div>
+          <dt>Color</dt>
+          <dd>
+            {singleLayer ? (
+              <>
+                <span className="object-inspector__swatch" style={{ backgroundColor: singleLayer.colorHex }} aria-hidden="true" /> {normalizeHex(singleLayer.colorHex) ?? singleLayer.colorHex}
+              </>
+            ) : layerIds.length > 1 ? (
+              "Varios"
+            ) : (
+              "—"
+            )}
+          </dd>
         </div>
       </dl>
 

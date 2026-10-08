@@ -237,8 +237,15 @@
 
 .vector-canvas-2--select,
 .vector-canvas-2--move,
-.vector-canvas-2--crop {
+.vector-canvas-2--crop,
+.vector-canvas-2--color {
   cursor: default;
+}
+
+/* M3-S03: Fill apunta al objeto a rellenar; el Eyedropper toma un color del modelo. */
+.vector-canvas-2--fill,
+.vector-canvas-2--eyedropper {
+  cursor: crosshair;
 }
 
 /* ---------- M3-S02: Rotate/Flip (barra contextual) y Crop (panel) ---------- */
@@ -345,6 +352,143 @@
 
 .crop-panel__actions {
   justify-content: flex-end;
+}
+
+/* ---------- M3-S03: Fill / Color / Eyedropper ---------- */
+
+.color-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-2);
+  padding-bottom: var(--editor-space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.color-panel__domain,
+.color-panel__active,
+.color-panel__matches p,
+.color-panel__scope-fixed,
+.color-panel__source p,
+.color-panel__summary ul,
+.color-panel__summary p,
+.color-panel__confirm p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.color-panel__active {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--editor-space-1);
+}
+
+.color-panel__active-swatch,
+.object-inspector__swatch {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.color-panel__free {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: var(--editor-space-1) var(--editor-space-2);
+  font-size: 12px;
+}
+
+.color-panel__free input[type="text"] {
+  min-width: 0;
+}
+
+.color-panel__matches,
+.color-panel__scope,
+.color-panel__merge {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-1);
+  margin: 0;
+  padding: var(--editor-space-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.color-panel__scope-option,
+.color-panel__merge label {
+  display: flex;
+  align-items: center;
+  gap: var(--editor-space-1);
+}
+
+.color-panel__match,
+.color-panel__apply,
+.color-panel__cancel {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: var(--editor-space-1) var(--editor-space-2);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.color-panel__apply {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.color-panel__apply:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.color-panel__summary ul {
+  padding-left: var(--editor-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-1);
+}
+
+.color-panel__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--editor-space-1);
+}
+
+.color-panel__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-2);
+  padding: var(--editor-space-2);
+  border: 1px solid var(--warn);
+  background: var(--warn-bg);
+  border-radius: 6px;
+}
+
+.palette-bar__swatch--new {
+  border-style: dashed;
+}
+
+.palette-bar__swatch--active-color {
+  outline: 2px solid var(--text-h);
+  outline-offset: 2px;
+}
+
+.editor-layers-panel__new-badge {
+  flex: 0 0 auto;
+  padding: 0 var(--editor-space-1);
+  border: 1px dashed var(--accent);
+  border-radius: 4px;
+  font-size: 10px;
+  color: var(--accent);
 }
 
 /* ---------- M3-S01: feedback del canvas editable ---------- */

@@ -66,3 +66,44 @@ describe("PaletteBar — swatches de la paleta confirmada", () => {
     expect(screen.getByRole("button", { name: /Agregar color/ })).toBeDisabled();
   });
 });
+
+describe("PaletteBar — capas creadas por el editor y color activo (M3-S03)", () => {
+  it("una capa NUEVA (isNew) aparece al instante con el estilo punteado y 'capa nueva' en su nombre accesible; las del servidor no", () => {
+    render(
+      <PaletteBar
+        layers={[layer(), layer({ groupId: "group-n", name: "Color #00FF00", colorHex: "#00FF00", isNew: true, order: 1 })]}
+        selectedGroupId={null}
+        onSelectGroup={vi.fn()}
+      />,
+    );
+    const created = screen.getByRole("button", { name: /Color #00FF00 \(#00FF00\) \(capa nueva\)/ });
+    expect(created).toHaveClass("palette-bar__swatch--new");
+    expect(created).toHaveAttribute("title", expect.stringContaining("capa nueva, sin guardar"));
+    expect(screen.getByRole("button", { name: /Rojo/ })).not.toHaveClass("palette-bar__swatch--new");
+    expect(screen.getByRole("button", { name: /Rojo/ }).getAttribute("aria-label")).not.toMatch(/capa nueva/);
+  });
+
+  it("refleja un color cambiado (misma capa, otro hex) en el swatch y su nombre accesible", () => {
+    const { rerender } = render(<PaletteBar layers={[layer()]} selectedGroupId={null} onSelectGroup={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /Rojo \(#ff0000\)/ })).toHaveStyle({ backgroundColor: "#ff0000" });
+    rerender(<PaletteBar layers={[layer({ colorHex: "#00ff00" })]} selectedGroupId={null} onSelectGroup={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /Rojo \(#00ff00\)/ })).toHaveStyle({ backgroundColor: "#00ff00" });
+  });
+
+  it("marca la capa del color activo (no solo con color: también en el nombre accesible)", () => {
+    render(
+      <PaletteBar layers={[layer(), layer({ groupId: "group-b", name: "Rojo 2", colorHex: "#ff0000", order: 1 })]} selectedGroupId={null} onSelectGroup={vi.fn()} activeColorGroupId="group-b" />,
+    );
+    const active = screen.getByRole("button", { name: /Rojo 2 .*\(color activo\)/ });
+    expect(active).toHaveClass("palette-bar__swatch--active-color");
+    // Mismo hex, otra capa: NO se marca (la identidad es la capa, no el hex).
+    expect(screen.getByRole("button", { name: /^Seleccionar el color Rojo \(#ff0000\)$/ })).not.toHaveClass("palette-bar__swatch--active-color");
+  });
+
+  it("nombre del grupo, etiqueta de los swatches y '[+]' son configurables (el panel de color reutiliza la barra)", () => {
+    render(<PaletteBar layers={[layer()]} selectedGroupId="group-a" onSelectGroup={vi.fn()} ariaLabel="Colores de la paleta para aplicar" swatchLabel={(l) => `Usar ${l.name}`} showAdd={false} />);
+    expect(screen.getByRole("group", { name: "Colores de la paleta para aplicar" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Usar Rojo" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Agregar color/ })).not.toBeInTheDocument();
+  });
+});
