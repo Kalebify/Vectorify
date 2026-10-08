@@ -13,6 +13,8 @@ interface ClipboardBarProps {
   clipboardSize: number;
   notice: ClipboardNotice | null;
   onAction: (action: ClipboardAction) => void;
+  /** Atajos de otras barras del editor (M3-S07: z-order) que se listan en el MISMO panel "Atajos". */
+  extraShortcuts?: readonly { label: string; keys: string }[];
 }
 
 /** Texto visible de cada botón (el nombre accesible completo, con el atajo, sale de `CLIPBOARD_SHORTCUTS`). */
@@ -34,7 +36,7 @@ const BUTTON_TEXT: Record<ClipboardAction, string> = {
  *
  * El portapapeles es interno a la sesión del editor: no usa el del sistema operativo.
  */
-export function ClipboardBar({ availability, clipboardSize, notice, onAction }: ClipboardBarProps) {
+export function ClipboardBar({ availability, clipboardSize, notice, onAction, extraShortcuts = [] }: ClipboardBarProps) {
   const summary = notice?.kind === "ok" ? notice.text : clipboardSize === 0 ? "Portapapeles vacío." : `Portapapeles: ${clipboardSize === 1 ? "1 objeto" : `${clipboardSize} objetos`}.`;
 
   return (
@@ -68,6 +70,11 @@ export function ClipboardBar({ availability, clipboardSize, notice, onAction }: 
         <ul>
           {CLIPBOARD_SHORTCUTS.map(({ action, label, keys }) => (
             <li key={action}>
+              <kbd>{keys}</kbd> {label}
+            </li>
+          ))}
+          {extraShortcuts.map(({ label, keys }) => (
+            <li key={keys}>
               <kbd>{keys}</kbd> {label}
             </li>
           ))}

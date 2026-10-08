@@ -9,6 +9,16 @@ import { useManufacturingOperations } from "../../hooks/useManufacturingOperatio
 import { useVectorDocument, type VectorDocumentLayer } from "../../hooks/useVectorDocument";
 import { useWorkspaceSave } from "../../hooks/useWorkspaceSave";
 import {
+  ARRANGE_SHORTCUTS,
+  arrangeAvailability,
+  describeArrange,
+  matchArrangeShortcut,
+  runArrange,
+  zOrderActionId,
+  type AlignReference,
+  type ArrangeActionId,
+} from "../../lib/editor/arrange";
+import {
   buildClipboard,
   clipboardAvailability,
   describeSkipped,
@@ -70,6 +80,7 @@ import { groupBounds, groupCenter, rotateAbout, setBounds } from "../../lib/edit
 import type { DocumentFrame, EditorEdit, EditProduction, Point, Rect } from "../../lib/editor/types";
 import { formatDisplayNumber, mmPerUnit as mmPerUnitOf, toMm } from "../../lib/editor/units";
 import { svgToDataUrl } from "../../lib/svgToDataUrl";
+import { ArrangeBar, type ArrangeNotice } from "./ArrangeBar";
 import { ClipboardBar, type ClipboardNotice } from "./ClipboardBar";
 import { ColorPanel, EyedropperPanel } from "./ColorPanel";
 import { CropPanel, type CropPreset } from "./CropPanel";
@@ -323,6 +334,10 @@ export function EditorShell({
   const [storedNotice, setClipboardNotice] = useState<(ClipboardNotice & { scope: string }) | null>(null);
   const clipboardNotice = storedNotice?.scope === clipboardScope ? storedNotice : null;
   const [selectionJournal] = useState(() => new WeakMap<EditorEdit, SelectionChange>());
+  // Organizar (M3-S07): referencia de alineación (default "Selección") y último mensaje, que pertenece al documento donde se produjo.
+  const [arrangeReference, setArrangeReference] = useState<AlignReference>("selection");
+  const [storedArrangeNotice, setArrangeNotice] = useState<(ArrangeNotice & { scope: string }) | null>(null);
+  const arrangeNotice = storedArrangeNotice?.scope === clipboardScope ? storedArrangeNotice : null;
 
   // Tras un cambio de marco (crop, rotar el documento, o su undo/redo) el documento se vuelve a ajustar y centrar (M3-S02).
   const refitTo = useCallback((target: DocumentFrame) => fitToScreen(canvasSize, { width: target.width, height: target.height }), [fitToScreen, canvasSize]);
@@ -331,6 +346,7 @@ export function EditorShell({
     if (edit) {
       disarmColorPreview();
       setClipboardNotice(null);
+      setArrangeNotice(null);
       const selection = selectionJournal.get(edit);
       if (selection) setRawSelectedObjectIds(selection.before);
     }
@@ -341,6 +357,7 @@ export function EditorShell({
     if (edit) {
       disarmColorPreview();
       setClipboardNotice(null);
+      setArrangeNotice(null);
       const selection = selectionJournal.get(edit);
       if (selection) setRawSelectedObjectIds(selection.after);
     }
@@ -656,6 +673,7 @@ export function EditorShell({
     setActionNotice(null);
     setOrientationMessage(null);
     setClipboardNotice(null);
+    setArrangeNotice(null);
     if (tool === "crop") {
       // Sin documento medido no hay área de trabajo que recortar.
       if (!document || !isValidFrame(committedFrame)) return;
@@ -993,6 +1011,57 @@ export function EditorShell({
     ? `${recolorHeadline(colorPlan.summary)}${colorScope === "document" ? " Alcance: TODO el documento." : ""}${colorPlan.summary.merge ? " Incluye fusionar capas." : ""} ¿Confirmás?`
     : "";
 
+  // ---- Organizar: alinear / distribuir / z-order (M3-S07) ----
+  // Cada operación es UN comando (applyEdit) sobre lo que NO está bloqueado; lo bloqueado se excluye por completo y se informa. Alinear y
+  // distribuir trasladan (componen la matriz); el z-order permuta la lista de cada capa y nunca cambia un objeto de capa (ver lib/editor/arrange.ts).
+  // La selección no cambia: deshacer/rehacer la conservan sin ayuda del diario de selección.
+  const arrangeAvail = useMemo(
+    () => arrangeAvailability(colorState, selectedObjects, { reference: arrangeReference, suspended: pending !== null }),
+    [colorState, selectedObjects, arrangeReference, pending],
+  );
+
+  const reportArrange = (kind: ArrangeNotice["kind"], text: string) => setArrangeNotice({ scope: clipboardScope, kind, text });
+
+  const performArrangeAction = (id: ArrangeActionId) => {
+    if (!document) return;
+    setArrangeNotice(null);
+    setClipboardNotice(null);
+    setActionNotice(null);
+    if (pending !== null) {
+      reportArrange("error", TRANSFORM_PENDING_MESSAGE);
+      return;
+    }
+    const context = { mmPerUnit: mmFactor, reference: arrangeReference };
+    const result = runArrange(editable.getSnapshot(), selectedObjects, id, { reference: arrangeReference });
+    const production = result.production;
+    if (!production) {
+      const message = describeArrange(id, result, context);
+      reportArrange(message.kind, message.text);
+      return;
+    }
+    const applied = applyEdit(result.label, () => production);
+    if (!applied.applied) {
+      reportArrange("error", describeEditFailure(applied));
+      return;
+    }
+    const message = describeArrange(id, result, context);
+    reportArrange(message.kind, message.text);
+  };
+
+  // Atajos de z-order: Ctrl/Cmd+] y [ (con Shift: al frente / al fondo), listener de ventana como el resto, NUNCA dentro de campos de texto. Solo con
+  // Select/Move y con una selección (sin ella no se intercepta: Cmd+[ y Cmd+Shift+[ son de navegación del navegador). Sin auto-repetición.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || !clipboardTool) return;
+      const action = matchArrangeShortcut(event);
+      if (!action || isTextFieldTarget(event.target) || selectedObjects.length === 0) return;
+      event.preventDefault();
+      performArrangeAction(zOrderActionId(action));
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
+
   // ---- Draw / Erase (M3-S04) ----
   // Toda geometría nueva pertenece a una capa identificada (la activa, o una «Dibujo» nueva en el mismo comando); Erase resta geometría real en el
   // servidor. La orquestación (borrador de la pluma, pipelines trazo -> servidor -> UN comando, teclado) vive en `useDrawEraseTools`.
@@ -1168,7 +1237,24 @@ export function EditorShell({
                   onCancel={cancelPending}
                 />
               )}
-              {clipboardTool && <ClipboardBar availability={clipboardAvail} clipboardSize={clipboard.size} notice={clipboardNotice} onAction={performClipboardAction} />}
+              {clipboardTool && (
+                <ClipboardBar
+                  availability={clipboardAvail}
+                  clipboardSize={clipboard.size}
+                  notice={clipboardNotice}
+                  onAction={performClipboardAction}
+                  extraShortcuts={ARRANGE_SHORTCUTS}
+                />
+              )}
+              {clipboardTool && (
+                <ArrangeBar
+                  availability={arrangeAvail}
+                  reference={arrangeReference}
+                  onReferenceChange={setArrangeReference}
+                  notice={arrangeNotice}
+                  onAction={performArrangeAction}
+                />
+              )}
               <VectorCanvas
                 layers={documentLayers}
                 visibility={visibility}
