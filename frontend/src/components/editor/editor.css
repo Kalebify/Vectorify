@@ -268,6 +268,40 @@
   pointer-events: none;
 }
 
+/* M3-S05: Path (superficie de nodos y panel contextual). */
+.tool-surface--path {
+  cursor: default;
+}
+
+.tool-surface__notice {
+  position: absolute;
+  left: var(--editor-space-2);
+  bottom: var(--editor-space-2);
+  max-width: 70%;
+  margin: 0;
+  padding: var(--editor-space-1) var(--editor-space-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.path-panel__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-1);
+  padding: var(--editor-space-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.path-panel__confirm p {
+  margin: 0;
+}
+
 .draw-panel,
 .erase-panel {
   display: flex;

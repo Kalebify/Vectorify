@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { Group, Layer, Path, Rect as KonvaRect, Stage, Transformer } from "react-konva";
 import type Konva from "konva";
 import type { CanvasTransform } from "../../hooks/useCanvasTransform";
 import type { ApplyEditResult, EditableDocumentApi } from "../../hooks/useEditableDocument";
 import type { VectorDocumentLayer } from "../../hooks/useVectorDocument";
 import { composeMatrices, invertMatrix, isFiniteMatrix, matricesAlmostEqual, matrixToKonvaProps } from "../../lib/editor/matrix";
-import { hitTestAll, objectsInRect, rectFromPoints } from "../../lib/editor/objects";
+import { hitTest, hitTestAll, objectsInRect, rectFromPoints } from "../../lib/editor/objects";
 import { dimRects, sourceFrameOf } from "../../lib/editor/frame";
 import type { OrientationStep } from "../../lib/editor/orientation";
 import { cycleHit, removeObjects, replaceObjects, resolveSelection, splitByLock, toggleId } from "../../lib/editor/selection";
@@ -17,6 +17,7 @@ import { screenToDocument, type ViewportParams } from "../../lib/editor/viewport
 import { IDENTITY_MATRIX, type AffineMatrix } from "../../lib/svgTransform";
 import { EditorLayerNodes } from "./EditorLayerNodes";
 import type { EditorTool } from "./EditorToolbar";
+import { PathSurface, type PathSurfaceProps } from "./PathSurface";
 import { ToolSurface, type ToolSurfaceProps } from "./ToolSurface";
 
 const WHEEL_ZOOM_SENSITIVITY = 0.0015;
@@ -83,6 +84,10 @@ interface VectorCanvasProps {
   onToolShortcut?: (tool: EditorTool) => void;
   /** Draw / Erase (M3-S04): la superficie que captura el puntero y dibuja el preview. El shell posee todo el estado; el canvas solo aporta viewport, pool de hit-test y locks. */
   toolSurface?: Omit<ToolSurfaceProps, "viewport" | "suspended" | "pool" | "lockedLayerIds">;
+  /** Path (M3-S05): la superficie de edición de nodos del objeto seleccionado. Igual que `toolSurface`, el shell posee el estado; el canvas aporta viewport, pool de hit-test y locks. */
+  pathSurface?: Omit<PathSurfaceProps, "viewport" | "suspended" | "pool">;
+  /** Doble click sobre un objeto con Select (M3-S05): el shell lo selecciona y pasa a la herramienta Path. */
+  onEditPath?: (objectId: string, layerGroupId: string) => void;
 }
 
 type Interaction =
@@ -186,6 +191,8 @@ export function VectorCanvas({
   onFillObject,
   onToolShortcut,
   toolSurface,
+  pathSurface,
+  onEditPath,
 }: VectorCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<Konva.Stage | null>(null);
@@ -207,7 +214,8 @@ export function VectorCanvas({
   const effectiveTool: EditorTool = spacePanHeld ? "pan" : tool;
   const canOrient = effectiveTool === "select" || effectiveTool === "move";
   // Fill y Color (M3-S03) solo SELECCIONAN en el canvas (click, Shift, marquee): la selección es el objetivo del color, no se mueve ni se transforma.
-  const selectOnly = effectiveTool === "fill" || effectiveTool === "color";
+  // Path (M3-S05) sin objeto editable (nada o varios seleccionados, capa bloqueada...) tampoco tiene superficie de nodos: el canvas deja elegir el objeto a editar.
+  const selectOnly = effectiveTool === "fill" || effectiveTool === "color" || (effectiveTool === "path" && !pathSurface);
   // Con una transformación pendiente de Apply/Cancel (o con Crop) las herramientas de edición de objetos quedan suspendidas.
   const isEditingTool = canOrient && !editingSuspended;
   const isSelectingTool = (canOrient || selectOnly) && !editingSuspended;
@@ -278,6 +286,12 @@ export function VectorCanvas({
 
   // Un gesto a medias no sobrevive al desmontaje del canvas.
   useEffect(() => cancelGesture, [cancelGesture]);
+
+  // Path (M3-S05): al entrar el foco pasa al canvas, así Suprimir, las flechas, Escape y Enter de la herramienta funcionan sin tener que hacer click antes
+  // (tras activar la herramienta con su botón el foco quedaba en el botón de la barra, que esos atajos ignoran).
+  useEffect(() => {
+    if (tool === "path") containerRef.current?.focus({ preventScroll: true });
+  }, [tool]);
 
   const lockedLayerIds = useMemo(() => new Set(layers.filter((layer) => layer.locked).map((layer) => layer.groupId)), [layers]);
   const selectedObjects = useMemo(() => resolveSelection(selectableObjects, selectedObjectIds), [selectableObjects, selectedObjectIds]);
@@ -410,6 +424,11 @@ export function VectorCanvas({
       if (effectiveTool === "fill") {
         // Fill: el click APLICA el color activo al objeto (o a toda la selección si el objeto forma parte de ella); lo resuelve el shell.
         onFillObject?.(hit.id);
+        return;
+      }
+      // Path sin objeto editable (varios seleccionados, capa bloqueada...): el click ELIGE el objeto a editar, incluso entre los ya seleccionados.
+      if (effectiveTool === "path") {
+        onSelectObjects([hit.id], hit.layerGroupId);
         return;
       }
       const wasSelected = selectedObjectIds.has(hit.id);
@@ -679,9 +698,12 @@ export function VectorCanvas({
       return;
     }
 
+    // Path (M3-S05): las flechas (nudge de nodos), Escape, Enter y Suprimir los resuelve la herramienta; acá no se desplaza la vista ni se toca la selección de objetos.
+    if (tool === "path" && pathSurface && (event.key === "ArrowUp" || event.key === "ArrowDown" || event.key === "ArrowLeft" || event.key === "ArrowRight")) return;
+
     if (event.key === "Escape") {
       // Crop o una transformación pendiente: Escape es "Cancel" y lo resuelve el shell (no limpia la selección).
-      if (tool === "crop" || tool === "fill" || tool === "color" || tool === "draw" || tool === "erase" || editingSuspended) return;
+      if (tool === "crop" || tool === "fill" || tool === "color" || tool === "draw" || tool === "erase" || tool === "path" || editingSuspended) return;
       const interaction = interactionRef.current;
       if (interaction) {
         // Cancela un drag/marquee en curso sin tocar la selección.
@@ -764,6 +786,15 @@ export function VectorCanvas({
     }
   };
 
+  // Doble click sobre un objeto con Select: pasa a editar sus nodos (M3-S05). El shell lo selecciona y activa Path.
+  const handleDoubleClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (effectiveTool !== "select" || editingSuspended || !onEditPath) return;
+    const screenPoint = toContainerPoint(event);
+    if (isTransformerAnchorAt(screenPoint)) return;
+    const hit = hitTest(selectableObjects, screenToDocument(screenPoint, viewport), screenToleranceToDocument(HIT_TOLERANCE_PX, transform.scale));
+    if (hit) onEditPath(hit.id, hit.layerGroupId);
+  };
+
   const handleKeyUp = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key === " " || event.key === "Spacebar") {
       setSpacePanHeld(false);
@@ -781,11 +812,12 @@ export function VectorCanvas({
   };
 
   const failedLayers = layers.filter((layer) => layerStatus[layer.groupId] === "error");
-  const TOOL_LABELS: Record<EditorTool, string> = { select: "Select", pan: "Pan", move: "Move", crop: "Crop", fill: "Fill", color: "Color", eyedropper: "Eyedropper", draw: "Draw", erase: "Erase" };
+  const TOOL_LABELS: Record<EditorTool, string> = { select: "Select", pan: "Pan", move: "Move", crop: "Crop", fill: "Fill", color: "Color", eyedropper: "Eyedropper", draw: "Draw", erase: "Erase", path: "Path" };
   const toolLabel = TOOL_LABELS[effectiveTool];
   // Margen del exterior atenuado de Crop: cubre cualquier vista razonable alrededor del área de trabajo y del marco propuesto.
   const dimMargin = Math.max(docFrame.width, docFrame.height);
-  const showOutlines = selectedObjects.length > 0 && selectedObjects.length <= MAX_SELECTION_OUTLINES;
+  // Con Path el contorno lo dibuja la propia superficie de nodos (sobre el mismo `d`): un segundo contorno azul lo duplicaría.
+  const showOutlines = selectedObjects.length > 0 && selectedObjects.length <= MAX_SELECTION_OUTLINES && tool !== "path";
   // Con Draw/Erase la capa activa (la de destino) NO se resalta: el contorno azul taparía el color real de las líneas que se dibujan (el panel dice cuál es).
   const layerHighlightId = selectedObjectIds.size === 0 && tool !== "draw" && tool !== "erase" ? selectedGroupId : null;
 
@@ -795,11 +827,12 @@ export function VectorCanvas({
       className={`vector-canvas-2 vector-canvas-2--${effectiveTool}`}
       tabIndex={0}
       role="application"
-      aria-label={`Canvas del documento. Herramienta activa: ${toolLabel}. Rueda del mouse para zoom. Mantené Espacio para pan temporal. Con foco: click o Control+A para seleccionar objetos, flechas para mover la selección (Shift: 10 unidades) o desplazar la vista si no hay selección, Suprimir para eliminar, Escape para limpiar, + y - para zoom. R y Mayúscula+R giran 90° la selección (o todo el documento sin selección), F y Mayúscula+F la reflejan; Enter aplica y Escape cancela. Con Crop activo, las flechas mueven el marco de recorte. Con Fill o Color, click selecciona y Fill además aplica el color activo al objeto. I activa el Eyedropper: click sobre un objeto toma el color de su capa. Con Draw o Erase, la superficie de dibujo captura el puntero: Escape cancela el trazo o el cálculo en curso.`}
+      aria-label={`Canvas del documento. Herramienta activa: ${toolLabel}. Rueda del mouse para zoom. Mantené Espacio para pan temporal. Con foco: click o Control+A para seleccionar objetos, flechas para mover la selección (Shift: 10 unidades) o desplazar la vista si no hay selección, Suprimir para eliminar, Escape para limpiar, + y - para zoom. R y Mayúscula+R giran 90° la selección (o todo el documento sin selección), F y Mayúscula+F la reflejan; Enter aplica y Escape cancela. Con Crop activo, las flechas mueven el marco de recorte. Con Fill o Color, click selecciona y Fill además aplica el color activo al objeto. I activa el Eyedropper: click sobre un objeto toma el color de su capa. Con Draw o Erase, la superficie de dibujo captura el puntero: Escape cancela el trazo o el cálculo en curso. Doble click sobre un objeto con Select pasa a Path: click en un nodo lo selecciona, arrastre mueve, Suprimir elimina y las flechas mueven los nodos seleccionados.`}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerCancel}
+      onDoubleClick={handleDoubleClick}
       onKeyDown={handleKeyDown}
       onKeyUp={handleKeyUp}
     >
@@ -941,6 +974,7 @@ export function VectorCanvas({
       {hasContainerSize && toolSurface && tool === toolSurface.tool && (
         <ToolSurface {...toolSurface} viewport={viewport} suspended={spacePanHeld || editingSuspended} pool={selectableObjects} lockedLayerIds={lockedLayerIds} />
       )}
+      {hasContainerSize && pathSurface && tool === "path" && <PathSurface {...pathSurface} viewport={viewport} suspended={spacePanHeld || editingSuspended} pool={selectableObjects} />}
 
       {lockedSelected.length > 0 && (
         <p className="vector-canvas-2__lock-badge" role="status">

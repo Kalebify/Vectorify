@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCanvasTransform } from "../../hooks/useCanvasTransform";
 import { useDrawEraseTools } from "../../hooks/useDrawEraseTools";
 import { useEditableDocument, type ApplyEditResult, type EditProducer } from "../../hooks/useEditableDocument";
+import { usePathTool } from "../../hooks/usePathTool";
 import { useLaserWarnings } from "../../hooks/useLaserWarnings";
 import { useManufacturingOperations } from "../../hooks/useManufacturingOperations";
 import { useVectorDocument, type VectorDocumentLayer } from "../../hooks/useVectorDocument";
@@ -63,6 +64,7 @@ import { InspectorPanel } from "./InspectorPanel";
 import { ObjectInspector } from "./ObjectInspector";
 import { OrientationBar } from "./OrientationBar";
 import { PaletteBar } from "./PaletteBar";
+import { PathPanel } from "./PathPanel";
 import { PreviewNavigator } from "./PreviewNavigator";
 import { VectorCanvas } from "./VectorCanvas";
 import "./editor.css";
@@ -856,6 +858,22 @@ export function EditorShell({
         }
       : undefined;
 
+  // ---- Path (M3-S05) ----
+  // Edita los nodos y handles del ÚNICO objeto seleccionado en su espacio local (la matriz no se toca). La selección de objetos es la del shell: un
+  // click sobre otro objeto estando en Path lo selecciona, y Escape/Enter vuelven a Select. Todo gesto de nodos es UN comando.
+  const pathTool = usePathTool({
+    activeTool,
+    editable,
+    layers: colorState.layers,
+    selectedObjects,
+    frame: committedFrame,
+    mmFactor,
+    onNotice: setActionNotice,
+    onPickObject: (objectId) => handleSelectObjects([objectId], selectableObjects.find((object) => object.id === objectId)?.layerGroupId ?? null),
+    onExit: () => handleSelectTool("select"),
+  });
+  const pathSurface = activeTool === "path" && pathTool.object && pathTool.model ? { object: pathTool.object, model: pathTool.model, selection: pathTool.keys, ...pathTool.surface } : undefined;
+
   const handleFit = () => {
     if (!document) return;
     // Ajusta el ÁREA DE TRABAJO vigente (M3-S02), no el viewBox original.
@@ -1010,6 +1028,11 @@ export function EditorShell({
                 onFillObject={handleFillObject}
                 onToolShortcut={handleSelectTool}
                 toolSurface={drawEraseSurface}
+                pathSurface={pathSurface}
+                onEditPath={(objectId, layerGroupId) => {
+                  handleSelectObjects([objectId], layerGroupId);
+                  handleSelectTool("path");
+                }}
               />
               {actionNotice && (
                 <p className="editor-shell__action-notice" role="status">
@@ -1116,6 +1139,8 @@ export function EditorShell({
               onCancelCalculation={tools.cancelCalculation}
             />
           )}
+
+          {activeTool === "path" && <PathPanel panel={pathTool.panel} onExit={() => handleSelectTool("select")} />}
 
           <EditorLayersPanel
             layers={documentLayers}

@@ -11,7 +11,7 @@ describe("EditorToolbar — shell completo del wireframe", () => {
     }
   });
 
-  it("Select, Pan, Move (M3-S01), Crop (M3-S02), Fill, Color, Eyedropper (M3-S03) y Draw, Erase (M3-S04) están habilitados; el resto está deshabilitado pero VISIBLE, con tooltip de MVP3", () => {
+  it("Select, Pan, Move (M3-S01), Crop (M3-S02), Fill, Color, Eyedropper (M3-S03), Draw, Erase (M3-S04) y Path (M3-S05) están habilitados; el resto está deshabilitado pero VISIBLE, con tooltip de MVP3", () => {
     render(<EditorToolbar activeTool="select" onSelectTool={vi.fn()} />);
 
     expect(screen.getByRole("button", { name: /^Select/ })).toBeEnabled();
@@ -23,8 +23,9 @@ describe("EditorToolbar — shell completo del wireframe", () => {
     expect(screen.getByRole("button", { name: /^Eyedropper/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Draw/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Erase/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Path/ })).toBeEnabled();
 
-    for (const label of ["Offset", "Cut", "Path"]) {
+    for (const label of ["Offset", "Cut"]) {
       const button = screen.getByRole("button", { name: new RegExp(`^${label}`) });
       expect(button).toBeDisabled();
       expect(button).toHaveAttribute("title", expect.stringContaining("MVP3"));
