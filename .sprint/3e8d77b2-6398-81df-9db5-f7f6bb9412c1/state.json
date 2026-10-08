@@ -1,0 +1,18 @@
+{
+  "card_id": "3e8d77b2-6398-81df-9db5-f7f6bb9412c1",
+  "card_url": "https://app.notion.com/p/3e8d77b2639881df9db5f7f6bb9412c1",
+  "title": "M3-S06 · Operaciones básicas: Copy / Paste / Duplicate / Delete",
+  "stack": "Frontend, Vector -- portapapeles interno de la sesion, pegar con offset/en el lugar/en capa activa, duplicar, cortar, eliminar; ids nuevos, capa de origen, locks, un comando undoable por operacion",
+  "branch": "sprint/3e8d77b2-m3-s06-copy-paste",
+  "column": "Done",
+  "phase": "review",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "pr_url": "https://github.com/Kalebify/Vectorify/pull/53",
+  "started_at": "2026-10-08T00:00:00Z",
+  "exceptions": [
+    "Corrida autonoma de MVP 3 (S01..S16) confirmada por el usuario: mergea el orquestador; ante un error la tarjeta pasa a Bloqueado y se sigue.",
+    "DECISION: portapapeles interno de la sesion (no el del sistema); offset de pegado 5 mm acumulativo; duplicar repetido repite el delta; objetos de capas bloqueadas/ocultas/eliminadas se omiten con aviso (nunca se pegan en otra capa en silencio).",
+    "INCLUIDO FUERA DEL TITULO: Cortar (Ctrl+X) y Pegar en la capa activa (Ctrl+Alt+V), baratos con la misma base."
+  ]
+}

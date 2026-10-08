@@ -209,7 +209,8 @@ function paint(object: EditorObject, hex: string): EditorObject {
   return object.fill === hex ? object : { ...object, fill: hex };
 }
 
-function recolored(object: EditorObject, layer: { groupId: string; colorHex: string }): EditorObject {
+/** Objeto movido a `layer`: toma su `groupId` y su color (relleno, o trazo en las líneas abiertas). Lo reusan Fill/Recolor y "Pegar en la capa activa" (M3-S06). */
+export function recolored(object: EditorObject, layer: { groupId: string; colorHex: string }): EditorObject {
   const painted = paint(object, layer.colorHex);
   return object.layerGroupId === layer.groupId ? painted : { ...painted, layerGroupId: layer.groupId };
 }

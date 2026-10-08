@@ -9,7 +9,8 @@ import { composeMatrices, invertMatrix, isFiniteMatrix, matricesAlmostEqual, mat
 import { hitTest, hitTestAll, objectsInRect, rectFromPoints } from "../../lib/editor/objects";
 import { dimRects, sourceFrameOf } from "../../lib/editor/frame";
 import type { OrientationStep } from "../../lib/editor/orientation";
-import { cycleHit, removeObjects, replaceObjects, resolveSelection, splitByLock, toggleId } from "../../lib/editor/selection";
+import { describeSkipped, planDelete } from "../../lib/editor/clipboard";
+import { cycleHit, replaceObjects, resolveSelection, splitByLock, toggleId } from "../../lib/editor/selection";
 import { translate } from "../../lib/editor/transform";
 import type { DocumentFrame, EditableDocument, EditorObject, Point, Rect } from "../../lib/editor/types";
 import { screenToleranceToDocument } from "../../lib/editor/units";
@@ -88,6 +89,11 @@ interface VectorCanvasProps {
   pathSurface?: Omit<PathSurfaceProps, "viewport" | "suspended" | "pool">;
   /** Doble click sobre un objeto con Select (M3-S05): el shell lo selecciona y pasa a la herramienta Path. */
   onEditPath?: (objectId: string, layerGroupId: string) => void;
+  /**
+   * Suprimir / Retroceso con la selección (M3-S06): el shell elimina con el módulo de portapapeles (mensajes, selección coherente al deshacer).
+   * Sin él, el canvas elimina por su cuenta con el MISMO `planDelete` (uso autónomo del canvas y sus tests).
+   */
+  onDeleteSelection?: () => void;
 }
 
 type Interaction =
@@ -193,6 +199,7 @@ export function VectorCanvas({
   toolSurface,
   pathSurface,
   onEditPath,
+  onDeleteSelection,
 }: VectorCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<Konva.Stage | null>(null);
@@ -685,8 +692,24 @@ export function VectorCanvas({
 
   const deleteSelection = () => {
     if (selectedObjects.length === 0) return;
-    const ids = new Set(selectedObjects.map((object) => object.id));
-    reportEditResult(applyEdit(`Eliminar ${plural(ids.size, "objeto", "objetos")}`, (state) => removeObjects(state, ids)));
+    if (onDeleteSelection) {
+      onDeleteSelection();
+      return;
+    }
+    // Uso autónomo: misma planificación que el shell (lo bloqueado se omite y se informa; nada eliminable = sin comando).
+    const plan = planDelete(editable.getSnapshot(), new Set(selectedObjects.map((object) => object.id)));
+    const production = plan.production;
+    if (!production) {
+      setNotice(plan.error);
+      return;
+    }
+    const result = applyEdit(plan.label, () => production);
+    if (!result.applied) {
+      reportEditResult(result);
+      return;
+    }
+    // Los eliminados dejan de ser seleccionables (la selección cruda del dueño los conserva: deshacer los vuelve a seleccionar, como en S01).
+    setNotice(plan.skippedCount > 0 ? `${describeSkipped(plan.skipped, "delete")}.` : null);
   };
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -827,7 +850,7 @@ export function VectorCanvas({
       className={`vector-canvas-2 vector-canvas-2--${effectiveTool}`}
       tabIndex={0}
       role="application"
-      aria-label={`Canvas del documento. Herramienta activa: ${toolLabel}. Rueda del mouse para zoom. Mantené Espacio para pan temporal. Con foco: click o Control+A para seleccionar objetos, flechas para mover la selección (Shift: 10 unidades) o desplazar la vista si no hay selección, Suprimir para eliminar, Escape para limpiar, + y - para zoom. R y Mayúscula+R giran 90° la selección (o todo el documento sin selección), F y Mayúscula+F la reflejan; Enter aplica y Escape cancela. Con Crop activo, las flechas mueven el marco de recorte. Con Fill o Color, click selecciona y Fill además aplica el color activo al objeto. I activa el Eyedropper: click sobre un objeto toma el color de su capa. Con Draw o Erase, la superficie de dibujo captura el puntero: Escape cancela el trazo o el cálculo en curso. Doble click sobre un objeto con Select pasa a Path: click en un nodo lo selecciona, arrastre mueve, Suprimir elimina y las flechas mueven los nodos seleccionados.`}
+      aria-label={`Canvas del documento. Herramienta activa: ${toolLabel}. Rueda del mouse para zoom. Mantené Espacio para pan temporal. Con foco: click o Control+A para seleccionar objetos, flechas para mover la selección (Shift: 10 unidades) o desplazar la vista si no hay selección, Suprimir para eliminar, Control o Comando más C, X, V y D para copiar, cortar, pegar y duplicar, Escape para limpiar, + y - para zoom. R y Mayúscula+R giran 90° la selección (o todo el documento sin selección), F y Mayúscula+F la reflejan; Enter aplica y Escape cancela. Con Crop activo, las flechas mueven el marco de recorte. Con Fill o Color, click selecciona y Fill además aplica el color activo al objeto. I activa el Eyedropper: click sobre un objeto toma el color de su capa. Con Draw o Erase, la superficie de dibujo captura el puntero: Escape cancela el trazo o el cálculo en curso. Doble click sobre un objeto con Select pasa a Path: click en un nodo lo selecciona, arrastre mueve, Suprimir elimina y las flechas mueven los nodos seleccionados.`}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
