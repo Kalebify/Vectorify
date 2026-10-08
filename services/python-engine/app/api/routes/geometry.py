@@ -13,13 +13,13 @@ router = APIRouter(prefix="/api/v1", tags=["geometry"])
 @router.post(
     "/geometry/boolean",
     response_model=GeometryBooleanResponse,
-    summary="Operaciones booleanas (union/difference/intersection/xor/normalize) sobre anillos de polígonos y polilíneas",
+    summary="Operaciones booleanas (union/difference/intersection/intersection_all/xor/normalize) sobre anillos de polígonos y polilíneas",
     description=(
         "Servicio de geometría SIN estado (M3-S04, ADR D4 del editor de MVP3). Recibe como cuerpo JSON "
         "`operation`, `subjects` (polygon = lista de anillos con regla par-impar / line = polilínea), "
         "`operands` (además, bufferedLine = pincel de borrador: línea con radio, cap/join redondos) y "
         "`tolerance` (> 0, unidades de documento). Devuelve, por subject (difference/intersection/normalize) "
-        "o en conjunto (union/xor), las piezas resultantes -- puede haber 0 o varias -- como anillos/"
+        "o en conjunto (union/xor/intersection_all), las piezas resultantes -- puede haber 0 o varias -- como anillos/"
         "polilíneas validados, sin NaN, en orden determinista. Opera sobre coordenadas puras: nunca recibe "
         "ni evalúa path data ni SVG. Límites: 500 subjects, 500 000 vértices en total. Solo lo llama "
         "Vectorify.Api."

@@ -30,7 +30,7 @@ public sealed class GeometryRequestValidator : IGeometryRequestValidator
         {
             return Fail(
                 "unknown_operation",
-                $"operation '{request.Operation}' desconocida. Valores válidos: union, difference, intersection, xor, normalize.");
+                $"operation '{request.Operation}' desconocida. Valores válidos: union, difference, intersection, intersection_all, xor, normalize.");
         }
 
         var tolerance = request.Tolerance;
@@ -58,6 +58,12 @@ public sealed class GeometryRequestValidator : IGeometryRequestValidator
         if (operation == GeometryOperation.Intersection && operandRequests.Count == 0)
         {
             return Fail("invalid_parameters", "La intersección necesita al menos un operando.");
+        }
+
+        // M3-S08: la región común necesita al menos dos formas entre subjects y operands (con una sola no hay "común").
+        if (operation == GeometryOperation.IntersectionAll && request.Subjects.Count + operandRequests.Count < 2)
+        {
+            return Fail("invalid_parameters", "La intersección común necesita al menos dos formas entre subjects y operands.");
         }
 
         var vertexCount = 0;

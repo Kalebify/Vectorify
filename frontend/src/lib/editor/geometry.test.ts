@@ -149,6 +149,19 @@ describe("validateBooleanResponse", () => {
     expect(validateBooleanResponse(request, valid())).toBeNull();
   });
 
+  it("intersection_all (M3-S08) es COMBINADA: una sola entrada con subjectIndex null, aunque haya varios subjects", () => {
+    const common: BooleanRequest = { operation: "intersection_all", subjects: request.subjects.slice(0, 1).concat(request.subjects.slice(0, 1)), operands: [], tolerance: 0.01 };
+    const combined: BooleanResponse = { operation: "intersection_all", scope: "combined", tolerance: 0.01, pieceCount: 1, results: [{ subjectIndex: null, changed: true, geometries: [square(0)] }] };
+
+    expect(validateBooleanResponse(common, combined)).toBeNull();
+    // Si el servidor contestara por subject (como "intersection"), el cliente lo rechaza.
+    const perSubject: BooleanResponse = { ...combined, results: [{ subjectIndex: 0, changed: true, geometries: [] }, { subjectIndex: 1, changed: true, geometries: [] }] };
+    expect(validateBooleanResponse(common, perSubject)).toMatch(/2 resultados y se esperaban 1/);
+    // Y "intersection" de S04 sigue siendo por subject.
+    const legacy: BooleanRequest = { ...common, operation: "intersection", operands: [{ type: "polygon", coordinates: [[[0, 0], [1, 0], [1, 1]]] }] };
+    expect(validateBooleanResponse(legacy, { ...perSubject, operation: "intersection", scope: "per_subject" })).toBeNull();
+  });
+
   it("acepta resultados vacíos (el subject desaparece)", () => {
     const response = valid();
     response.results[0].geometries = [];

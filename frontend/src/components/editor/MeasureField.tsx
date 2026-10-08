@@ -6,8 +6,10 @@ interface MeasureFieldProps {
   /** Valor vigente en la unidad del panel (mm o u). */
   value: number;
   unitLabel: "mm" | "u";
-  /** Máximo aceptado (inclusive); el mínimo es siempre > 0. */
+  /** Máximo aceptado (inclusive). */
   max: number;
+  /** Mínimo aceptado (inclusive, M3-S08: tolerancia de las booleanas). Sin él, cualquier valor > 0. */
+  min?: number;
   /** Confirma un valor válido (Enter/blur). */
   onCommit: (value: number) => void;
   disabled?: boolean;
@@ -19,7 +21,7 @@ interface MeasureFieldProps {
  * no tiene escala física), se confirma con Enter/blur y un valor inválido (texto, ≤ 0, fuera de rango) se RECHAZA con mensaje y conserva el
  * anterior. Escape descarta el borrador del campo.
  */
-export function MeasureField({ label, value, unitLabel, max, onCommit, disabled = false, hint }: MeasureFieldProps) {
+export function MeasureField({ label, value, unitLabel, max, min, onCommit, disabled = false, hint }: MeasureFieldProps) {
   const id = useId();
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -33,8 +35,9 @@ export function MeasureField({ label, value, unitLabel, max, onCommit, disabled 
       setError(`"${text.trim() || "(vacío)"}" no es un número válido para «${label}». Se mantiene ${formatDisplayNumber(value)} ${unitLabel}.`);
       return;
     }
-    if (parsed <= 0 || parsed > max) {
-      setError(`«${label}» debe estar entre 0 (sin incluir) y ${max.toLocaleString("es-AR")} ${unitLabel}. Se mantiene ${formatDisplayNumber(value)} ${unitLabel}.`);
+    if (parsed <= 0 || parsed > max || (min !== undefined && parsed < min)) {
+      const lower = min === undefined ? "0 (sin incluir)" : `${min.toLocaleString("es-AR")} (inclusive)`;
+      setError(`«${label}» debe estar entre ${lower} y ${max.toLocaleString("es-AR")} ${unitLabel}. Se mantiene ${formatDisplayNumber(value)} ${unitLabel}.`);
       return;
     }
     setError(null);

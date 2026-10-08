@@ -4,7 +4,7 @@ namespace Vectorify.Api.Contracts;
 
 /// <summary>
 /// Respuesta de POST /api/v2/geometry/boolean. <see cref="Scope"/> = "per_subject" (difference/intersection/normalize: una
-/// entrada de <see cref="Results"/> por subject, en el mismo orden) o "combined" (union/xor: una sola entrada). Cada pieza
+/// entrada de <see cref="Results"/> por subject, en el mismo orden) o "combined" (union/xor/intersection_all: una sola entrada). Cada pieza
 /// es un anillo-lista (polygon) o una polilínea (line) en unidades de documento, ya validada y en orden determinista.
 /// </summary>
 public sealed record GeometryBooleanResponse(

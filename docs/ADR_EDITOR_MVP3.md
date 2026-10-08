@@ -66,6 +66,16 @@ devuelve coordenadas no lo necesita). El cliente aplica el resultado como un com
 siempre validados (geometría válida, sin NaN, sin paths vacíos) y tolerancias explícitas (en mm en la UI,
 en unidades de documento en el cable).
 
+**Motor de las booleanas (decisión de M3-S08): Shapely/GEOS, no Clipper2.** El criterio de la tarjeta decía "Clipper2 u opción
+validada". Se elige **Shapely (GEOS, OverlayNG)** porque (1) ya está en el motor y quedó **validado en M3-S04** con Erase
+(difference con huecos, islas, piezas partidas y `make_valid`) y con `normalize`; (2) **no agrega dependencias** al motor ni a .NET
+(Clipper2 habría exigido un binding nativo/NuGet nuevo o reescribir el servicio); (3) OverlayNG es **robusto ante bordes que se
+tocan y vértices coincidentes** (Shapely 2.1.2 fijado en `requirements.txt`, GEOS 3.13: noding robusto, sin las `TopologyException` del overlay
+clásico) y devuelve geometría **válida**, que además se revalida y se ordena de forma determinista antes de salir;
+(4) el mismo núcleo servirá a offset, corte y puentes (S09–S11). Contra: el resultado son polilíneas (Clipper2 también); el
+costo asumido es la latencia de un viaje al servidor, que la UI absorbe con preview, debounce y cancelación. No se reabre salvo
+que una tarjeta posterior demuestre un caso que GEOS no resuelva.
+
 **Formato de intercambio (fijado en M3-S04; lo reusan S08–S11).** Los endpoints intercambian **anillos de
 polígonos y polilíneas en unidades de documento** (tipo GeoJSON `MultiPolygon` / `MultiLineString`),
 **nunca path data**: el cliente aplana sus curvas con su `pathGeometry` (tolerancia explícita, default
@@ -76,7 +86,7 @@ Bézier originales**; un objeto que el servidor declara intacto (`changed: false
 sus curvas.
 
 - Petición `POST /api/v2/geometry/boolean` (Python: `POST /api/v1/geometry/boolean`, cuerpo JSON):
-  `{ operation: "union"|"difference"|"intersection"|"xor"|"normalize", subjects: [Geometry…],
+  `{ operation: "union"|"difference"|"intersection"|"intersection_all"|"xor"|"normalize", subjects: [Geometry…],
   operands: [Operand…], tolerance }`.
   - `Geometry` = `{ type: "polygon", coordinates: [[[x,y],…],…] }` — lista de **anillos**, el primero
     exterior; los huecos salen de la **regla par-impar** (un anillo dentro de un número impar de anillos es
@@ -87,11 +97,24 @@ sus curvas.
   - Semántica: `difference` = cada subject menos la unión de los operands; `intersection` = cada subject ∩
     la unión de los operands (requiere operandos); `union`/`xor` operan sobre subjects + operands;
     `normalize` = `make_valid` + fusión de cada subject (trazos auto-intersecados: un "moño" son dos triángulos).
+  - **Contrato n-ario (M3-S08).** Las booleanas del editor trabajan con 2 o más operandos ordenados A, B, C… y usan
+    la misma petición sin endpoint nuevo:
+    - `union`: A ∪ B ∪ C… (subjects + operands), resultado `combined`.
+    - `difference`: subjects = [A], operands = [B, C…] ⇒ **A − (B ∪ C ∪ …)**. A es la base y el orden importa (A − B ≠ B − A);
+      `changed: false` si el resto no toca a A (el cliente conserva entonces su `d` con las curvas).
+    - `intersection_all` (**operación nueva**): región **común a TODAS** las formas (subjects + operands, ≥ 2), resultado
+      `combined`. `intersection` **no cambia** (sigue siendo "cada subject ∩ la unión de los operands", la usa Erase/S04 y
+      A ∩ (B ∪ C) no es la intersección de tres). Un borde o vértice compartido entre polígonos no es un área ⇒ resultado vacío.
+      Una forma vacía/degenerada hace vacía la intersección (en union/xor simplemente no aporta).
+    - `xor`: región cubierta por un número **impar** de formas (simetría n-aria: la diferencia simétrica es asociativa y
+      conmutativa; con 2 es el XOR clásico, con 3 queda A+B+C menos lo cubierto exactamente 2 veces).
+    - union / xor / intersection_all no dependen del orden de los operandos (se prueba por permutaciones); difference sí.
+    - La regla par-impar hace que el sentido de giro de los anillos (horario/antihorario) no cambie el resultado.
   - `tolerance` > 0 (unidades de documento): resolución de los arcos del pincel y umbral de pieza
     despreciable (polígonos de área < tolerance², polilíneas de largo ≤ tolerance se descartan).
 - Respuesta: `{ operation, scope, tolerance, results: [{ subjectIndex, changed, geometries }], pieceCount }`.
   `scope` = `per_subject` (difference/intersection/normalize: una entrada por subject, en orden) o
-  `combined` (union/xor: una entrada con `subjectIndex: null`). `geometries` puede tener 0 piezas (el
+  `combined` (union/xor/intersection_all: una entrada con `subjectIndex: null`). `geometries` puede tener 0 piezas (el
   subject desaparece), 1 o varias (partido). Cada pieza es `polygon` (anillos **cerrados**, exterior
   antihorario y huecos horarios en ejes matemáticos, cada anillo empezando en su vértice mínimo (x, y)) o
   `line`. Sin NaN, polígonos válidos (`is_valid` tras `make_valid`) y **orden determinista** (mismas
@@ -99,11 +122,25 @@ sus curvas.
   `changed: false` = resultado topológicamente igual al subject (p. ej. operando disjunto).
 - Límites (422 en Python, 400 con código claro en ASP.NET Core): 500 subjects, 500 operands, 500 000
   vértices en total, coordenadas finitas con |v| ≤ 1e9, tolerancia finita en (0, 1e6]; cuerpo ≤ 32 MB
-  (413); timeout propio (Python 15 s, cliente 20 s). Errores: `invalid_parameters`, `unknown_operation`,
+  (413); timeout propio (Python 15 s, cliente 20 s). Errores: `invalid_parameters`, `unknown_operation` (union, difference, intersection, intersection_all, xor, normalize),
   `invalid_tolerance`, `invalid_coordinates`, `too_many_subjects|operands|vertices`, `payload_too_large`;
   Python caído → 503 `engine_unavailable`, timeout → 504 `timeout`, respuesta incoherente → 502
   `invalid_response`. El cliente **nunca** crea geometría inválida: si el servidor falla (o la respuesta no
   pasa su propia validación) no modifica nada y lo informa.
+
+**Booleanas en el editor (M3-S08), decisiones de UX/dominio sobre este contrato** (`lib/editor/boolean.ts`):
+- Operandos = 2+ objetos **con relleno** seleccionados, en capas desbloqueadas y visibles; las líneas abiertas (`fill: "none"`) y las
+  capas bloqueadas/ocultas **rechazan la operación completa** (no se omite un operando en silencio). Orden por defecto = el de pintado
+  (el de abajo es A); la UI muestra A/B/C en el canvas y en el panel, y permite subir/bajar e invertir.
+- **La capa/color del resultado nunca se decide en silencio:** misma capa ⇒ esa capa; capas distintas ⇒ el panel exige elegirla (selector sin
+  valor por defecto, Apply deshabilitado), entre las capas de los operandos, otra desbloqueada y visible, o una capa nueva con un color
+  (mecánica de S03). El color del resultado es el de la capa destino.
+- Cada pieza disjunta del resultado es un objeto nuevo (ids nuevos, sin matriz, huecos como subpaths); se insertan en el lugar del operando
+  más alto de la capa destino (con «Conservar originales», justo encima de él; si ningún operando está en esa capa, al tope). Un operando
+  no afectado (`changed: false` en una diferencia) conserva su `d`, su matriz y su id. Resultado vacío ⇒ no se aplica.
+- Preview con `AbortController` + debounce sobre `useGeometryOperation` (una petición viva a la vez; un resultado solo vale para su
+  petición); Apply usa el resultado ya calculado (o recalcula si cambió algo); un único comando atómico por Apply; Cancel y el preview no
+  tocan la pila de undo.
 
 ### D5. Persistencia de geometría (M3-S13)
 Serialización `EditableDocument → SVG por capa` (mismo formato de origen, `<path data-vid d fill transform>`)

@@ -7,7 +7,11 @@
 
 export type GeometryPoint = [number, number];
 
-export type GeometryOperationName = "union" | "difference" | "intersection" | "xor" | "normalize";
+/**
+ * `intersection` = cada subject ∩ la UNIÓN de los operandos (S04). `intersection_all` (M3-S08) = región común a TODAS las formas
+ * (subjects + operands, >= 2), resultado combinado: lo usan las booleanas del editor.
+ */
+export type GeometryOperationName = "union" | "difference" | "intersection" | "intersection_all" | "xor" | "normalize";
 
 /** Polígono = lista de anillos (el primero exterior; los huecos salen de la regla PAR-IMPAR). Un anillo puede venir abierto o cerrado. */
 export interface PolygonGeometry {

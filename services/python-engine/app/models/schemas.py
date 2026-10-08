@@ -627,7 +627,7 @@ class ColorPaletteResponse(BaseModel):
 GEOMETRY_COORDINATE_LIMIT = 1_000_000_000.0
 GeometryCoordinate = Annotated[float, Field(allow_inf_nan=False, ge=-GEOMETRY_COORDINATE_LIMIT, le=GEOMETRY_COORDINATE_LIMIT)]
 GeometryPoint = tuple[GeometryCoordinate, GeometryCoordinate]
-GeometryOperation = Literal["union", "difference", "intersection", "xor", "normalize"]
+GeometryOperation = Literal["union", "difference", "intersection", "intersection_all", "xor", "normalize"]
 
 
 class PolygonGeometry(BaseModel):
@@ -687,7 +687,7 @@ GeometryPiece = Annotated[PolygonPiece | LinePiece, Field(discriminator="type")]
 
 
 class GeometryResultItem(BaseModel):
-    """Resultado para UN subject (`subject_index`) o para el conjunto (`null`, union/xor). `changed` es false
+    """Resultado para UN subject (`subject_index`) o para el conjunto (`null`, union/xor/intersection_all). `changed` es false
     cuando el resultado es topológicamente igual al subject (el cliente conserva entonces su objeto
     original, con sus curvas). `geometries` puede estar vacío (nada queda) o tener varias piezas."""
 
