@@ -1,12 +1,30 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCanvasTransform } from "../../hooks/useCanvasTransform";
-import { useDrawEraseTools } from "../../hooks/useDrawEraseTools";
+import { useClipboard } from "../../hooks/useClipboard";
+import { describeEditFailure, useDrawEraseTools } from "../../hooks/useDrawEraseTools";
 import { useEditableDocument, type ApplyEditResult, type EditProducer } from "../../hooks/useEditableDocument";
 import { usePathTool } from "../../hooks/usePathTool";
 import { useLaserWarnings } from "../../hooks/useLaserWarnings";
 import { useManufacturingOperations } from "../../hooks/useManufacturingOperations";
 import { useVectorDocument, type VectorDocumentLayer } from "../../hooks/useVectorDocument";
 import { useWorkspaceSave } from "../../hooks/useWorkspaceSave";
+import {
+  buildClipboard,
+  clipboardAvailability,
+  describeSkipped,
+  isTextFieldTarget,
+  matchClipboardShortcut,
+  outcomeText,
+  pasteOffset,
+  planCut,
+  planDelete,
+  planDuplicate,
+  planPaste,
+  type ClipboardAction,
+  type ClipboardVerb,
+  type PasteMode,
+  type PlanSkip,
+} from "../../lib/editor/clipboard";
 import {
   DEFAULT_CONFIRM_THRESHOLD,
   mergeCandidates,
@@ -49,9 +67,10 @@ import {
 } from "../../lib/editor/orientation";
 import { replaceObjects, resolveSelection, selectableObjects as selectableObjectsOf, splitByLock } from "../../lib/editor/selection";
 import { groupBounds, groupCenter, rotateAbout, setBounds } from "../../lib/editor/transform";
-import type { DocumentFrame, Point, Rect } from "../../lib/editor/types";
+import type { DocumentFrame, EditorEdit, EditProduction, Point, Rect } from "../../lib/editor/types";
 import { formatDisplayNumber, mmPerUnit as mmPerUnitOf, toMm } from "../../lib/editor/units";
 import { svgToDataUrl } from "../../lib/svgToDataUrl";
+import { ClipboardBar, type ClipboardNotice } from "./ClipboardBar";
 import { ColorPanel, EyedropperPanel } from "./ColorPanel";
 import { CropPanel, type CropPreset } from "./CropPanel";
 import { DrawPanel } from "./DrawPanel";
@@ -93,6 +112,8 @@ export interface EditorShellProps {
    * (`DEFAULT_CONFIRM_THRESHOLD`); el alcance "documento" y las fusiones de capas piden confirmación siempre.
    */
   colorConfirmThreshold?: number;
+  /** Generador de ids de los objetos que crean Pegar y Duplicar (M3-S06; default `crypto.randomUUID`). Inyectable en tests. */
+  createId?: () => string;
 }
 
 const EMPTY_LAYERS: VectorDocumentLayer[] = [];
@@ -143,6 +164,19 @@ function orientationProducer(pending: PendingOrientation): EditProducer {
     : (state) => orientSelectionProduction(state, new Set(pending.ids), pending.orientation);
 }
 
+/** Selección de objetos antes y después de un comando de portapapeles (M3-S06): deshacer restaura `before`, rehacer `after`. */
+interface SelectionChange {
+  before: ReadonlySet<string>;
+  after: ReadonlySet<string>;
+}
+
+/** ¿Hay texto seleccionado en la página fuera del canvas? Entonces Ctrl/Cmd+C y X son del navegador (copiar ese texto), no de los objetos. */
+function pageTextSelected(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null;
+  if (element?.closest?.(".vector-canvas-2")) return false;
+  return (window.getSelection?.()?.toString() ?? "").length > 0;
+}
+
 const UNSAVED_GEOMETRY_CONFIRM =
   "Hay cambios de geometría sin guardar que se perderán al salir (la persistencia de geometría llega en una tarjeta posterior de MVP3). ¿Salir igual?";
 
@@ -175,6 +209,7 @@ export function EditorShell({
   onSaved,
   onClose,
   colorConfirmThreshold = DEFAULT_CONFIRM_THRESHOLD,
+  createId,
 }: EditorShellProps) {
   // M2.2-S07: `useVectorDocument`/`useManufacturingOperations` necesitan `trackPatch` (expuesto
   // por `useWorkspaceSave`, declarado más abajo) para conectar cada PATCH-por-edición al
@@ -276,23 +311,42 @@ export function EditorShell({
   const disarmColorPreview = useCallback(() => setColorSession((current) => (current && current.armed ? { ...current, armed: false, confirmKey: null } : current)), []);
   const armColorPreview = useCallback(() => setColorSession((current) => (current && !current.armed ? { ...current, armed: true } : current)), []);
 
+  // Selección por ids de objeto. Se guarda cruda y se DEPURA contra los objetos seleccionables vigentes (capas
+  // visibles que aún existen): ocultar una capa o borrar un objeto la actualiza sin código extra.
+  const [rawSelectedObjectIds, setRawSelectedObjectIds] = useState<ReadonlySet<string>>(EMPTY_ID_SET);
+
+  // Portapapeles (M3-S06): último mensaje y, por comando, la selección de antes y de después (clave = el propio comando que devuelven
+  // `applyEdit`/`undo`/`redo`). Así deshacer un pegado vuelve a seleccionar los originales y rehacerlo, los pegados; deshacer un borrado
+  // vuelve a seleccionar lo restaurado. Los comandos que no pasan por el portapapeles no tienen entrada y no tocan la selección.
+  // El aviso pertenece al documento donde se produjo (la misma clave que vacía el portapapeles): en otro documento no se muestra.
+  const clipboardScope = `${projectId}|${imageId}|${paletteId}`;
+  const [storedNotice, setClipboardNotice] = useState<(ClipboardNotice & { scope: string }) | null>(null);
+  const clipboardNotice = storedNotice?.scope === clipboardScope ? storedNotice : null;
+  const [selectionJournal] = useState(() => new WeakMap<EditorEdit, SelectionChange>());
+
   // Tras un cambio de marco (crop, rotar el documento, o su undo/redo) el documento se vuelve a ajustar y centrar (M3-S02).
   const refitTo = useCallback((target: DocumentFrame) => fitToScreen(canvasSize, { width: target.width, height: target.height }), [fitToScreen, canvasSize]);
   const undoWithView = useCallback(() => {
     const edit = undo();
-    if (edit) disarmColorPreview();
+    if (edit) {
+      disarmColorPreview();
+      setClipboardNotice(null);
+      const selection = selectionJournal.get(edit);
+      if (selection) setRawSelectedObjectIds(selection.before);
+    }
     if (edit?.frame) refitTo(edit.frame.before);
-  }, [undo, refitTo, disarmColorPreview]);
+  }, [undo, refitTo, disarmColorPreview, selectionJournal]);
   const redoWithView = useCallback(() => {
     const edit = redo();
-    if (edit) disarmColorPreview();
+    if (edit) {
+      disarmColorPreview();
+      setClipboardNotice(null);
+      const selection = selectionJournal.get(edit);
+      if (selection) setRawSelectedObjectIds(selection.after);
+    }
     if (edit?.frame) refitTo(edit.frame.after);
-  }, [redo, refitTo, disarmColorPreview]);
+  }, [redo, refitTo, disarmColorPreview, selectionJournal]);
 
-  // Selección por ids de objeto. Se guarda cruda y se DEPURA contra los objetos seleccionables vigentes (capas
-  // visibles que aún existen): ocultar una capa o borrar un objeto la actualiza sin código extra, y un undo del
-  // borrado vuelve a seleccionar lo restaurado.
-  const [rawSelectedObjectIds, setRawSelectedObjectIds] = useState<ReadonlySet<string>>(EMPTY_ID_SET);
   const selectableObjects = useMemo(
     () => selectableObjectsOf(editable.objectsByLayer, documentLayers, visibility),
     [editable.objectsByLayer, documentLayers, visibility],
@@ -601,6 +655,7 @@ export function EditorShell({
     setColorMessage(null);
     setActionNotice(null);
     setOrientationMessage(null);
+    setClipboardNotice(null);
     if (tool === "crop") {
       // Sin documento medido no hay área de trabajo que recortar.
       if (!document || !isValidFrame(committedFrame)) return;
@@ -643,6 +698,116 @@ export function EditorShell({
 
   const selectedLayer = documentLayers.find((layer) => layer.groupId === selectedGroupId) ?? null;
   const isSelectedVisible = selectedGroupId ? (visibility[selectedGroupId] ?? true) : false;
+
+  // ---- Copiar / Cortar / Pegar / Duplicar / Eliminar (M3-S06) ----
+  // Portapapeles INTERNO de la sesión (ver lib/editor/clipboard.ts); se vacía al cambiar de documento. Copiar NO es un comando (no entra al historial ni
+  // activa geometryDirty); cortar, pegar, duplicar y eliminar son UN comando cada uno (atómico: lo que no se puede aplicar se omite y se informa).
+  const clipboard = useClipboard(clipboardScope);
+  const clipboardTool = activeTool === "select" || activeTool === "move";
+  const clipboardAvail = useMemo(
+    () =>
+      clipboardAvailability({
+        selected: selectedObjects.length,
+        editable: editableSelection.length,
+        clipboardSize: clipboard.size,
+        hasActiveLayer: selectedLayer !== null,
+        suspended: pending !== null,
+      }),
+    [selectedObjects.length, editableSelection.length, clipboard.size, selectedLayer, pending],
+  );
+
+  const reportClipboard = (kind: ClipboardNotice["kind"], text: string) => setClipboardNotice({ scope: clipboardScope, kind, text });
+  const finishClipboard = (summary: string, skipped: readonly PlanSkip[], verb: ClipboardVerb) =>
+    reportClipboard("ok", skipped.length > 0 ? `${summary}. ${describeSkipped(skipped, verb)}.` : `${summary}.`);
+
+  /** Aplica la producción de un plan como UN comando y deja la selección resultante, asociando la de antes y la de después al comando (undo/redo). */
+  const applyClipboardEdit = (label: string, production: EditProduction, nextIds: string[], nextLayerId: string | null): ApplyEditResult => {
+    const before = selectedObjectIds;
+    const result = applyEdit(label, () => production);
+    if (result.applied) {
+      if (result.edit) selectionJournal.set(result.edit, { before, after: new Set(nextIds) });
+      handleSelectObjects(nextIds, nextLayerId);
+    }
+    return result;
+  };
+
+  const performClipboardAction = (action: ClipboardAction) => {
+    if (!document) return;
+    setClipboardNotice(null);
+    setActionNotice(null);
+    if (pending !== null) {
+      reportClipboard("error", TRANSFORM_PENDING_MESSAGE);
+      return;
+    }
+    const snapshot = editable.getSnapshot();
+    const selectedIds: ReadonlySet<string> = new Set(selectedObjects.map((object) => object.id));
+
+    if (action === "copy") {
+      const content = buildClipboard(selectedObjects, snapshot);
+      if (!content) {
+        reportClipboard("error", "No hay objetos seleccionados para copiar.");
+        return;
+      }
+      clipboard.copy(content);
+      reportClipboard("ok", `${outcomeText("copy", content.items.length)} al portapapeles del editor.`);
+      return;
+    }
+
+    if (action === "cut" || action === "delete") {
+      const cutPlan = action === "cut" ? planCut(snapshot, selectedIds) : null;
+      const plan = cutPlan ?? planDelete(snapshot, selectedIds);
+      if (!plan.production) {
+        reportClipboard("error", plan.error ?? "No hay nada que eliminar.");
+        return;
+      }
+      const result = applyClipboardEdit(plan.label, plan.production, [], null);
+      if (!result.applied) {
+        reportClipboard("error", describeEditFailure(result));
+        return;
+      }
+      // Solo un corte APLICADO pisa el portapapeles, y solo con lo que cortó.
+      if (cutPlan?.clipboard) clipboard.copy(cutPlan.clipboard);
+      finishClipboard(outcomeText(action, plan.deleted.length), plan.skipped, action);
+      return;
+    }
+
+    const duplicating = action === "duplicate";
+    const mode: PasteMode = action === "paste-in-place" ? "in-place" : action === "paste-active" ? "active-layer" : "offset";
+    const plan = duplicating
+      ? planDuplicate(selectedObjects, snapshot, { offset: pasteOffset(1, mmFactor), createId })
+      : planPaste(clipboard.content, snapshot, { mode, offset: clipboard.nextOffset(mmFactor), activeLayerId: selectedGroupId, createId });
+    if (!plan.production) {
+      reportClipboard("error", plan.error ?? "No se pudo pegar.");
+      return;
+    }
+    const last = plan.newObjects[plan.newObjects.length - 1];
+    const result = applyClipboardEdit(plan.label, plan.production, plan.newIds, last.layerGroupId);
+    if (!result.applied) {
+      reportClipboard("error", describeEditFailure(result));
+      return;
+    }
+    // Pegar en el lugar no usa offset: no adelanta el contador (el próximo Pegar sigue siendo 1x). Duplicar no toca el portapapeles.
+    if (!duplicating && mode !== "in-place") clipboard.registerPaste();
+    finishClipboard(outcomeText(duplicating ? "duplicate" : "paste", plan.summary.pasted), plan.summary.skipped, duplicating ? "duplicate" : "paste");
+  };
+
+  // Atajos de portapapeles: listener de ventana (como Undo/Redo), con el foco en el canvas o en cualquier botón del editor, pero NUNCA dentro de
+  // campos de texto (ahí Ctrl+C/V/X y Suprimir son del propio campo). Solo con Select/Move; el canvas ya resuelve Suprimir con su foco
+  // (`defaultPrevented`). Mantener la tecla apretada no repite la acción (un comando por pulsación).
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || !clipboardTool) return;
+      const action = matchClipboardShortcut(event);
+      if (!action || isTextFieldTarget(event.target)) return;
+      if ((action === "copy" || action === "cut") && pageTextSelected(event.target)) return;
+      // Suprimir sin selección no es nuestro (no se intercepta ni se avisa).
+      if (action === "delete" && selectedObjects.length === 0) return;
+      event.preventDefault();
+      performClipboardAction(action);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
 
   // ---- Fill / Recolor / Eyedropper (M3-S03) ----
   // Decisión de dominio (ver lib/editor/colors.ts): una capa = un color; la identidad es el groupId, nunca el hex. El "color activo" es por
@@ -1003,6 +1168,7 @@ export function EditorShell({
                   onCancel={cancelPending}
                 />
               )}
+              {clipboardTool && <ClipboardBar availability={clipboardAvail} clipboardSize={clipboard.size} notice={clipboardNotice} onAction={performClipboardAction} />}
               <VectorCanvas
                 layers={documentLayers}
                 visibility={visibility}
@@ -1027,6 +1193,7 @@ export function EditorShell({
                 onPickColor={handlePickColor}
                 onFillObject={handleFillObject}
                 onToolShortcut={handleSelectTool}
+                onDeleteSelection={() => performClipboardAction("delete")}
                 toolSurface={drawEraseSurface}
                 pathSurface={pathSurface}
                 onEditPath={(objectId, layerGroupId) => {

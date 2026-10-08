@@ -251,6 +251,30 @@ describe("useEditableDocument — applyEdit / undo / redo", () => {
     expect(result.current.geometryDirty).toBe(false);
   });
 
+  it("applyEdit devuelve el comando registrado: es el MISMO objeto que luego entregan undo() y redo() (M3-S06 asocia la selección a él)", async () => {
+    const { result } = await renderLoaded();
+    let applied = { applied: false } as ReturnType<typeof result.current.applyEdit>;
+    let rejected = { applied: true } as ReturnType<typeof result.current.applyEdit>;
+    act(() => {
+      applied = result.current.applyEdit("Mover", moveIds(["a1"], 5));
+      rejected = result.current.applyEdit("nada", () => null);
+    });
+    expect(applied.edit).toBeDefined();
+    expect(applied.edit!.label).toBe("Mover");
+    expect(rejected.edit).toBeUndefined();
+
+    let undone: unknown = null;
+    let redone: unknown = null;
+    act(() => {
+      undone = result.current.undo();
+    });
+    act(() => {
+      redone = result.current.redo();
+    });
+    expect(undone).toBe(applied.edit);
+    expect(redone).toBe(applied.edit);
+  });
+
   it("undo/redo sin historial no hacen nada", async () => {
     const { result } = await renderLoaded();
     let undone: unknown = "x";

@@ -53,6 +53,11 @@ export interface ApplyEditResult {
   skippedLockedObjects: number;
   /** Objetos que el productor quiso modificar en capas OCULTAS y se omitieron. */
   skippedHiddenObjects: number;
+  /**
+   * El comando registrado por `applyEdit` (M3-S06): es el MISMO objeto que luego devuelven `undo()`/`redo()`, así que quien lo guarda puede
+   * asociarle datos propios (p. ej. la selección de antes y de después) y recuperarlos al deshacer/rehacer. Solo en `applyEdit`.
+   */
+  edit?: EditorEdit;
 }
 
 export interface UseEditableDocumentOptions {
@@ -568,8 +573,9 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
         return { applied: false, reason: blocked ? "blocked" : "no_change", skippedLockedObjects, skippedHiddenObjects };
       }
 
-      pushEdit(buildEdit(label, state.objectsByLayer, baseFrame, after, afterFrame, metas, afterMetas), editOptions);
-      return { applied: true, skippedLockedObjects, skippedHiddenObjects };
+      const edit = buildEdit(label, state.objectsByLayer, baseFrame, after, afterFrame, metas, afterMetas);
+      pushEdit(edit, editOptions);
+      return { applied: true, skippedLockedObjects, skippedHiddenObjects, edit };
     },
     [filterProduction, pushEdit, frameOf, layersNow],
   );

@@ -68,10 +68,11 @@ interface HarnessProps {
   onZoomBy?: (factor: number, anchor?: { x: number; y: number }) => void;
   onPanBy?: (dx: number, dy: number) => void;
   onMeasure?: (size: { width: number; height: number }) => void;
+  onDeleteSelection?: () => void;
 }
 
 /** Réplica mínima de la integración de EditorShell: estado editable real + selección por ids depurada contra los objetos seleccionables. */
-function Harness({ layers, visibility = {}, tool = "select", transform = IDENTITY_TRANSFORM, initialSelection = [], onApi, onSelection, onZoomBy, onPanBy, onMeasure }: HarnessProps) {
+function Harness({ layers, visibility = {}, tool = "select", transform = IDENTITY_TRANSFORM, initialSelection = [], onApi, onSelection, onZoomBy, onPanBy, onMeasure, onDeleteSelection }: HarnessProps) {
   const editable = useEditableDocument(layers, { visibility });
   const [raw, setRaw] = useState<ReadonlySet<string>>(new Set(initialSelection));
   const pool = useMemo(() => selectableObjectsOf(editable.objectsByLayer, layers, visibility), [editable.objectsByLayer, layers, visibility]);
@@ -95,6 +96,7 @@ function Harness({ layers, visibility = {}, tool = "select", transform = IDENTIT
       onZoomBy={onZoomBy ?? vi.fn()}
       onPanBy={onPanBy ?? vi.fn()}
       onMeasure={onMeasure ?? vi.fn()}
+      onDeleteSelection={onDeleteSelection}
     />
   );
 }
@@ -576,6 +578,24 @@ describe("VectorCanvas — Move (drag y teclado)", () => {
     expect(api().undoDepth).toBe(1);
   });
 
+  it("con `onDeleteSelection` el canvas NO elimina por su cuenta: delega en el shell (una sola vez por pulsación)", async () => {
+    const onDeleteSelection = vi.fn();
+    const { canvas, api } = await renderCanvas({ initialSelection: ["a1"], onDeleteSelection });
+    fireEvent.keyDown(canvas, { key: "Delete" });
+    fireEvent.keyDown(canvas, { key: "Backspace" });
+    expect(onDeleteSelection).toHaveBeenCalledTimes(2);
+    expect(api().undoDepth).toBe(0);
+    expect(api().objectsByLayer.A).toHaveLength(2);
+  });
+
+  it("sin selección Suprimir no delega ni avisa", async () => {
+    const onDeleteSelection = vi.fn();
+    const { canvas } = await renderCanvas({ onDeleteSelection });
+    fireEvent.keyDown(canvas, { key: "Delete" });
+    expect(onDeleteSelection).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("la herramienta Move arrastra igual, pero SIN Transformer y sin marquee", async () => {
     const { canvas, api, selection } = await renderCanvas({ tool: "move" });
     click(canvas, 10, 10);
@@ -625,6 +645,16 @@ describe("VectorCanvas — locks", () => {
     fireEvent.keyDown(canvas, { key: "Delete" });
     expect(api().objectsByLayer.A).toHaveLength(2);
     expect(api().undoDepth).toBe(0);
+  });
+
+  it("Delete con selección mixta (bloqueado + libre): elimina solo el libre en UN comando e informa lo omitido (M3-S06)", async () => {
+    const { canvas, api } = await renderCanvas({ layers: [LOCKED_A, LAYER_B], initialSelection: ["a1", "b1"] });
+    fireEvent.keyDown(canvas, { key: "Delete" });
+    expect(api().objectsByLayer.A).toHaveLength(2);
+    expect(api().objectsByLayer.B).toEqual([]);
+    expect(api().undoDepth).toBe(1);
+    expect(api().undoLabel).toBe("Eliminar 1 objeto");
+    expect(await screen.findByRole("alert")).toHaveTextContent("1 objeto no se eliminó (capa «Rojo» bloqueada).");
   });
 
   it("selección mixta (bloqueado + libre): se mueve solo el libre y se informa cuántos se omitieron", async () => {

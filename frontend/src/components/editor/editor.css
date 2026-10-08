@@ -428,6 +428,77 @@
   margin: 0;
 }
 
+/* ---------- M3-S06: Copiar / Cortar / Pegar / Duplicar / Eliminar (barra contextual) ---------- */
+
+.clipboard-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--editor-space-3);
+  padding: var(--editor-space-2) var(--editor-space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--editor-panel-bg);
+}
+
+.clipboard-bar__buttons {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--editor-space-1);
+}
+
+.clipboard-bar__button {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: var(--editor-space-1) var(--editor-space-2);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.clipboard-bar__button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.clipboard-bar__button--danger:not(:disabled) {
+  color: #b42318;
+}
+
+.clipboard-bar__status {
+  flex: 1 1 200px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.clipboard-bar__shortcuts {
+  font-size: 12px;
+  color: var(--text);
+}
+
+.clipboard-bar__shortcuts summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.clipboard-bar__shortcuts ul {
+  margin: var(--editor-space-1) 0;
+  padding-left: var(--editor-space-4, 16px);
+}
+
+.clipboard-bar__shortcuts p {
+  margin: 0;
+}
+
+.clipboard-bar__message {
+  flex: 1 0 100%;
+  margin: 0;
+}
+
 .editor-shell__action-notice {
   position: absolute;
   right: var(--editor-space-2);
