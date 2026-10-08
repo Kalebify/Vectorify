@@ -721,6 +721,10 @@ export function VectorCanvas({
       return;
     }
 
+    // Z-order (M3-S07): Ctrl/Cmd + la tecla física de los corchetes lo resuelve el shell (por `code`). En teclados no-US esa tecla escribe "+" u otro
+    // carácter y "+" haría zoom acá (con preventDefault), llevándose el evento antes que el atajo global: con una selección editable se lo deja pasar.
+    if (modifier && !event.altKey && isEditingTool && selectedObjects.length > 0 && (event.code === "BracketRight" || event.code === "BracketLeft")) return;
+
     // Path (M3-S05): las flechas (nudge de nodos), Escape, Enter y Suprimir los resuelve la herramienta; acá no se desplaza la vista ni se toca la selección de objetos.
     if (tool === "path" && pathSurface && (event.key === "ArrowUp" || event.key === "ArrowDown" || event.key === "ArrowLeft" || event.key === "ArrowRight")) return;
 
@@ -850,7 +854,7 @@ export function VectorCanvas({
       className={`vector-canvas-2 vector-canvas-2--${effectiveTool}`}
       tabIndex={0}
       role="application"
-      aria-label={`Canvas del documento. Herramienta activa: ${toolLabel}. Rueda del mouse para zoom. Mantené Espacio para pan temporal. Con foco: click o Control+A para seleccionar objetos, flechas para mover la selección (Shift: 10 unidades) o desplazar la vista si no hay selección, Suprimir para eliminar, Control o Comando más C, X, V y D para copiar, cortar, pegar y duplicar, Escape para limpiar, + y - para zoom. R y Mayúscula+R giran 90° la selección (o todo el documento sin selección), F y Mayúscula+F la reflejan; Enter aplica y Escape cancela. Con Crop activo, las flechas mueven el marco de recorte. Con Fill o Color, click selecciona y Fill además aplica el color activo al objeto. I activa el Eyedropper: click sobre un objeto toma el color de su capa. Con Draw o Erase, la superficie de dibujo captura el puntero: Escape cancela el trazo o el cálculo en curso. Doble click sobre un objeto con Select pasa a Path: click en un nodo lo selecciona, arrastre mueve, Suprimir elimina y las flechas mueven los nodos seleccionados.`}
+      aria-label={`Canvas del documento. Herramienta activa: ${toolLabel}. Rueda del mouse para zoom. Mantené Espacio para pan temporal. Con foco: click o Control+A para seleccionar objetos, flechas para mover la selección (Shift: 10 unidades) o desplazar la vista si no hay selección, Suprimir para eliminar, Control o Comando más C, X, V y D para copiar, cortar, pegar y duplicar, Control o Comando más corchete derecho o izquierdo traen adelante o envían atrás la selección dentro de su capa (con Mayúscula, al frente o al fondo), Escape para limpiar, + y - para zoom. R y Mayúscula+R giran 90° la selección (o todo el documento sin selección), F y Mayúscula+F la reflejan; Enter aplica y Escape cancela. Con Crop activo, las flechas mueven el marco de recorte. Con Fill o Color, click selecciona y Fill además aplica el color activo al objeto. I activa el Eyedropper: click sobre un objeto toma el color de su capa. Con Draw o Erase, la superficie de dibujo captura el puntero: Escape cancela el trazo o el cálculo en curso. Doble click sobre un objeto con Select pasa a Path: click en un nodo lo selecciona, arrastre mueve, Suprimir elimina y las flechas mueven los nodos seleccionados.`}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}

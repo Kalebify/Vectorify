@@ -254,7 +254,7 @@ export function nextPasteOffset(state: ClipboardState, mmPerUnit: number | null)
 }
 
 /** Objetos del documento en orden de pintado: primero la estructura vigente (`layers`), después las capas con objetos que no estén en ella. */
-function paintOrdered(document: EditableDocument): EditorObject[] {
+export function paintOrdered(document: EditableDocument): EditorObject[] {
   const ids = (document.layers ?? []).map((layer) => layer.groupId);
   const known = new Set(ids);
   for (const groupId of Object.keys(document.objectsByLayer)) {
