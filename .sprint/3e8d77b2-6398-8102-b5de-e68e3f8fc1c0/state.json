@@ -1,0 +1,19 @@
+{
+  "card_id": "3e8d77b2-6398-8102-b5de-e68e3f8fc1c0",
+  "card_url": "https://app.notion.com/p/3e8d77b263988102b5dee68e3f8fc1c0",
+  "title": "M3-S04 · Erase + Draw",
+  "stack": "Frontend, Vector, ASP.NET Core, Python -- Draw (pluma/mano alzada, capa activa o capa nueva explicita), Erase (objeto / restar geometria) e inauguracion del servicio de geometria del servidor (Shapely, anillos de poligonos, POST /api/v2/geometry/boolean)",
+  "branch": "sprint/3e8d77b2-m3-s04-erase-draw",
+  "column": "Done",
+  "phase": "review",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "pr_url": "https://github.com/Kalebify/Vectorify/pull/51",
+  "started_at": "2026-10-08T00:00:00Z",
+  "exceptions": [
+    "Corrida autonoma de MVP 3 (S01..S16) confirmada por el usuario: mergea el orquestador; ante un error la tarjeta pasa a Bloqueado y se sigue.",
+    "REORDEN DE ARQUITECTURA: el servicio de geometria del servidor (ADR D4) se inaugura aca (Erase parcial necesita 'difference'); S08 agrega UI y cobertura profunda de booleanas sobre el mismo endpoint.",
+    "DECISION: el servicio intercambia anillos de poligonos/polilineas (no path data); las booleanas devuelven polilineas aplanadas a la tolerancia pedida.",
+    "DECISION: EditorObject gana stroke?/strokeWidth? y fill 'none' para lineas abiertas (Draw abierto)."
+  ]
+}

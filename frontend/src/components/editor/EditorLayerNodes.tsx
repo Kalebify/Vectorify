@@ -2,6 +2,7 @@ import { memo, useCallback } from "react";
 import { Group, Path } from "react-konva";
 import type Konva from "konva";
 import { matrixToKonvaProps } from "../../lib/editor/matrix";
+import { isUnfilled } from "../../lib/editor/objects";
 import type { EditorObject } from "../../lib/editor/types";
 
 const LAYER_HIGHLIGHT_STROKE = "#3a5cf5";
@@ -27,21 +28,27 @@ interface EditorPathNodeProps {
 const EditorPathNode = memo(function EditorPathNode({ object, highlighted, onRegister }: EditorPathNodeProps) {
   const register = useCallback((node: Konva.Path | null) => onRegister(object.id, node), [object.id, onRegister]);
   const props = matrixToKonvaProps(object.matrix);
+  // `fill: "none"` (líneas abiertas de Draw, M3-S04) NO es un color de canvas: asignarlo a fillStyle se ignora y dejaría el negro por defecto.
+  const filled = !isUnfilled(object.fill);
+  const hasOwnStroke = !highlighted && object.stroke !== undefined && (object.strokeWidth ?? 0) > 0;
 
   return (
     <Path
       ref={register}
       data={object.d}
-      fill={object.fill}
+      fill={filled ? object.fill : undefined}
       x={props.x}
       y={props.y}
       rotation={props.rotation}
       scaleX={props.scaleX}
       scaleY={props.scaleY}
       skewX={props.skewX}
-      stroke={highlighted ? LAYER_HIGHLIGHT_STROKE : undefined}
-      strokeWidth={highlighted ? LAYER_HIGHLIGHT_WIDTH_PX : 0}
-      strokeScaleEnabled={false}
+      stroke={highlighted ? LAYER_HIGHLIGHT_STROKE : hasOwnStroke ? object.stroke : undefined}
+      strokeWidth={highlighted ? LAYER_HIGHLIGHT_WIDTH_PX : hasOwnStroke ? object.strokeWidth : 0}
+      // El trazo propio vive en unidades de documento (escala con el zoom y con la matriz); solo el resaltado de capa mide px de pantalla.
+      strokeScaleEnabled={hasOwnStroke}
+      lineCap={hasOwnStroke ? "round" : undefined}
+      lineJoin={hasOwnStroke ? "round" : undefined}
       listening={false}
       perfectDrawEnabled={false}
     />

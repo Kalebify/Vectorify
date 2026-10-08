@@ -617,6 +617,93 @@ class ColorPaletteResponse(BaseModel):
     )
 
 
+# ---- Servicio de geometría (M3-S04, ADR D4) ----
+# Se intercambian ANILLOS de polígonos / polilíneas en unidades de documento (formato tipo GeoJSON
+# MultiPolygon / MultiLineString), nunca path data: el cliente aplana las curvas con su propia
+# tolerancia y el servidor opera sobre coordenadas puras (ver app.core.geometry_ops).
+
+# Coordenada finita y acotada: el JSON de Python acepta `NaN`/`Infinity` aunque el estándar no, así que
+# se rechazan explícitamente (y un valor enorme que desborde al operar también).
+GEOMETRY_COORDINATE_LIMIT = 1_000_000_000.0
+GeometryCoordinate = Annotated[float, Field(allow_inf_nan=False, ge=-GEOMETRY_COORDINATE_LIMIT, le=GEOMETRY_COORDINATE_LIMIT)]
+GeometryPoint = tuple[GeometryCoordinate, GeometryCoordinate]
+GeometryOperation = Literal["union", "difference", "intersection", "xor", "normalize"]
+
+
+class PolygonGeometry(BaseModel):
+    """Polígono = lista de anillos (el primero es el exterior). Los huecos se construyen con la regla
+    par-impar: un anillo contenido en un número impar de anillos es relleno, en uno par es hueco. Un anillo
+    puede venir abierto o cerrado (con el primer vértice repetido al final); se necesitan >= 3 vértices."""
+
+    type: Literal["polygon"]
+    coordinates: list[Annotated[list[GeometryPoint], Field(min_length=3)]] = Field(min_length=1)
+
+
+class LineGeometry(BaseModel):
+    """Polilínea abierta (o cerrada si repite su primer vértice): >= 2 vértices."""
+
+    type: Literal["line"]
+    coordinates: list[GeometryPoint] = Field(min_length=2)
+
+
+class BufferedLineOperand(BaseModel):
+    """Pincel de borrador: una línea con radio (cap/join redondos). Un solo punto es un toque (círculo)."""
+
+    type: Literal["bufferedLine"]
+    points: list[GeometryPoint] = Field(min_length=1)
+    radius: float = Field(gt=0, le=GEOMETRY_COORDINATE_LIMIT, allow_inf_nan=False)
+
+
+SubjectGeometry = Annotated[PolygonGeometry | LineGeometry, Field(discriminator="type")]
+OperandGeometry = Annotated[PolygonGeometry | LineGeometry | BufferedLineOperand, Field(discriminator="type")]
+
+
+class GeometryBooleanRequest(BaseModel):
+    """Cuerpo de POST /api/v1/geometry/boolean. `tolerance` (> 0, unidades de documento) gobierna la
+    resolución de los arcos del pincel y el umbral de "pieza despreciable" (área < tolerance², largo <
+    tolerance) del resultado."""
+
+    operation: GeometryOperation
+    subjects: list[SubjectGeometry] = Field(min_length=1)
+    operands: list[OperandGeometry] = Field(default_factory=list)
+    tolerance: float = Field(gt=0, le=1_000_000, allow_inf_nan=False)
+
+
+class PolygonPiece(BaseModel):
+    """Pieza poligonal del resultado: anillos CERRADOS (primer vértice repetido al final), exterior primero
+    (antihorario en ejes matemáticos) y huecos después (horarios), cada anillo empezando por su vértice
+    mínimo (x, y) -- representación canónica, determinista."""
+
+    type: Literal["polygon"]
+    coordinates: list[list[GeometryPoint]]
+
+
+class LinePiece(BaseModel):
+    type: Literal["line"]
+    coordinates: list[GeometryPoint]
+
+
+GeometryPiece = Annotated[PolygonPiece | LinePiece, Field(discriminator="type")]
+
+
+class GeometryResultItem(BaseModel):
+    """Resultado para UN subject (`subject_index`) o para el conjunto (`null`, union/xor). `changed` es false
+    cuando el resultado es topológicamente igual al subject (el cliente conserva entonces su objeto
+    original, con sus curvas). `geometries` puede estar vacío (nada queda) o tener varias piezas."""
+
+    subject_index: int | None
+    changed: bool
+    geometries: list[GeometryPiece]
+
+
+class GeometryBooleanResponse(BaseModel):
+    operation: GeometryOperation
+    scope: Literal["per_subject", "combined"]
+    tolerance: float
+    results: list[GeometryResultItem]
+    piece_count: int = Field(ge=0)
+
+
 class ErrorResponse(BaseModel):
     """Forma común de error controlado, igual convención que
     Vectorify.Api.Contracts.ApiErrorResponse: `code` es estable, `message` es

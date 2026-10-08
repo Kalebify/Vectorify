@@ -84,11 +84,20 @@ export function parseEditableLayerStrict(
       layerGroupId,
       d,
       fill: pathElement.getAttribute("fill") || ancestorFill(pathElement) || fallbackFill,
+      ...readStroke(pathElement),
       matrix,
     });
   }
 
   return objects;
+}
+
+/** `stroke`/`stroke-width` del propio `<path>` (M3-S04: líneas abiertas de Draw). Sin trazo (o `stroke="none"`) no agrega ninguna propiedad: los objetos de S01-S03 quedan idénticos. */
+function readStroke(element: Element): Pick<EditorObject, "stroke" | "strokeWidth"> {
+  const stroke = element.getAttribute("stroke")?.trim();
+  if (!stroke || stroke.toLowerCase() === "none") return {};
+  const width = Number(element.getAttribute("stroke-width"));
+  return Number.isFinite(width) && width > 0 ? { stroke, strokeWidth: width } : { stroke };
 }
 
 /** Igual que `parseEditableLayerStrict` pero un SVG inválido da `[]` (fail-safe, como el resto de `lib/`). */
@@ -133,7 +142,11 @@ export function serializeEditableLayer(objects: EditorObject[], meta: LayerSvgMe
     const transform = isIdentityMatrix(object.matrix)
       ? ""
       : ` transform="matrix(${[a, b, c, d, e, f].map(finiteOrZero).join(" ")})"`;
-    return `<path ${VID_ATTRIBUTE}="${escapeXmlAttribute(object.id)}" d="${escapeXmlAttribute(object.d)}" fill="${escapeXmlAttribute(object.fill)}"${transform}/>`;
+    // Trazo (M3-S04): solo si el objeto lo tiene, así el SVG de un objeto de S01-S03 no cambia ni un byte.
+    const stroke = object.stroke
+      ? ` stroke="${escapeXmlAttribute(object.stroke)}"${object.strokeWidth !== undefined ? ` stroke-width="${finiteOrZero(object.strokeWidth)}"` : ""}`
+      : "";
+    return `<path ${VID_ATTRIBUTE}="${escapeXmlAttribute(object.id)}" d="${escapeXmlAttribute(object.d)}" fill="${escapeXmlAttribute(object.fill)}"${stroke}${transform}/>`;
   });
 
   const width = finiteOrZero(meta.width);
@@ -207,7 +220,8 @@ export function rectFromPoints(start: Point, end: Point): Rect {
 
 const polylineCache = new WeakMap<EditorObject, Polyline[]>();
 
-function objectPolylines(object: EditorObject): Polyline[] {
+/** Contorno del objeto aplanado en espacio de DOCUMENTO (matriz aplicada), cacheado por referencia: lo usan el hit-test y el alcance de Erase (M3-S04). */
+export function objectPolylines(object: EditorObject): Polyline[] {
   const cached = polylineCache.get(object);
   if (cached) return cached;
   const parsed = parsePathDataCached(object.d);
@@ -216,28 +230,37 @@ function objectPolylines(object: EditorObject): Polyline[] {
   return polylines;
 }
 
-function isUnfilled(fill: string): boolean {
+/** ¿El objeto NO tiene relleno (`fill: "none"`/`"transparent"`)? Es el caso de las líneas abiertas de Draw (M3-S04): solo existen por su trazo. */
+export function isUnfilled(fill: string): boolean {
   const normalized = fill.trim().toLowerCase();
   return normalized === "none" || normalized === "transparent";
 }
 
-/** ¿El punto (en documento) cae sobre el objeto? Relleno exacto (regla no-cero) o a ≤ `tolerance` de su contorno. */
+/** Medio ancho del trazo EN DOCUMENTO (el ancho vive en el espacio del objeto y la matriz lo escala). 0 si el objeto no tiene trazo. */
+function strokeHalfWidth(object: EditorObject): number {
+  if (!object.stroke || !object.strokeWidth || !(object.strokeWidth > 0)) return 0;
+  const { a, b, c, d } = object.matrix;
+  return (object.strokeWidth * Math.sqrt(Math.abs(a * d - b * c))) / 2;
+}
+
+/**
+ * ¿El punto (en documento) cae sobre el objeto? Relleno exacto (regla no-cero) o a ≤ `tolerance` de su contorno. Con trazo (M3-S04) la
+ * tolerancia es `max(strokeWidth / 2, tolerance)`: una línea fina se puede seleccionar/borrar a cualquier zoom y una gruesa responde en
+ * todo su ancho. Un objeto sin relleno se mide contra su contorno ABIERTO (el lado de cierre implícito no existe para un trazo).
+ */
 function objectContainsPoint(object: EditorObject, point: Point, tolerance: number): boolean {
   const rect = objectBounds(object);
   if (!rect) return false;
-  if (
-    point.x < rect.x - tolerance ||
-    point.x > rect.x + rect.width + tolerance ||
-    point.y < rect.y - tolerance ||
-    point.y > rect.y + rect.height + tolerance
-  ) {
+  const slack = Math.max(tolerance, strokeHalfWidth(object));
+  if (point.x < rect.x - slack || point.x > rect.x + rect.width + slack || point.y < rect.y - slack || point.y > rect.y + rect.height + slack) {
     return false;
   }
   const polylines = objectPolylines(object);
-  if (!isUnfilled(object.fill) && pointInPolylinesNonZero(polylines, point)) return true;
+  const unfilled = isUnfilled(object.fill);
+  if (!unfilled && pointInPolylinesNonZero(polylines, point)) return true;
   // Fuera del relleno (o sin relleno): solo cuenta si cae a ≤ tolerancia del contorno -- así un
   // trazo fino o un hueco angosto siguen siendo clickeables a zoom bajo.
-  return distanceToPolylines(polylines, point) <= tolerance;
+  return distanceToPolylines(polylines, point, unfilled) <= slack;
 }
 
 /**

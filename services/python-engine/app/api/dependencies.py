@@ -3,6 +3,7 @@ from fastapi import Depends
 from app.core.config import Settings, get_settings
 from app.services.color_palette_service import ColorPaletteService
 from app.services.component_analysis_service import ComponentAnalysisService
+from app.services.geometry_service import GeometryService
 from app.services.info_service import InfoService
 from app.services.path_checker_service import PathCheckerService
 from app.services.physical_union_service import PhysicalUnionService
@@ -46,3 +47,7 @@ def get_component_analysis_service(settings: Settings = Depends(get_settings)) -
 
 def get_physical_union_service(settings: Settings = Depends(get_settings)) -> PhysicalUnionService:
     return PhysicalUnionService(settings)
+
+
+def get_geometry_service(settings: Settings = Depends(get_settings)) -> GeometryService:
+    return GeometryService(settings)

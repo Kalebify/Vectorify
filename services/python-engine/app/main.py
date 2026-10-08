@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from app.api.routes.check import router as check_router
 from app.api.routes.color_palette import router as color_palette_router
 from app.api.routes.components import router as components_router
+from app.api.routes.geometry import router as geometry_router
 from app.api.routes.health import router as health_router
 from app.api.routes.info import router as info_router
 from app.api.routes.physical_union import router as physical_union_router
@@ -27,6 +28,9 @@ from app.core.errors import (
     CorruptImageError,
     DimensionsExceededError,
     EmptyMaskError,
+    GeometryRequestTooLargeError,
+    GeometryResultInvalidError,
+    GeometryTimeoutError,
     InvalidInputSvgError,
     InvalidParametersError,
     InvalidSvgError,
@@ -37,6 +41,8 @@ from app.core.errors import (
     SimplificationTimeoutError,
     SvgInputTooLargeError,
     SvgOutputTooLargeError,
+    TooManyGeometrySubjectsError,
+    TooManyGeometryVerticesError,
     TooManySubpathsError,
     TooManySubpathsForComponentsError,
     VectorizationEngineError,
@@ -63,7 +69,8 @@ app = FastAPI(
         "app.core.color_palette_pipeline), de componentes físicos independientes por capa "
         "(M2-S03, análisis de solo lectura, ver app.core.component_analysis) y de unión física de "
         "piezas (M2-S06, modifica geometría: unión booleana + bridging simple con Shapely, ver "
-        "app.core.physical_union)."
+        "app.core.physical_union) y del servicio de geometría sin estado del editor (M3-S04, ADR D4: "
+        "booleanas sobre anillos/polilíneas con Shapely, ver app.core.geometry_ops)."
     ),
     version=settings.service_version,
 )
@@ -78,6 +85,7 @@ app.include_router(check_router)
 app.include_router(color_palette_router)
 app.include_router(components_router)
 app.include_router(physical_union_router)
+app.include_router(geometry_router)
 
 # Códigos HTTP por tipo de error controlado del pipeline (ver "Errores y
 # límites" de spec.md): imagen corrupta -> 400, dimensiones excesivas -> 413,
@@ -111,6 +119,13 @@ _STATUS_BY_ERROR: dict[type[PreprocessingError], int] = {
     PhysicalUnionTimeoutError: 504,
     PhysicalUnionInvalidGeometryError: 422,
     PhysicalUnionImpossibleError: 422,
+    # M3-S04 (servicio de geometría): cuerpo/vértices/subjects excedidos -> 413/422, timeout -> 504; un
+    # resultado inválido de la operación es un fallo del motor -> 500 (el cliente nunca recibe geometría inválida).
+    GeometryRequestTooLargeError: 413,
+    TooManyGeometrySubjectsError: 422,
+    TooManyGeometryVerticesError: 422,
+    GeometryTimeoutError: 504,
+    GeometryResultInvalidError: 500,
 }
 
 

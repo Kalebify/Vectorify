@@ -155,6 +155,22 @@ class Settings(BaseSettings):
     physical_union_min_bridge_width_ratio: float = 0.001
     physical_union_max_bridge_width_ratio: float = 0.5
 
+    # Servicio de geometría del servidor (M3-S04, ADR D4): operaciones booleanas
+    # sin estado sobre anillos de polígonos / polilíneas en unidades de
+    # documento (ver app.core.geometry_ops). spec.md fija los topes de entrada:
+    # 500 subjects y 500 000 vértices en total; `max_geometry_operands` (mismo
+    # valor que los subjects) y `max_geometry_request_bytes` (~64 bytes por
+    # vértice como cota holgada del JSON de 500 000 vértices) son supuestos
+    # documentados en el IMPL del sprint. geometry_timeout_seconds es un
+    # presupuesto interno del proceso Python, menor al timeout HTTP del lado de
+    # Vectorify.Api (Geometry:TimeoutSeconds), mismo criterio que
+    # physical_union_timeout_seconds.
+    geometry_timeout_seconds: int = 15
+    max_geometry_subjects: int = 500
+    max_geometry_operands: int = 500
+    max_geometry_vertices: int = 500_000
+    max_geometry_request_bytes: int = 32_000_000
+
     # Validación raster-vs-vector por capa (M2.1-S03): después de vectorizar
     # la máscara de una capa, se rasteriza el SVG resultante de vuelta (ver
     # app.core.raster_validation.rasterize_svg_mask) y se compara contra (a)

@@ -333,4 +333,18 @@ describe("aplanado + punto en relleno", () => {
     // Subpath abierto de 3 puntos: se trata como cerrado para el contorno de relleno (lado diagonal).
     expect(distanceToPolylines(open, { x: 0, y: 10 })).toBeCloseTo(Math.SQRT1_2 * 10, 9);
   });
+
+  it("respectOpen (objetos sin relleno, M3-S04): un subpath abierto NO tiene el lado de cierre; uno con Z sí", () => {
+    const open = flattenSegments(parsePathData("M0 0 H10 V10").segments);
+    // El punto (0, 10) está a 10 de los dos lados reales, no a 7,07 de la hipotenusa que cerraría la L.
+    expect(distanceToPolylines(open, { x: 0, y: 10 }, true)).toBeCloseTo(10, 9);
+    expect(distanceToPolylines(open, { x: 5, y: 0 }, true)).toBeCloseTo(0, 9);
+
+    const closed = flattenSegments(parsePathData("M0 0 H10 V10 Z").segments);
+    expect(distanceToPolylines(closed, { x: 0, y: 10 }, true)).toBeCloseTo(Math.SQRT1_2 * 10, 9);
+    // Un subpath de un solo segmento (2 puntos) se comporta igual con y sin respectOpen.
+    const single = flattenSegments(parsePathData("M0 0 L10 0").segments);
+    expect(distanceToPolylines(single, { x: 5, y: 3 }, true)).toBeCloseTo(3, 9);
+    expect(distanceToPolylines(single, { x: 5, y: 3 })).toBeCloseTo(3, 9);
+  });
 });

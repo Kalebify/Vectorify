@@ -219,3 +219,46 @@ class TooManySubpathsForComponentsError(PreprocessingError):
     CPU/memoria antes de llegar al timeout."""
 
     code = "too_many_component_subpaths"
+
+
+class GeometryTimeoutError(PreprocessingError):
+    """La operación booleana del servicio de geometría (M3-S04, ver
+    app.services.geometry_service.GeometryService) tardó más que
+    Geometry:TimeoutSeconds/geometry_timeout_seconds y se abortó. Mismo
+    criterio que PhysicalUnionTimeoutError: el cómputo (Shapely/GEOS) es puro
+    Python/C sin punto de cancelación cooperativa, se acota con un hilo
+    separado (best effort, ver GeometryService._run_with_timeout)."""
+
+    code = "geometry_timeout"
+
+
+class GeometryRequestTooLargeError(PreprocessingError):
+    """El cuerpo de la petición al servicio de geometría (M3-S04) supera
+    max_geometry_request_bytes. Se rechaza antes de parsearlo: es el primer
+    tope contra una entrada hostil (el segundo es el conteo de vértices)."""
+
+    code = "geometry_request_too_large"
+
+
+class TooManyGeometrySubjectsError(PreprocessingError):
+    """La petición trae más `subjects` (o `operands`) que
+    max_geometry_subjects/max_geometry_operands (M3-S04)."""
+
+    code = "too_many_geometry_subjects"
+
+
+class TooManyGeometryVerticesError(PreprocessingError):
+    """La suma de vértices de todos los subjects y operands supera
+    max_geometry_vertices (M3-S04): salvaguarda de CPU/memoria previa al
+    timeout, igual criterio que TooManySubpathsError."""
+
+    code = "too_many_geometry_vertices"
+
+
+class GeometryResultInvalidError(PreprocessingError):
+    """El resultado de una operación booleana (M3-S04) no pasó la validación
+    final (coordenadas no finitas, polígono inválido tras make_valid). Es un
+    fallo del motor, no del caller (500): el cliente NUNCA debe recibir
+    geometría inválida, así que se responde error en vez de devolverla."""
+
+    code = "geometry_result_invalid"

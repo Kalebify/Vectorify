@@ -645,8 +645,12 @@ function cross(p1: Point, p2: Point, point: Point): number {
   return (p2.x - p1.x) * (point.y - p1.y) - (point.x - p1.x) * (p2.y - p1.y);
 }
 
-/** Distancia mínima del punto al contorno de las polilíneas (incluye el lado de cierre implícito de cada subpath). */
-export function distanceToPolylines(polylines: Polyline[], point: Point): number {
+/**
+ * Distancia mínima del punto al contorno de las polilíneas. Por defecto incluye el lado de cierre implícito de cada subpath (el relleno
+ * siempre cierra); con `respectOpen` (objetos SIN relleno, M3-S04) un subpath que no terminó en Z queda abierto: no existe el lado que
+ * une su último punto con el primero.
+ */
+export function distanceToPolylines(polylines: Polyline[], point: Point, respectOpen = false): number {
   let best = Infinity;
   for (const { points, closed } of polylines) {
     const count = points.length;
@@ -654,7 +658,7 @@ export function distanceToPolylines(polylines: Polyline[], point: Point): number
       best = Math.min(best, Math.hypot(point.x - points[0].x, point.y - points[0].y));
       continue;
     }
-    const segmentCount = closed || count > 2 ? count : count - 1;
+    const segmentCount = respectOpen ? (closed ? count : count - 1) : closed || count > 2 ? count : count - 1;
     for (let index = 0; index < segmentCount; index += 1) {
       best = Math.min(best, distanceToSegment(points[index], points[(index + 1) % count], point));
     }

@@ -1,4 +1,4 @@
-import { hitTest } from "./objects";
+import { hitTest, isUnfilled } from "./objects";
 import { selectableObjects, type SelectableLayer } from "./selection";
 import type { EditableDocument, EditableLayerMeta, EditorObject, EditProduction, Point } from "./types";
 
@@ -200,8 +200,18 @@ function layerBlockedReason(layer: EditableLayerMeta, role: "destino" | "origen"
   return null;
 }
 
+/**
+ * Pinta un objeto con `hex`: su relleno, o su TRAZO si es una línea abierta (`fill: "none"` con `stroke`, M3-S04: su color es el del trazo y
+ * un `fill` nuevo la convertiría en una forma rellena). Devuelve el mismo objeto si ya tenía ese color.
+ */
+function paint(object: EditorObject, hex: string): EditorObject {
+  if (isUnfilled(object.fill) && object.stroke !== undefined) return object.stroke === hex ? object : { ...object, stroke: hex };
+  return object.fill === hex ? object : { ...object, fill: hex };
+}
+
 function recolored(object: EditorObject, layer: { groupId: string; colorHex: string }): EditorObject {
-  return object.layerGroupId === layer.groupId && object.fill === layer.colorHex ? object : { ...object, layerGroupId: layer.groupId, fill: layer.colorHex };
+  const painted = paint(object, layer.colorHex);
+  return object.layerGroupId === layer.groupId ? painted : { ...painted, layerGroupId: layer.groupId };
 }
 
 function planSelection(state: EditableDocument, request: RecolorRequest): ColorPlan {
@@ -318,7 +328,7 @@ function planLayerColor(scope: "layer" | "document", state: EditableDocument, re
   if (hexEquals(source.colorHex, hex)) return failure(summary, `La capa «${source.name}» ya tiene el color ${hex}.`);
   summary.layerRecolor = { groupId: source.groupId, name: source.name, from: source.colorHex, to: hex };
   const production: EditProduction = {
-    layers: objects.length > 0 ? { [source.groupId]: objects.map((object) => (object.fill === hex ? object : { ...object, fill: hex })) } : {},
+    layers: objects.length > 0 ? { [source.groupId]: objects.map((object) => paint(object, hex)) } : {},
     layerMetas: [{ ...source, colorHex: hex }],
     atomic: true,
   };

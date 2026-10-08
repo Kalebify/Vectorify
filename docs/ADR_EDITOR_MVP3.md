@@ -23,6 +23,11 @@ booleanas/offset/cortes, puentes, undo/redo, autosave de **geometría**, checker
   de S01–S02 componen la matriz (no destructivo, exacto). Las operaciones que necesitan geometría real
   (booleanas, offset, corte, nodos) **hornean** la matriz en `d` (`bakeMatrix`) antes de operar.
 - Un objeto nunca cambia de capa salvo comando explícito (Move to layer, S06/S07).
+- (M3-S04) Campos **opcionales** `stroke?: string` y `strokeWidth?: number` (unidades del espacio del propio
+  objeto, como `d`) y `fill` puede ser `"none"`: así existen las **líneas abiertas** de Draw (`fill: "none"`,
+  `stroke` = color de la capa). `serialize`/`parse` los conservan (`stroke`, `stroke-width`, `fill="none"`); los
+  objetos de S01–S03 no los traen y no cambian. El color de una línea abierta es el de su trazo (Fill/Recolor
+  pintan `stroke`, no `fill`).
 
 Coordenadas: **espacio de documento** = unidades del `viewBox` del VectorDocument (px de origen); el
 **espacio de pantalla** (viewport Konva: zoom/pan) se convierte con `useCanvasTransform`. **mm** = unidades de
@@ -54,12 +59,51 @@ su capa activa). Transformer de Konva para bounding box y handles.
 
 ### D4. Geometría pesada en el servidor, sin estado
 Booleanas, offset, corte, puentes y análisis de piezas flotantes (S08–S11, S14) usan **Shapely** en el
-motor Python (ya en `requirements.txt`) detrás de endpoints **sin estado** que reciben la geometría (paths
-horneados en unidades de documento + factor mm) y devuelven la geometría resultante; ASP.NET Core los expone
+motor Python (ya en `requirements.txt`) detrás de endpoints **sin estado**; ASP.NET Core los expone
 bajo `/api/v2/geometry/*` (misma arquitectura proxy que el resto: Endpoint → Servicio → cliente Python,
-`ApiErrorResponse` uniforme, ownership vía `IUserContext` donde corresponda). El cliente aplica el resultado
-como un comando (undoable). Resultados siempre validados (geometría válida, sin NaN, sin paths vacíos) y
-tolerancias explícitas (en mm).
+`ApiErrorResponse` uniforme; `IUserContext` solo donde haya datos del usuario: una operación que recibe y
+devuelve coordenadas no lo necesita). El cliente aplica el resultado como un comando (undoable). Resultados
+siempre validados (geometría válida, sin NaN, sin paths vacíos) y tolerancias explícitas (en mm en la UI,
+en unidades de documento en el cable).
+
+**Formato de intercambio (fijado en M3-S04; lo reusan S08–S11).** Los endpoints intercambian **anillos de
+polígonos y polilíneas en unidades de documento** (tipo GeoJSON `MultiPolygon` / `MultiLineString`),
+**nunca path data**: el cliente aplana sus curvas con su `pathGeometry` (tolerancia explícita, default
+0,01 mm convertida a unidades con el factor `mmPerUnit`) y el servidor opera sobre coordenadas puras. El
+resultado vuelve como anillos y el cliente lo serializa a `d` (`M … L … Z`, los huecos son subpaths).
+Consecuencia: **las booleanas devuelven polilíneas aplanadas a la tolerancia pedida y no preservan los
+Bézier originales**; un objeto que el servidor declara intacto (`changed: false`) se conserva tal cual, con
+sus curvas.
+
+- Petición `POST /api/v2/geometry/boolean` (Python: `POST /api/v1/geometry/boolean`, cuerpo JSON):
+  `{ operation: "union"|"difference"|"intersection"|"xor"|"normalize", subjects: [Geometry…],
+  operands: [Operand…], tolerance }`.
+  - `Geometry` = `{ type: "polygon", coordinates: [[[x,y],…],…] }` — lista de **anillos**, el primero
+    exterior; los huecos salen de la **regla par-impar** (un anillo dentro de un número impar de anillos es
+    relleno, dentro de uno par es hueco). Un anillo puede venir abierto o cerrado (≥ 3 vértices). — o
+    `{ type: "line", coordinates: [[x,y],…] }` (polilínea, ≥ 2 vértices; cerrada si repite el primero).
+  - `Operand` = `Geometry` o `{ type: "bufferedLine", points: [[x,y],…], radius }` (pincel de borrador:
+    línea con radio, extremos y uniones redondos, resolución de arcos acotada por `tolerance`).
+  - Semántica: `difference` = cada subject menos la unión de los operands; `intersection` = cada subject ∩
+    la unión de los operands (requiere operandos); `union`/`xor` operan sobre subjects + operands;
+    `normalize` = `make_valid` + fusión de cada subject (trazos auto-intersecados: un "moño" son dos triángulos).
+  - `tolerance` > 0 (unidades de documento): resolución de los arcos del pincel y umbral de pieza
+    despreciable (polígonos de área < tolerance², polilíneas de largo ≤ tolerance se descartan).
+- Respuesta: `{ operation, scope, tolerance, results: [{ subjectIndex, changed, geometries }], pieceCount }`.
+  `scope` = `per_subject` (difference/intersection/normalize: una entrada por subject, en orden) o
+  `combined` (union/xor: una entrada con `subjectIndex: null`). `geometries` puede tener 0 piezas (el
+  subject desaparece), 1 o varias (partido). Cada pieza es `polygon` (anillos **cerrados**, exterior
+  antihorario y huecos horarios en ejes matemáticos, cada anillo empezando en su vértice mínimo (x, y)) o
+  `line`. Sin NaN, polígonos válidos (`is_valid` tras `make_valid`) y **orden determinista** (mismas
+  entradas → mismas salidas, byte a byte; polígonos antes que polilíneas, ordenados por coordenadas).
+  `changed: false` = resultado topológicamente igual al subject (p. ej. operando disjunto).
+- Límites (422 en Python, 400 con código claro en ASP.NET Core): 500 subjects, 500 operands, 500 000
+  vértices en total, coordenadas finitas con |v| ≤ 1e9, tolerancia finita en (0, 1e6]; cuerpo ≤ 32 MB
+  (413); timeout propio (Python 15 s, cliente 20 s). Errores: `invalid_parameters`, `unknown_operation`,
+  `invalid_tolerance`, `invalid_coordinates`, `too_many_subjects|operands|vertices`, `payload_too_large`;
+  Python caído → 503 `engine_unavailable`, timeout → 504 `timeout`, respuesta incoherente → 502
+  `invalid_response`. El cliente **nunca** crea geometría inválida: si el servidor falla (o la respuesta no
+  pasa su propia validación) no modifica nada y lo informa.
 
 ### D5. Persistencia de geometría (M3-S13)
 Serialización `EditableDocument → SVG por capa` (mismo formato de origen, `<path data-vid d fill transform>`)

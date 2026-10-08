@@ -265,6 +265,8 @@ function sameObjectContent(left: EditorObject, right: EditorObject): boolean {
   return (
     left.d === right.d &&
     left.fill === right.fill &&
+    left.stroke === right.stroke &&
+    left.strokeWidth === right.strokeWidth &&
     left.layerGroupId === right.layerGroupId &&
     left.matrix.a === right.matrix.a &&
     left.matrix.b === right.matrix.b &&
