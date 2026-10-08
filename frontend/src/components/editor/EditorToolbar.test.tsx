@@ -11,7 +11,7 @@ describe("EditorToolbar — shell completo del wireframe", () => {
     }
   });
 
-  it("Select, Pan, Move (M3-S01), Crop (M3-S02) y Fill, Color, Eyedropper (M3-S03) están habilitados; el resto está deshabilitado pero VISIBLE, con tooltip de MVP3", () => {
+  it("Select, Pan, Move (M3-S01), Crop (M3-S02), Fill, Color, Eyedropper (M3-S03) y Draw, Erase (M3-S04) están habilitados; el resto está deshabilitado pero VISIBLE, con tooltip de MVP3", () => {
     render(<EditorToolbar activeTool="select" onSelectTool={vi.fn()} />);
 
     expect(screen.getByRole("button", { name: /^Select/ })).toBeEnabled();
@@ -21,8 +21,10 @@ describe("EditorToolbar — shell completo del wireframe", () => {
     expect(screen.getByRole("button", { name: /^Fill/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Color/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Eyedropper/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Draw/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Erase/ })).toBeEnabled();
 
-    for (const label of ["Draw", "Erase", "Offset", "Cut", "Path"]) {
+    for (const label of ["Offset", "Cut", "Path"]) {
       const button = screen.getByRole("button", { name: new RegExp(`^${label}`) });
       expect(button).toBeDisabled();
       expect(button).toHaveAttribute("title", expect.stringContaining("MVP3"));
@@ -90,11 +92,29 @@ describe("EditorToolbar — shell completo del wireframe", () => {
     }
   });
 
+  it("Draw y Erase (M3-S04) llaman a onSelectTool, se marcan con aria-pressed y su título dice qué hacen", () => {
+    const onSelectTool = vi.fn();
+    const { rerender } = render(<EditorToolbar activeTool="select" onSelectTool={onSelectTool} />);
+
+    expect(screen.getByRole("button", { name: /^Draw/ })).toHaveAttribute("title", expect.stringContaining("capa activa"));
+    expect(screen.getByRole("button", { name: /^Erase/ })).toHaveAttribute("title", expect.stringContaining("restar geometría"));
+    for (const [label, tool] of [
+      ["Draw", "draw"],
+      ["Erase", "erase"],
+    ] as const) {
+      fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${label}`) }));
+      expect(onSelectTool).toHaveBeenLastCalledWith(tool);
+      rerender(<EditorToolbar activeTool={tool} onSelectTool={onSelectTool} />);
+      expect(screen.getByRole("button", { name: new RegExp(`^${label}`) })).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByRole("button", { name: /^Select/ })).toHaveAttribute("aria-pressed", "false");
+    }
+  });
+
   it("clickear una herramienta deshabilitada no llama a onSelectTool", () => {
     const onSelectTool = vi.fn();
     render(<EditorToolbar activeTool="select" onSelectTool={onSelectTool} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /^Draw/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Offset/ }));
     expect(onSelectTool).not.toHaveBeenCalled();
   });
 });

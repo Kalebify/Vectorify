@@ -11,6 +11,7 @@ using Vectorify.Api.Data;
 using Vectorify.Api.Dimensioning;
 using Vectorify.Api.Endpoints;
 using Vectorify.Api.Export;
+using Vectorify.Api.Geometry;
 using Vectorify.Api.LayerLayout;
 using Vectorify.Api.Maintenance;
 using Vectorify.Api.ManufacturingOperations;
@@ -299,6 +300,32 @@ builder.Services.AddHttpClient<IPythonCheckClient, PythonCheckClient>((sp, clien
 
 builder.Services.AddSingleton<ICheckParameterValidator, CheckParameterValidator>();
 builder.Services.AddScoped<ICheckService, CheckService>();
+
+// Servicio de geometría del editor (M3-S04, ADR D4 de docs/ADR_EDITOR_MVP3.md): operaciones booleanas SIN estado
+// (union/difference/intersection/xor/normalize) sobre anillos de polígonos y polilíneas en unidades de documento,
+// calculadas con Shapely en el motor Python. A diferencia de Check no localiza ningún SVG ni toca el storage: recibe
+// coordenadas y devuelve coordenadas, así que no necesita IUserContext ni base de datos. Límites de entrada
+// (Geometry:*) validados acá antes de llamar a Python, cliente Python dedicado con su propio timeout. Lo reusan
+// las tarjetas S08-S11 (booleanas, offset, corte, puentes).
+builder.Services
+    .AddOptions<GeometryOptions>()
+    .Bind(builder.Configuration.GetSection(GeometryOptions.SectionName))
+    .Validate(o => o.TimeoutSeconds > 0, "Geometry:TimeoutSeconds debe ser mayor a 0.")
+    .Validate(o => o.MaxSubjects > 0 && o.MaxOperands > 0, "Geometry:MaxSubjects/MaxOperands deben ser mayores a 0.")
+    .Validate(o => o.MaxVertices > 0, "Geometry:MaxVertices debe ser mayor a 0.")
+    .Validate(o => o.MaxTolerance > 0 && o.MaxCoordinateMagnitude > 0, "Geometry:MaxTolerance/MaxCoordinateMagnitude deben ser mayores a 0.")
+    .Validate(o => o.MaxRequestBodyBytes > 0, "Geometry:MaxRequestBodyBytes debe ser mayor a 0.");
+
+builder.Services.AddHttpClient<IPythonGeometryClient, PythonGeometryClient>((sp, client) =>
+{
+    var pythonOptions = sp.GetRequiredService<IOptions<PythonEngineOptions>>().Value;
+    var geometryOptions = sp.GetRequiredService<IOptions<GeometryOptions>>().Value;
+    client.BaseAddress = new Uri(pythonOptions.BaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(geometryOptions.TimeoutSeconds);
+});
+
+builder.Services.AddSingleton<IGeometryRequestValidator, GeometryRequestValidator>();
+builder.Services.AddScoped<IGeometryService, GeometryService>();
 
 // Dimensiones físicas en mm (M1-S09): etapa que opera sobre un SVG YA
 // generado -- una VectorVersion (M1-S05) o una SimplificationVersion
@@ -734,6 +761,7 @@ app.MapThresholdEndpoints();
 app.MapVectorizationEndpoints();
 app.MapSimplificationEndpoints();
 app.MapCheckEndpoints();
+app.MapGeometryEndpoints();
 app.MapDimensionEndpoints();
 app.MapExportEndpoints();
 app.MapColorPaletteEndpoints();

@@ -248,6 +248,87 @@
   cursor: crosshair;
 }
 
+/* M3-S04: Draw y Erase usan una superficie propia (cruz); el pincel de Erase se dibuja a su tamaño real. */
+.vector-canvas-2--draw,
+.vector-canvas-2--erase {
+  cursor: crosshair;
+}
+
+/* ---------- M3-S04: superficie de Draw/Erase y sus paneles ---------- */
+
+.tool-surface {
+  position: absolute;
+  inset: 0;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.tool-surface__overlay {
+  display: block;
+  pointer-events: none;
+}
+
+.draw-panel,
+.erase-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-2);
+  padding-bottom: var(--editor-space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.draw-panel__domain,
+.draw-panel__target,
+.draw-panel__active-mode,
+.draw-panel__draft p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.draw-panel__modes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-1);
+  margin: 0;
+  padding: var(--editor-space-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.draw-panel__modes legend {
+  padding: 0 var(--editor-space-1);
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.draw-panel__modes label {
+  display: flex;
+  align-items: center;
+  gap: var(--editor-space-1);
+  cursor: pointer;
+}
+
+.draw-panel__hint {
+  color: var(--text);
+}
+
+.draw-panel__actions,
+.draw-panel__busy {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--editor-space-1);
+  font-size: 12px;
+}
+
+.draw-panel__draft {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-1);
+}
+
 /* ---------- M3-S02: Rotate/Flip (barra contextual) y Crop (panel) ---------- */
 
 .orientation-bar {

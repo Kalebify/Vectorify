@@ -17,6 +17,7 @@ import { screenToDocument, type ViewportParams } from "../../lib/editor/viewport
 import { IDENTITY_MATRIX, type AffineMatrix } from "../../lib/svgTransform";
 import { EditorLayerNodes } from "./EditorLayerNodes";
 import type { EditorTool } from "./EditorToolbar";
+import { ToolSurface, type ToolSurfaceProps } from "./ToolSurface";
 
 const WHEEL_ZOOM_SENSITIVITY = 0.0015;
 const KEYBOARD_ZOOM_FACTOR = 1.25;
@@ -80,6 +81,8 @@ interface VectorCanvasProps {
   onFillObject?: (objectId: string) => void;
   /** Atajo de herramienta con el foco en el canvas (I = Eyedropper). */
   onToolShortcut?: (tool: EditorTool) => void;
+  /** Draw / Erase (M3-S04): la superficie que captura el puntero y dibuja el preview. El shell posee todo el estado; el canvas solo aporta viewport, pool de hit-test y locks. */
+  toolSurface?: Omit<ToolSurfaceProps, "viewport" | "suspended" | "pool" | "lockedLayerIds">;
 }
 
 type Interaction =
@@ -182,6 +185,7 @@ export function VectorCanvas({
   onPickColor,
   onFillObject,
   onToolShortcut,
+  toolSurface,
 }: VectorCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<Konva.Stage | null>(null);
@@ -677,7 +681,7 @@ export function VectorCanvas({
 
     if (event.key === "Escape") {
       // Crop o una transformación pendiente: Escape es "Cancel" y lo resuelve el shell (no limpia la selección).
-      if (tool === "crop" || tool === "fill" || tool === "color" || editingSuspended) return;
+      if (tool === "crop" || tool === "fill" || tool === "color" || tool === "draw" || tool === "erase" || editingSuspended) return;
       const interaction = interactionRef.current;
       if (interaction) {
         // Cancela un drag/marquee en curso sin tocar la selección.
@@ -777,12 +781,13 @@ export function VectorCanvas({
   };
 
   const failedLayers = layers.filter((layer) => layerStatus[layer.groupId] === "error");
-  const TOOL_LABELS: Record<EditorTool, string> = { select: "Select", pan: "Pan", move: "Move", crop: "Crop", fill: "Fill", color: "Color", eyedropper: "Eyedropper" };
+  const TOOL_LABELS: Record<EditorTool, string> = { select: "Select", pan: "Pan", move: "Move", crop: "Crop", fill: "Fill", color: "Color", eyedropper: "Eyedropper", draw: "Draw", erase: "Erase" };
   const toolLabel = TOOL_LABELS[effectiveTool];
   // Margen del exterior atenuado de Crop: cubre cualquier vista razonable alrededor del área de trabajo y del marco propuesto.
   const dimMargin = Math.max(docFrame.width, docFrame.height);
   const showOutlines = selectedObjects.length > 0 && selectedObjects.length <= MAX_SELECTION_OUTLINES;
-  const layerHighlightId = selectedObjectIds.size === 0 ? selectedGroupId : null;
+  // Con Draw/Erase la capa activa (la de destino) NO se resalta: el contorno azul taparía el color real de las líneas que se dibujan (el panel dice cuál es).
+  const layerHighlightId = selectedObjectIds.size === 0 && tool !== "draw" && tool !== "erase" ? selectedGroupId : null;
 
   return (
     <div
@@ -790,7 +795,7 @@ export function VectorCanvas({
       className={`vector-canvas-2 vector-canvas-2--${effectiveTool}`}
       tabIndex={0}
       role="application"
-      aria-label={`Canvas del documento. Herramienta activa: ${toolLabel}. Rueda del mouse para zoom. Mantené Espacio para pan temporal. Con foco: click o Control+A para seleccionar objetos, flechas para mover la selección (Shift: 10 unidades) o desplazar la vista si no hay selección, Suprimir para eliminar, Escape para limpiar, + y - para zoom. R y Mayúscula+R giran 90° la selección (o todo el documento sin selección), F y Mayúscula+F la reflejan; Enter aplica y Escape cancela. Con Crop activo, las flechas mueven el marco de recorte. Con Fill o Color, click selecciona y Fill además aplica el color activo al objeto. I activa el Eyedropper: click sobre un objeto toma el color de su capa.`}
+      aria-label={`Canvas del documento. Herramienta activa: ${toolLabel}. Rueda del mouse para zoom. Mantené Espacio para pan temporal. Con foco: click o Control+A para seleccionar objetos, flechas para mover la selección (Shift: 10 unidades) o desplazar la vista si no hay selección, Suprimir para eliminar, Escape para limpiar, + y - para zoom. R y Mayúscula+R giran 90° la selección (o todo el documento sin selección), F y Mayúscula+F la reflejan; Enter aplica y Escape cancela. Con Crop activo, las flechas mueven el marco de recorte. Con Fill o Color, click selecciona y Fill además aplica el color activo al objeto. I activa el Eyedropper: click sobre un objeto toma el color de su capa. Con Draw o Erase, la superficie de dibujo captura el puntero: Escape cancela el trazo o el cálculo en curso.`}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -932,6 +937,10 @@ export function VectorCanvas({
           </Layer>
         </Stage>
       ) : null}
+
+      {hasContainerSize && toolSurface && tool === toolSurface.tool && (
+        <ToolSurface {...toolSurface} viewport={viewport} suspended={spacePanHeld || editingSuspended} pool={selectableObjects} lockedLayerIds={lockedLayerIds} />
+      )}
 
       {lockedSelected.length > 0 && (
         <p className="vector-canvas-2__lock-badge" role="status">

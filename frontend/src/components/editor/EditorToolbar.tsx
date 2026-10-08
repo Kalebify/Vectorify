@@ -1,4 +1,4 @@
-export type EditorTool = "select" | "pan" | "move" | "crop" | "fill" | "color" | "eyedropper";
+export type EditorTool = "select" | "pan" | "move" | "crop" | "fill" | "color" | "eyedropper" | "draw" | "erase";
 
 interface ToolDefinition {
   id: EditorTool | string;
@@ -16,8 +16,9 @@ interface ToolDefinition {
  * M3-S02 habilita Crop (recorta el ÁREA DE TRABAJO del documento, nunca el
  * original). M3-S03 habilita Fill (aplicar un color a la selección: mueve los objetos a la capa de ese color) y Color (panel de
  * Recolor con alcance explícito selección/capa/documento) y AGREGA el Eyedropper (atajo I; el wireframe obligatorio original no lo
- * traía: se hace visible acá porque Fill/Recolor lo necesitan para tomar un color EXISTENTE del documento). El resto queda deshabilitado con `disabled` + `title`/`aria-describedby`
- * indicando que llega en MVP3 (cada una en su tarjeta).
+ * traía: se hace visible acá porque Fill/Recolor lo necesitan para tomar un color EXISTENTE del documento). M3-S04 habilita Draw (pluma y
+ * mano alzada, en la capa activa) y Erase (borrar objetos o restar geometría con un pincel, calculado en el servidor). El resto queda
+ * deshabilitado con `disabled` + `title`/`aria-describedby` indicando que llega en MVP3 (cada una en su tarjeta).
  *
  * **Move (M3-S01)** = "mover sin handles": mismo arrastre, Shift+click y flechas
  * que Select, pero SIN Transformer (no hay handles de escala/rotación) y sin
@@ -31,8 +32,8 @@ const TOOLS: ToolDefinition[] = [
   { id: "fill", icon: "▣", label: "Fill", enabled: true, shortcut: "aplicar un color a la selección" },
   { id: "color", icon: "◉", label: "Color", enabled: true, shortcut: "recolorear la selección, una capa o el documento" },
   { id: "eyedropper", icon: "💧", label: "Eyedropper", enabled: true, shortcut: "I -- tomar el color de la capa de un objeto" },
-  { id: "draw", icon: "✎", label: "Draw", enabled: false },
-  { id: "erase", icon: "⌫", label: "Erase", enabled: false },
+  { id: "draw", icon: "✎", label: "Draw", enabled: true, shortcut: "pluma y mano alzada; crea formas y líneas en la capa activa" },
+  { id: "erase", icon: "⌫", label: "Erase", enabled: true, shortcut: "borrar objetos o restar geometría con un pincel" },
   { id: "offset", icon: "⤢", label: "Offset", enabled: false },
   { id: "cut", icon: "✂", label: "Cut", enabled: false },
   { id: "path", icon: "⌁", label: "Path", enabled: false },

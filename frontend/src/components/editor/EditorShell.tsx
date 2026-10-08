@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCanvasTransform } from "../../hooks/useCanvasTransform";
+import { useDrawEraseTools } from "../../hooks/useDrawEraseTools";
 import { useEditableDocument, type ApplyEditResult, type EditProducer } from "../../hooks/useEditableDocument";
 import { useLaserWarnings } from "../../hooks/useLaserWarnings";
 import { useManufacturingOperations } from "../../hooks/useManufacturingOperations";
@@ -31,6 +32,7 @@ import {
   summarizeCrop,
   validateFrame,
 } from "../../lib/editor/frame";
+import { toDocumentUnits } from "../../lib/editor/geometry";
 import { placeNewLayers, toLayerMetas } from "../../lib/editor/layers";
 import { matrixRotationDegrees } from "../../lib/editor/matrix";
 import { serializeEditableLayer } from "../../lib/editor/objects";
@@ -46,15 +48,17 @@ import {
 } from "../../lib/editor/orientation";
 import { replaceObjects, resolveSelection, selectableObjects as selectableObjectsOf, splitByLock } from "../../lib/editor/selection";
 import { groupBounds, groupCenter, rotateAbout, setBounds } from "../../lib/editor/transform";
-import type { DocumentFrame, Rect } from "../../lib/editor/types";
+import type { DocumentFrame, Point, Rect } from "../../lib/editor/types";
 import { formatDisplayNumber, mmPerUnit as mmPerUnitOf, toMm } from "../../lib/editor/units";
 import { svgToDataUrl } from "../../lib/svgToDataUrl";
 import { ColorPanel, EyedropperPanel } from "./ColorPanel";
 import { CropPanel, type CropPreset } from "./CropPanel";
+import { DrawPanel } from "./DrawPanel";
 import { EditorHeader } from "./EditorHeader";
 import { EditorLayersPanel } from "./EditorLayersPanel";
 import { EditorStatusBar } from "./EditorStatusBar";
 import { EditorToolbar, type EditorTool } from "./EditorToolbar";
+import { ErasePanel } from "./ErasePanel";
 import { InspectorPanel } from "./InspectorPanel";
 import { ObjectInspector } from "./ObjectInspector";
 import { OrientationBar } from "./OrientationBar";
@@ -822,6 +826,36 @@ export function EditorShell({
     ? `${recolorHeadline(colorPlan.summary)}${colorScope === "document" ? " Alcance: TODO el documento." : ""}${colorPlan.summary.merge ? " Incluye fusionar capas." : ""} ¿Confirmás?`
     : "";
 
+  // ---- Draw / Erase (M3-S04) ----
+  // Toda geometría nueva pertenece a una capa identificada (la activa, o una «Dibujo» nueva en el mismo comando); Erase resta geometría real en el
+  // servidor. La orquestación (borrador de la pluma, pipelines trazo -> servidor -> UN comando, teclado) vive en `useDrawEraseTools`.
+  const tools = useDrawEraseTools({
+    activeTool,
+    editable,
+    layers: colorState.layers,
+    activeGroupId: selectedGroupId,
+    selectGroup,
+    mmFactor,
+    onNotice: setActionNotice,
+  });
+  const drawEraseSurface =
+    activeTool === "draw" || activeTool === "erase"
+      ? {
+          tool: activeTool,
+          drawMode: tools.draw.mode,
+          draft: tools.draw.draft,
+          lineWidthUnits: toDocumentUnits(tools.draw.lineWidthMm, tools.unit),
+          onPolylinePoint: tools.draw.addPoint,
+          onPolylineFinish: () => tools.draw.finish(false),
+          onFreehandStroke: tools.draw.commitFreehand,
+          eraseMode: tools.erase.mode,
+          radiusUnits: tools.erase.radiusUnits,
+          busy: tools.busy,
+          onEraseObjects: tools.erase.eraseObjects,
+          onEraseStroke: (points: Point[]) => void tools.erase.eraseStroke(points),
+        }
+      : undefined;
+
   const handleFit = () => {
     if (!document) return;
     // Ajusta el ÁREA DE TRABAJO vigente (M3-S02), no el viewBox original.
@@ -975,6 +1009,7 @@ export function EditorShell({
                 onPickColor={handlePickColor}
                 onFillObject={handleFillObject}
                 onToolShortcut={handleSelectTool}
+                toolSurface={drawEraseSurface}
               />
               {actionNotice && (
                 <p className="editor-shell__action-notice" role="status">
@@ -1041,6 +1076,46 @@ export function EditorShell({
           )}
 
           {activeTool === "eyedropper" && <EyedropperPanel layers={committedLayers} target={activeTarget} />}
+
+          {activeTool === "draw" && (
+            <DrawPanel
+              mode={tools.draw.mode}
+              onModeChange={tools.draw.setMode}
+              unitLabel={tools.unit.label}
+              lineWidth={tools.draw.lineWidthMm}
+              onLineWidthChange={tools.draw.setLineWidthMm}
+              simplify={tools.draw.simplifyMm}
+              onSimplifyChange={tools.draw.setSimplifyMm}
+              closeFreehand={tools.draw.closeFreehand}
+              onCloseFreehandChange={tools.draw.setCloseFreehand}
+              pointCount={tools.draw.draft.length}
+              target={tools.draw.target}
+              message={tools.draw.message}
+              serverError={tools.serverError}
+              busy={tools.busy}
+              onFinish={tools.draw.finish}
+              onUndoPoint={tools.draw.undoPoint}
+              onCancel={tools.draw.cancelDraft}
+              onCancelCalculation={tools.cancelCalculation}
+            />
+          )}
+
+          {activeTool === "erase" && (
+            <ErasePanel
+              mode={tools.erase.mode}
+              onModeChange={tools.erase.setMode}
+              unitLabel={tools.unit.label}
+              radius={tools.erase.radiusMm}
+              onRadiusChange={tools.erase.setRadiusMm}
+              scope={tools.erase.scope}
+              onScopeChange={tools.erase.setScope}
+              activeLayerName={committedLayers.find((layer) => layer.groupId === selectedGroupId)?.name ?? null}
+              busy={tools.busy}
+              message={tools.erase.message}
+              serverError={tools.serverError}
+              onCancelCalculation={tools.cancelCalculation}
+            />
+          )}
 
           <EditorLayersPanel
             layers={documentLayers}

@@ -45,7 +45,15 @@ export interface EditorObject {
   layerGroupId: string;
   /** Path data ORIGINAL: fuente de verdad geométrica, no se reescribe para move/scale/rotate (solo al hornear la matriz). */
   d: string;
+  /** Color de relleno, o `"none"` para un objeto ABIERTO (línea de Draw, M3-S04) que solo tiene trazo. */
   fill: string;
+  /**
+   * Trazo (M3-S04), opcional: los objetos de S01-S03 no lo traen y se comportan igual. Una línea abierta de Draw lleva `fill: "none"`,
+   * `stroke` = el color de su capa y `strokeWidth` en UNIDADES DE DOCUMENTO del espacio del propio objeto (el mismo que `d`: la matriz
+   * lo escala, como en SVG).
+   */
+  stroke?: string;
+  strokeWidth?: number;
   /** Transform acumulado (documento): propio + ancestros `<g>` del SVG de origen + cualquier edición posterior. */
   matrix: AffineMatrix;
 }

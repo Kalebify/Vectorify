@@ -1,0 +1,22 @@
+using Vectorify.Api.Contracts;
+
+namespace Vectorify.Api.Geometry;
+
+/// <summary>
+/// Resultado de una operación booleana del servicio de geometría (M3-S04). Sin caché ni persistencia: operación
+/// sin estado y sin datos del usuario, cada llamada vuelve a calcular (determinista por construcción).
+/// </summary>
+public abstract record GeometryBooleanResult
+{
+    private GeometryBooleanResult()
+    {
+    }
+
+    public sealed record Ready(GeometryBooleanResponse Response) : GeometryBooleanResult;
+
+    /// <summary>La petición no pasó la validación (el endpoint responde 400).</summary>
+    public sealed record ValidationFailed(string Code, string Message) : GeometryBooleanResult;
+
+    /// <summary>El motor Python falló de una forma controlada (el endpoint mapea el código HTTP correspondiente).</summary>
+    public sealed record UpstreamError(string Code, string Message) : GeometryBooleanResult;
+}
