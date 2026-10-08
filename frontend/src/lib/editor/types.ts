@@ -1,3 +1,4 @@
+import type { ManufacturingOperationValue } from "../../types/manufacturingOperations";
 import type { AffineMatrix } from "../svgTransform";
 
 /**
@@ -49,11 +50,30 @@ export interface EditorObject {
   matrix: AffineMatrix;
 }
 
+/**
+ * Estructura de UNA capa dentro del estado editable (M3-S03). En este documento una capa = un color de paleta (relación 1:1) y su
+ * IDENTIDAD es `groupId`, nunca `colorHex`: dos capas pueden tener el mismo hex sin ser el mismo color. `isNew` marca las capas
+ * creadas en el cliente (p. ej. Fill con un color nuevo): todavía no existen en el servidor (se persisten con M3-S13), así que sus
+ * cambios de metadata (nombre, visibilidad, bloqueo, orden, operación) NO viajan por PATCH.
+ */
+export interface EditableLayerMeta {
+  groupId: string;
+  name: string;
+  colorHex: string;
+  order: number;
+  visible: boolean;
+  locked: boolean;
+  manufacturingOperation: ManufacturingOperationValue;
+  isNew: boolean;
+}
+
 /** Estado editable en memoria (ADR D2): objetos por capa en orden de pintado (el último queda arriba). */
 export interface EditableDocument {
   objectsByLayer: Record<string, EditorObject[]>;
   /** Área de trabajo vigente (M3-S02). Opcional por compatibilidad: los productores de S01 no la usan. */
   frame?: DocumentFrame;
+  /** Estructura EFECTIVA de capas (M3-S03: servidor + overrides del editor), por orden de pintado. Opcional: los productores de S01/S02 no la usan. */
+  layers?: EditableLayerMeta[];
 }
 
 /** Resultado de un productor de edición: SOLO las capas tocadas, con su lista completa de objetos ya modificada. */
@@ -67,6 +87,17 @@ export interface EditProduction {
    * la edición entera -- nunca se transforma a medias.
    */
   documentWide?: boolean;
+  /**
+   * Estructura de capas tras el comando (M3-S03): SOLO las capas tocadas, con su meta completa (crear una capa = incluirla acá;
+   * recolorear una capa = su meta con otro `colorHex` y el MISMO `groupId`). Objetos + estructura viajan en UN comando.
+   */
+  layerMetas?: EditableLayerMeta[];
+  /**
+   * Todo o nada (M3-S03): si el filtro de bloqueo/visibilidad omite ALGUNA capa tocada se rechaza la producción entera. Los comandos
+   * que mueven objetos entre capas lo necesitan: aplicar solo la mitad (quitar de la capa origen sin agregar en la destino, o al
+   * revés) perdería o duplicaría objetos.
+   */
+  atomic?: boolean;
 }
 
 /** Cambio de UNA capa dentro de un comando (snapshots inmutables por referencia). */
@@ -84,4 +115,9 @@ export interface EditorEdit {
   touched: Record<string, EditorLayerChange>;
   /** Cambio de marco (M3-S02), opcional: los comandos de S01 no lo traen y se comportan igual. Atómico con `touched`: un solo undo/redo. */
   frame?: { before: DocumentFrame; after: DocumentFrame };
+  /**
+   * Cambio de estructura de capas (M3-S03), opcional como `frame`: las capas TOCADAS antes/después. Una capa creada por el comando está en
+   * `after` y NO en `before` (undo la elimina); una recoloreada está en ambas con el mismo `groupId`. Atómico con `touched`.
+   */
+  layers?: { before: EditableLayerMeta[]; after: EditableLayerMeta[] };
 }

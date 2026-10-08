@@ -69,6 +69,12 @@ export interface VectorDocumentLayer {
   areaPercent: number;
   hasPartialAlpha: boolean;
   isExcluded: boolean;
+  /**
+   * Capa creada en el cliente por el editor (M3-S03, p. ej. Fill con un color nuevo): todavía no existe en el servidor, así que NUNCA
+   * llega acá desde la Web API (solo la agrega `useEditableDocument` a la lista efectiva de capas) y sus cambios de metadata no
+   * disparan PATCH. Ausente/false = capa del servidor.
+   */
+  isNew?: boolean;
 }
 
 export interface VectorDocument {
@@ -118,6 +124,8 @@ export interface UseVectorDocumentState {
   toggleVisibility: (groupId: string) => void;
   /** Overlay de VISTA, solo de sesión -- ver `visibility`. */
   isolate: (groupId: string) => void;
+  /** Capa aislada ahora mismo (overlay de Isolate), o null. El editor la necesita para aplicar el mismo overlay a las capas que crea en el cliente (M3-S03). */
+  isolatedGroupId: string | null;
   /** Descarta el overlay de Isolate (si había uno) -- NUNCA fuerza `visible=true` en el backend. */
   showAll: () => void;
 
@@ -698,6 +706,7 @@ export function useVectorDocument(
     visibility,
     toggleVisibility,
     isolate,
+    isolatedGroupId,
     showAll,
     toggleLocked,
     renameLayer,

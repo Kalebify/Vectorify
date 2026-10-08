@@ -252,3 +252,48 @@ describe("EditorLayersPanel — Drag & Drop para reordenar (M2.1-S07)", () => {
     expect(onReorder).not.toHaveBeenCalled();
   });
 });
+
+describe("EditorLayersPanel — capas creadas por el editor (M3-S03)", () => {
+  it("una capa NUEVA se lista al instante con la insignia 'nueva'; las del servidor no la llevan", () => {
+    render(
+      <EditorLayersPanel
+        {...baseProps({
+          layers: [layer(), layer({ groupId: "group-n", name: "Color #00FF00", colorHex: "#00FF00", isNew: true, order: 1, manufacturingOperation: "unassigned" })],
+          visibility: { "group-a": true, "group-n": true },
+        })}
+      />,
+    );
+    const rows = screen.getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toHaveTextContent("nueva");
+    expect(rows[0]).not.toHaveTextContent("nueva");
+    expect(screen.getByLabelText("Nombre de la capa Color #00FF00")).toHaveValue("Color #00FF00");
+    expect(screen.getByLabelText("Operación de fabricación de la capa Color #00FF00")).toHaveValue("unassigned");
+  });
+
+  it("los controles de una capa nueva usan los MISMOS callbacks (el shell decide que son locales, sin PATCH)", () => {
+    const props = baseProps({
+      layers: [layer({ groupId: "group-n", name: "Color #00FF00", colorHex: "#00FF00", isNew: true, manufacturingOperation: "unassigned" })],
+      visibility: { "group-n": true },
+    });
+    render(<EditorLayersPanel {...props} />);
+    fireEvent.click(screen.getByRole("button", { name: "Ocultar la capa Color #00FF00" }));
+    expect(props.onToggleVisibility).toHaveBeenCalledWith("group-n");
+    fireEvent.click(screen.getByRole("button", { name: "Bloquear la capa Color #00FF00" }));
+    expect(props.onToggleLocked).toHaveBeenCalledWith("group-n");
+    fireEvent.change(screen.getByLabelText("Operación de fabricación de la capa Color #00FF00"), { target: { value: "engrave" } });
+    expect(props.onChangeOperation).toHaveBeenCalledWith("group-n", "engrave");
+    const name = screen.getByLabelText("Nombre de la capa Color #00FF00");
+    fireEvent.change(name, { target: { value: "Verde" } });
+    fireEvent.blur(name);
+    expect(props.onRename).toHaveBeenCalledWith("group-n", "Verde");
+  });
+
+  it("refleja el color cambiado de una capa (mismo groupId, otro swatch)", () => {
+    const { rerender } = render(<EditorLayersPanel {...baseProps()} />);
+    expect(screen.getByTitle("#ff0000")).toBeInTheDocument();
+    rerender(<EditorLayersPanel {...baseProps({ layers: [layer({ colorHex: "#00ff00" })] })} />);
+    expect(screen.getByTitle("#00ff00")).toHaveStyle({ backgroundColor: "#00ff00" });
+    expect(screen.queryByTitle("#ff0000")).not.toBeInTheDocument();
+  });
+});

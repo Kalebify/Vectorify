@@ -235,3 +235,24 @@ describe("ObjectInspector — capa bloqueada", () => {
     expect(screen.getByText(/La capa Azul está bloqueada/)).toBeInTheDocument();
   });
 });
+
+describe("ObjectInspector — color de la capa (M3-S03)", () => {
+  it("muestra el color de la CAPA del objeto (swatch + hex normalizado) y se actualiza cuando el objeto cambia de capa", () => {
+    const { rerender, props } = setup();
+    const row = screen.getByText("Color").closest("div")!;
+    expect(row).toHaveTextContent("#FF0000");
+    expect(row.querySelector(".object-inspector__swatch")).toHaveStyle({ backgroundColor: "#ff0000" });
+
+    // Fill/Recolor mueven el objeto a otra capa: el Inspector lo refleja de inmediato.
+    const moved: EditorObject = { ...RECT, layerGroupId: "N" };
+    const layers = [...props.layers, layer({ groupId: "N", name: "Color #00FF00", colorHex: "#00FF00", isNew: true })];
+    rerender(<ObjectInspector {...props} objects={[moved]} layers={layers} />);
+    expect(screen.getByText("Color").closest("div")).toHaveTextContent("#00FF00");
+    expect(screen.getByText("Capa").closest("div")).toHaveTextContent("Color #00FF00");
+  });
+
+  it("con objetos de varias capas dice 'Varios' (no inventa un color)", () => {
+    setup({ objects: [RECT, obj("o2", "B", "M0 0 H5 V5 H0 Z")] });
+    expect(screen.getByText("Color").closest("div")).toHaveTextContent("Varios");
+  });
+});

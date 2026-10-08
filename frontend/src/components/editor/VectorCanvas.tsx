@@ -74,6 +74,12 @@ interface VectorCanvasProps {
   onCropFrameChange?: (frame: DocumentFrame) => void;
   /** Atajos R/Shift+R (girar 90°) y F/Shift+F (reflejar) con el foco en el canvas. */
   onOrientationShortcut?: (step: OrientationStep) => void;
+  /** Eyedropper (M3-S03): click sobre un objeto visible -> la CAPA de ese objeto (no un hex). Click en vacío no llama. */
+  onPickColor?: (groupId: string) => void;
+  /** Fill (M3-S03): click sobre un objeto -> aplicar el color activo a él (o a toda la selección si forma parte de ella). Shift+click solo alterna la selección. */
+  onFillObject?: (objectId: string) => void;
+  /** Atajo de herramienta con el foco en el canvas (I = Eyedropper). */
+  onToolShortcut?: (tool: EditorTool) => void;
 }
 
 type Interaction =
@@ -173,6 +179,9 @@ export function VectorCanvas({
   cropKeepRatio = false,
   onCropFrameChange,
   onOrientationShortcut,
+  onPickColor,
+  onFillObject,
+  onToolShortcut,
 }: VectorCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<Konva.Stage | null>(null);
@@ -193,8 +202,11 @@ export function VectorCanvas({
 
   const effectiveTool: EditorTool = spacePanHeld ? "pan" : tool;
   const canOrient = effectiveTool === "select" || effectiveTool === "move";
+  // Fill y Color (M3-S03) solo SELECCIONAN en el canvas (click, Shift, marquee): la selección es el objetivo del color, no se mueve ni se transforma.
+  const selectOnly = effectiveTool === "fill" || effectiveTool === "color";
   // Con una transformación pendiente de Apply/Cancel (o con Crop) las herramientas de edición de objetos quedan suspendidas.
   const isEditingTool = canOrient && !editingSuspended;
+  const isSelectingTool = (canOrient || selectOnly) && !editingSuspended;
   const cropActive = effectiveTool === "crop" && cropFrame !== null && onCropFrameChange !== undefined;
   const docFrame = useMemo(() => frame ?? sourceFrameOf(sourceWidthPx, sourceHeightPx), [frame, sourceWidthPx, sourceHeightPx]);
   const { objectsByLayer, layerStatus, applyEdit, beginGesture, previewEdit, commitGesture, cancelGesture, retry } = editable;
@@ -267,6 +279,8 @@ export function VectorCanvas({
   const selectedObjects = useMemo(() => resolveSelection(selectableObjects, selectedObjectIds), [selectableObjects, selectedObjectIds]);
   const { editable: editableSelected, locked: lockedSelected } = useMemo(() => splitByLock(selectedObjects, lockedLayerIds), [selectedObjects, lockedLayerIds]);
   const editableSelectionKey = useMemo(() => editableSelected.map((object) => object.id).join("|"), [editableSelected]);
+  // Los nodos de Konva se RECREAN cuando un objeto cambia de capa (Fill/Recolor y su undo/redo): el Transformer debe reengancharse aunque los ids no cambien.
+  const editableMembershipKey = useMemo(() => editableSelected.map((object) => object.layerGroupId).join("|"), [editableSelected]);
 
   const visibleLayers = useMemo(() => layers.filter((layer) => visibility[layer.groupId] ?? true), [layers, visibility]);
   const hasContainerSize = containerSize.width > 0 && containerSize.height > 0;
@@ -292,7 +306,7 @@ export function VectorCanvas({
       : [];
     transformer.nodes(nodes);
     transformer.getLayer()?.batchDraw();
-  }, [editableSelectionKey, showTransformer, hasContainerSize, readyLayersKey]);
+  }, [editableSelectionKey, editableMembershipKey, showTransformer, hasContainerSize, readyLayersKey]);
 
   // El Transformer del marco de Crop se engancha a su Rect mientras la herramienta está activa (el Rect se monta con ella).
   useEffect(() => {
@@ -368,6 +382,13 @@ export function VectorCanvas({
     const stack = hitTestAll(selectableObjects, docPoint, screenToleranceToDocument(HIT_TOLERANCE_PX, transform.scale));
     setNotice(null);
 
+    // Eyedropper (M3-S03): el objeto VISIBLE de más arriba bajo el cursor -> su capa. Lee capas bloqueadas (solo lee), no las ocultas (no están en el pool).
+    if (effectiveTool === "eyedropper") {
+      const picked = stack[0];
+      if (picked) onPickColor?.(picked.layerGroupId);
+      return;
+    }
+
     // Alt+click: recorre la pila de objetos superpuestos hacia abajo.
     if (event.altKey && stack.length > 0) {
       const picked = cycleHit(stack, selectedObjectIds);
@@ -382,8 +403,15 @@ export function VectorCanvas({
         onSelectObjects([...next], next.has(hit.id) ? hit.layerGroupId : null);
         return;
       }
+      if (effectiveTool === "fill") {
+        // Fill: el click APLICA el color activo al objeto (o a toda la selección si el objeto forma parte de ella); lo resuelve el shell.
+        onFillObject?.(hit.id);
+        return;
+      }
       const wasSelected = selectedObjectIds.has(hit.id);
       if (!wasSelected) onSelectObjects([hit.id], hit.layerGroupId);
+      // Color: el click solo selecciona; no hay arrastre de objetos.
+      if (selectOnly) return;
       interactionRef.current = {
         kind: "drag",
         pointerId: event.pointerId,
@@ -406,7 +434,7 @@ export function VectorCanvas({
       additive: event.shiftKey,
       base: new Set(selectedObjectIds),
       moved: false,
-      enabled: effectiveTool === "select",
+      enabled: effectiveTool === "select" || selectOnly,
     };
   };
 
@@ -422,7 +450,7 @@ export function VectorCanvas({
       dragStateRef.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY };
       return;
     }
-    if (isEditingTool) beginSelectionInteraction(event);
+    if (isSelectingTool || effectiveTool === "eyedropper") beginSelectionInteraction(event);
   };
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -641,7 +669,7 @@ export function VectorCanvas({
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const modifier = event.ctrlKey || event.metaKey;
 
-    if (modifier && event.key.toLowerCase() === "a" && isEditingTool) {
+    if (modifier && event.key.toLowerCase() === "a" && isSelectingTool) {
       event.preventDefault();
       selectAllObjects();
       return;
@@ -649,7 +677,7 @@ export function VectorCanvas({
 
     if (event.key === "Escape") {
       // Crop o una transformación pendiente: Escape es "Cancel" y lo resuelve el shell (no limpia la selección).
-      if (tool === "crop" || editingSuspended) return;
+      if (tool === "crop" || tool === "fill" || tool === "color" || editingSuspended) return;
       const interaction = interactionRef.current;
       if (interaction) {
         // Cancela un drag/marquee en curso sin tocar la selección.
@@ -666,6 +694,13 @@ export function VectorCanvas({
     if ((event.key === "Delete" || event.key === "Backspace") && isEditingTool && selectedObjects.length > 0) {
       event.preventDefault();
       deleteSelection();
+      return;
+    }
+
+    // Eyedropper (M3-S03): I con el foco en el canvas.
+    if (onToolShortcut && !modifier && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "i") {
+      event.preventDefault();
+      onToolShortcut("eyedropper");
       return;
     }
 
@@ -742,7 +777,8 @@ export function VectorCanvas({
   };
 
   const failedLayers = layers.filter((layer) => layerStatus[layer.groupId] === "error");
-  const toolLabel = effectiveTool === "pan" ? "Pan" : effectiveTool === "move" ? "Move" : effectiveTool === "crop" ? "Crop" : "Select";
+  const TOOL_LABELS: Record<EditorTool, string> = { select: "Select", pan: "Pan", move: "Move", crop: "Crop", fill: "Fill", color: "Color", eyedropper: "Eyedropper" };
+  const toolLabel = TOOL_LABELS[effectiveTool];
   // Margen del exterior atenuado de Crop: cubre cualquier vista razonable alrededor del área de trabajo y del marco propuesto.
   const dimMargin = Math.max(docFrame.width, docFrame.height);
   const showOutlines = selectedObjects.length > 0 && selectedObjects.length <= MAX_SELECTION_OUTLINES;
@@ -754,7 +790,7 @@ export function VectorCanvas({
       className={`vector-canvas-2 vector-canvas-2--${effectiveTool}`}
       tabIndex={0}
       role="application"
-      aria-label={`Canvas del documento. Herramienta activa: ${toolLabel}. Rueda del mouse para zoom. Mantené Espacio para pan temporal. Con foco: click o Control+A para seleccionar objetos, flechas para mover la selección (Shift: 10 unidades) o desplazar la vista si no hay selección, Suprimir para eliminar, Escape para limpiar, + y - para zoom. R y Mayúscula+R giran 90° la selección (o todo el documento sin selección), F y Mayúscula+F la reflejan; Enter aplica y Escape cancela. Con Crop activo, las flechas mueven el marco de recorte.`}
+      aria-label={`Canvas del documento. Herramienta activa: ${toolLabel}. Rueda del mouse para zoom. Mantené Espacio para pan temporal. Con foco: click o Control+A para seleccionar objetos, flechas para mover la selección (Shift: 10 unidades) o desplazar la vista si no hay selección, Suprimir para eliminar, Escape para limpiar, + y - para zoom. R y Mayúscula+R giran 90° la selección (o todo el documento sin selección), F y Mayúscula+F la reflejan; Enter aplica y Escape cancela. Con Crop activo, las flechas mueven el marco de recorte. Con Fill o Color, click selecciona y Fill además aplica el color activo al objeto. I activa el Eyedropper: click sobre un objeto toma el color de su capa.`}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}

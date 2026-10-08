@@ -59,6 +59,10 @@ interface EditorLayersPanelProps {
  * con 409 en cuanto la paleta está confirmada) -- ver IMPL-fix-round-1.md,
  * "Ronda de fix 2".
  *
+ * M3-S03: la lista es la EFECTIVA del editor (servidor + capas creadas por Fill con un color nuevo + colores recoloreados). Una capa creada
+ * en el cliente (`isNew`) lleva la insignia "nueva" (todavía no existe en el servidor: sus cambios de nombre, visibilidad, bloqueo, orden y
+ * operación se aplican en local, sin PATCH -- el shell las resuelve; este panel no distingue).
+ *
  * "+ ADD LAYER" del wireframe queda deshabilitado: crear una capa nueva
  * desde cero (no derivada de un color detectado) es una herramienta de
  * edición real, fuera de alcance de esta tarjeta (spec.md, "Fuera de
@@ -251,6 +255,12 @@ function EditorLayerRow({
           </span>
         )}
       </button>
+
+      {layer.isNew && (
+        <span className="editor-layers-panel__new-badge" title="Capa nueva: todavía no está guardada en el servidor (se guarda con la persistencia de geometría)">
+          nueva
+        </span>
+      )}
 
       <input
         type="text"

@@ -200,7 +200,13 @@ export function InspectorPanel({
           <div className="inspector-panel__laser-warnings">
             <h4 className="editor-panel__heading">Warnings láser</h4>
 
-            {laserStatus === "idle" && (
+            {selectedLayer.isNew && (
+              <p className="editor-panel__empty" role="note">
+                Capa nueva, todavía sin guardar: el Laser Checker analiza capas del servidor y se habilita cuando se persista la geometría.
+              </p>
+            )}
+
+            {!selectedLayer.isNew && laserStatus === "idle" && (
               <>
                 <p className="editor-panel__empty">Todavía no se ejecutó el Laser Checker para esta capa.</p>
                 <button type="button" className="upload-actions__button" onClick={() => laserWarnings.run(selectedLayer.groupId, selectedLayer.vectorId)}>
@@ -209,13 +215,13 @@ export function InspectorPanel({
               </>
             )}
 
-            {laserStatus === "running" && (
+            {!selectedLayer.isNew && laserStatus === "running" && (
               <p className="layers-panel__status" role="status">
                 Analizando…
               </p>
             )}
 
-            {laserStatus === "error" && (
+            {!selectedLayer.isNew && laserStatus === "error" && (
               <>
                 <p className="upload-panel__error" role="alert">
                   {laserError ?? "No se pudo analizar el SVG."}
@@ -226,7 +232,7 @@ export function InspectorPanel({
               </>
             )}
 
-            {laserStatus === "ready" && laserResult && (
+            {!selectedLayer.isNew && laserStatus === "ready" && laserResult && (
               <>
                 <p className="layers-panel__status" role="status">
                   {laserResult.summary.openPathCount} paths abiertos, {laserResult.summary.duplicateGroupCount} grupos de duplicados.

@@ -258,3 +258,24 @@ describe("InspectorPanel — warnings láser (M2.1-S07)", () => {
     expect(screen.getByRole("button", { name: "Reintentar" })).toBeInTheDocument();
   });
 });
+
+describe("InspectorPanel — capa creada por el editor (M3-S03)", () => {
+  it("una capa NUEVA no ofrece el Laser Checker (no existe en el servidor) y lo explica; una del servidor sí", () => {
+    const created = layer({ groupId: "group-n", name: "Color #00FF00", colorHex: "#00FF00", isNew: true, vectorId: "", svgUrl: "", manufacturingOperation: "unassigned" });
+    const props = { ...defaultProps(), layers: [layer(), created], selectedLayer: created };
+    const { rerender } = render(<InspectorPanel {...props} />);
+    expect(screen.queryByRole("button", { name: "Ejecutar Laser Checker" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Capa nueva, todavía sin guardar/)).toBeInTheDocument();
+    expect(props.laserWarnings.run).not.toHaveBeenCalled();
+
+    rerender(<InspectorPanel {...props} selectedLayer={layer()} />);
+    expect(screen.getByRole("button", { name: "Ejecutar Laser Checker" })).toBeInTheDocument();
+    expect(screen.queryByText(/Capa nueva, todavía sin guardar/)).not.toBeInTheDocument();
+  });
+
+  it("refleja el color y los paths de la capa efectiva (recoloreada / con objetos movidos)", () => {
+    render(<InspectorPanel {...defaultProps()} selectedLayer={layer({ colorHex: "#00ff00", pathCount: 7 })} layers={[layer({ colorHex: "#00ff00", pathCount: 7 })]} />);
+    expect(screen.getByText("#00ff00")).toBeInTheDocument();
+    expect(screen.getByText("7")).toBeInTheDocument();
+  });
+});

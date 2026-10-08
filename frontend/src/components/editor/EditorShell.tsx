@@ -6,6 +6,19 @@ import { useManufacturingOperations } from "../../hooks/useManufacturingOperatio
 import { useVectorDocument, type VectorDocumentLayer } from "../../hooks/useVectorDocument";
 import { useWorkspaceSave } from "../../hooks/useWorkspaceSave";
 import {
+  DEFAULT_CONFIRM_THRESHOLD,
+  mergeCandidates,
+  needsConfirmation,
+  planRecolor,
+  recolorHeadline,
+  recolorLabel,
+  resolveActiveColor,
+  type ColorPlan,
+  type ColorTarget,
+  type RecolorRequest,
+  type RecolorScope,
+} from "../../lib/editor/colors";
+import {
   cropFrame as cropFrameOf,
   cropProduction,
   fitToContent,
@@ -18,6 +31,7 @@ import {
   summarizeCrop,
   validateFrame,
 } from "../../lib/editor/frame";
+import { placeNewLayers, toLayerMetas } from "../../lib/editor/layers";
 import { matrixRotationDegrees } from "../../lib/editor/matrix";
 import { serializeEditableLayer } from "../../lib/editor/objects";
 import {
@@ -35,6 +49,7 @@ import { groupBounds, groupCenter, rotateAbout, setBounds } from "../../lib/edit
 import type { DocumentFrame, Rect } from "../../lib/editor/types";
 import { formatDisplayNumber, mmPerUnit as mmPerUnitOf, toMm } from "../../lib/editor/units";
 import { svgToDataUrl } from "../../lib/svgToDataUrl";
+import { ColorPanel, EyedropperPanel } from "./ColorPanel";
 import { CropPanel, type CropPreset } from "./CropPanel";
 import { EditorHeader } from "./EditorHeader";
 import { EditorLayersPanel } from "./EditorLayersPanel";
@@ -67,6 +82,11 @@ export interface EditorShellProps {
   /** Notifica al padre (App.tsx) cuando el primer Save resuelve un Project.Id v2 nuevo, para agregarlo a la URL sin recargar la página (ver workspaceLocation.ts). */
   onSaved?: (savedProjectId: string) => void;
   onClose: () => void;
+  /**
+   * Umbral (en objetos afectados) a partir del cual Fill/Recolor pide confirmación antes de aplicar (M3-S03). Default 50
+   * (`DEFAULT_CONFIRM_THRESHOLD`); el alcance "documento" y las fusiones de capas piden confirmación siempre.
+   */
+  colorConfirmThreshold?: number;
 }
 
 const EMPTY_LAYERS: VectorDocumentLayer[] = [];
@@ -82,6 +102,25 @@ interface PendingOrientation {
   /** Orientación ACUMULADA desde el estado original (exacta: ver `lib/editor/orientation.ts`). */
   orientation: Orientation;
 }
+
+/** Fill / Color en curso (M3-S03): alcance, origen y fusión elegidos en el panel; el COLOR vive aparte (`activeColor`) porque también lo cambia el Eyedropper. */
+interface ColorSession {
+  scope: RecolorScope;
+  /** Capa de origen elegida del alcance "documento" (el alcance "capa" usa la capa activa). */
+  sourceGroupId: string | null;
+  /** Fusión explícita con esta capa (alcances capa/documento); null = no fusionar. */
+  mergeIntoGroupId: string | null;
+  /** Clave de la petición que el usuario está CONFIRMANDO: si algo cambia, deja de coincidir y la confirmación se descarta sola. */
+  confirmKey: string | null;
+  /**
+   * La previsualización está "armada": se muestra mientras el usuario trabaja el panel (color, alcance, selección...). Tras aplicar o
+   * deshacer/rehacer se DESARMA, para que el estado confirmado se vea tal cual (si no, un Deshacer con Fill abierto volvería a pintar la
+   * previsualización encima y parecería que no hizo nada) hasta la siguiente interacción.
+   */
+  armed: boolean;
+}
+
+const SCOPE_ORDER: RecolorScope[] = ["selection", "layer", "document"];
 
 const DOCUMENT_LOCKED_MESSAGE = "Desbloqueá las capas para transformar el documento completo, o seleccioná objetos.";
 const SELECTION_LOCKED_MESSAGE = "La selección está en capas bloqueadas: no se puede modificar. Desbloqueá las capas en el panel de Capas.";
@@ -129,6 +168,7 @@ export function EditorShell({
   dimensionWidthMm = null,
   onSaved,
   onClose,
+  colorConfirmThreshold = DEFAULT_CONFIRM_THRESHOLD,
 }: EditorShellProps) {
   // M2.2-S07: `useVectorDocument`/`useManufacturingOperations` necesitan `trackPatch` (expuesto
   // por `useWorkspaceSave`, declarado más abajo) para conectar cada PATCH-por-edición al
@@ -149,9 +189,10 @@ export function EditorShell({
     emptyReason,
     errorMessage,
     reload,
-    visibility,
+    visibility: serverVisibility,
     toggleVisibility,
     isolate,
+    isolatedGroupId,
     showAll,
     toggleLocked,
     renameLayer,
@@ -206,26 +247,41 @@ export function EditorShell({
   // ---- Edición de geometría (M3-S01, ver docs/ADR_EDITOR_MVP3.md) ----
   // Estado editable + historial (la carga de los SVG de capa vive acá, ya no en VectorCanvas). La metadata de capas
   // (locked/visible) la sigue poseyendo useVectorDocument; este hook solo la lee para respetar locks y visibilidad.
-  const documentLayers = document?.layers ?? EMPTY_LAYERS;
+  // M3-S03: la estructura de capas es parte del estado editable. `serverLayers` son las del servidor (PATCH, useVectorDocument);
+  // `documentLayers` la lista EFECTIVA (servidor + capas creadas en el cliente + colores recoloreados + previsualización) que consumen el
+  // canvas y TODOS los paneles; `committedLayers` es lo mismo sin la previsualización de un gesto en curso.
+  const serverLayers = document?.layers ?? EMPTY_LAYERS;
   const sourceWidthPx = document?.sourceWidthPx ?? 0;
   const sourceHeightPx = document?.sourceHeightPx ?? 0;
-  const editable = useEditableDocument(documentLayers, { visibility, sourceSize: { width: sourceWidthPx, height: sourceHeightPx } });
+  const editable = useEditableDocument(serverLayers, { visibility: serverVisibility, isolatedGroupId, sourceSize: { width: sourceWidthPx, height: sourceHeightPx } });
   const { undo, redo, applyEdit, geometryDirty, frame, committedFrame } = editable;
+  const documentLayers = editable.layers;
+  const committedLayers = editable.committedLayers;
+  const visibility = editable.visibility;
 
   // Estado de vista / herramienta (declarado arriba porque los atajos de undo/redo y el re-centrado tras un cambio de marco lo usan).
   const [activeTool, setActiveTool] = useState<EditorTool>("select");
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
 
+  // Color activo (una REFERENCIA a una capa -- paleta/Eyedropper -- o un color libre nuevo) y sesión de Fill/Color en curso (M3-S03).
+  const [activeColor, setActiveColor] = useState<ColorTarget | null>(null);
+  const [colorSession, setColorSession] = useState<ColorSession | null>(null);
+  const [colorMessage, setColorMessage] = useState<string | null>(null);
+  const disarmColorPreview = useCallback(() => setColorSession((current) => (current && current.armed ? { ...current, armed: false, confirmKey: null } : current)), []);
+  const armColorPreview = useCallback(() => setColorSession((current) => (current && !current.armed ? { ...current, armed: true } : current)), []);
+
   // Tras un cambio de marco (crop, rotar el documento, o su undo/redo) el documento se vuelve a ajustar y centrar (M3-S02).
   const refitTo = useCallback((target: DocumentFrame) => fitToScreen(canvasSize, { width: target.width, height: target.height }), [fitToScreen, canvasSize]);
   const undoWithView = useCallback(() => {
     const edit = undo();
+    if (edit) disarmColorPreview();
     if (edit?.frame) refitTo(edit.frame.before);
-  }, [undo, refitTo]);
+  }, [undo, refitTo, disarmColorPreview]);
   const redoWithView = useCallback(() => {
     const edit = redo();
+    if (edit) disarmColorPreview();
     if (edit?.frame) refitTo(edit.frame.after);
-  }, [redo, refitTo]);
+  }, [redo, refitTo, disarmColorPreview]);
 
   // Selección por ids de objeto. Se guarda cruda y se DEPURA contra los objetos seleccionables vigentes (capas
   // visibles que aún existen): ocultar una capa o borrar un objeto la actualiza sin código extra, y un undo del
@@ -252,12 +308,12 @@ export function EditorShell({
   const previewImageOverrides = useMemo(() => {
     const overrides: Record<string, string> = {};
     const meta = { width: committedFrame.width, height: committedFrame.height, x: committedFrame.x, y: committedFrame.y };
-    const groupIds = frameChanged ? documentLayers.map((layer) => layer.groupId) : [...editedLayerIds];
+    const groupIds = frameChanged ? committedLayers.map((layer) => layer.groupId) : [...editedLayerIds];
     for (const groupId of groupIds) {
       overrides[groupId] = svgToDataUrl(serializeEditableLayer(committedObjectsByLayer[groupId] ?? [], meta));
     }
     return overrides;
-  }, [frameChanged, documentLayers, editedLayerIds, committedObjectsByLayer, committedFrame]);
+  }, [frameChanged, committedLayers, editedLayerIds, committedObjectsByLayer, committedFrame]);
 
   // mm por unidad de documento: el tamaño físico del documento guardado manda; si no, el de las dimensiones del flujo clásico.
   const mmFactor = mmPerUnitOf(document?.widthMm ?? dimensionWidthMm, document?.sourceWidthPx);
@@ -267,25 +323,29 @@ export function EditorShell({
       setRawSelectedObjectIds(new Set(ids));
       // Seleccionar un objeto activa su capa (Inspector de capa, paleta, panel de capas).
       if (activeLayerId) selectGroup(activeLayerId);
+      armColorPreview();
     },
-    [selectGroup],
+    [selectGroup, armColorPreview],
   );
 
   // Seleccionar una capa desde un panel conserva el comportamiento de M2.1; los objetos seleccionados de OTRAS capas se descartan.
   const handleSelectGroup = useCallback(
     (groupId: string | null) => {
       selectGroup(groupId);
+      armColorPreview();
       setRawSelectedObjectIds((current) => {
         if (current.size === 0) return current;
         const keep = groupId !== null && selectedObjects.every((object) => object.layerGroupId === groupId);
         return keep ? current : EMPTY_ID_SET;
       });
     },
-    [selectGroup, selectedObjects],
+    [selectGroup, selectedObjects, armColorPreview],
   );
 
   const handleSelectAllInLayer = (groupId: string) => {
     selectAllInLayer(groupId);
+    // Una capa creada en el cliente no está en el documento del servidor: `selectAllInLayer` no la conoce, solo se la activa.
+    if (documentLayers.find((layer) => layer.groupId === groupId)?.isNew) selectGroup(groupId);
     setRawSelectedObjectIds(new Set((editable.objectsByLayer[groupId] ?? []).map((object) => object.id)));
   };
 
@@ -530,6 +590,9 @@ export function EditorShell({
   const handleSelectTool = (tool: EditorTool) => {
     if (tool === activeTool) return;
     if (pending) cancelPending();
+    // Cambiar de herramienta con Fill/Color a medias cancela la previsualización sin dejar rastro (nada entró a la pila de undo).
+    if (colorSession) endColorSession();
+    setColorMessage(null);
     setActionNotice(null);
     setOrientationMessage(null);
     if (tool === "crop") {
@@ -541,24 +604,30 @@ export function EditorShell({
       setCropDraft(null);
       setCropError(null);
     }
+    if (tool === "fill" || tool === "color") startColorSession(tool);
     setActiveTool(tool);
   };
 
   // Apply = Enter, Cancel = Escape para Crop y para una transformación pendiente. Enter dentro de un campo o sobre un botón conserva su
   // significado propio (confirmar el campo / activar el botón).
   useEffect(() => {
-    if (!pending && !cropDraft) return;
+    if (!pending && !cropDraft && !colorSession) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
       const target = event.target as HTMLElement | null;
       if (event.key === "Escape") {
         event.preventDefault();
         if (pending) cancelPending();
-        else closeCrop();
+        else if (colorSession) {
+          // Primer Escape: vuelve atrás desde la confirmación; el siguiente cancela Fill/Color (sin rastro).
+          if (colorConfirming) setColorSession({ ...colorSession, confirmKey: null });
+          else cancelColorTool();
+        } else closeCrop();
       } else if (event.key === "Enter") {
         if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.tagName === "BUTTON" || target.isContentEditable)) return;
         event.preventDefault();
         if (pending) handleApplyPending();
+        else if (colorSession) handleColorApply();
         else handleApplyCrop();
       }
     };
@@ -566,8 +635,192 @@ export function EditorShell({
     return () => window.removeEventListener("keydown", onKeyDown);
   });
 
-  const selectedLayer = document?.layers.find((layer) => layer.groupId === selectedGroupId) ?? null;
+  const selectedLayer = documentLayers.find((layer) => layer.groupId === selectedGroupId) ?? null;
   const isSelectedVisible = selectedGroupId ? (visibility[selectedGroupId] ?? true) : false;
+
+  // ---- Fill / Recolor / Eyedropper (M3-S03) ----
+  // Decisión de dominio (ver lib/editor/colors.ts): una capa = un color; la identidad es el groupId, nunca el hex. El "color activo" es por
+  // eso una REFERENCIA a una capa (o un color libre nuevo que crea una capa al aplicar), y los alcances de Recolor son explícitos.
+  const colorMode = activeTool === "fill" ? "fill" : activeTool === "color" ? "color" : null;
+
+  // Una referencia a una capa que ya no existe (se deshizo su creación) no es un color activo.
+  const activeTarget = useMemo(() => (resolveActiveColor(committedLayers, activeColor) ? activeColor : null), [committedLayers, activeColor]);
+
+  const scopeAvailability = useMemo<Record<RecolorScope, string | null>>(
+    () => ({
+      selection: selectedObjects.length > 0 ? null : "sin selección",
+      layer: selectedLayer ? null : "sin capa activa",
+      document: committedLayers.length > 0 ? null : "sin capas",
+    }),
+    [selectedObjects.length, selectedLayer, committedLayers.length],
+  );
+  const requestedScope: RecolorScope = colorMode === "fill" ? "selection" : (colorSession?.scope ?? "selection");
+  const colorScope: RecolorScope =
+    scopeAvailability[requestedScope] === null || colorMode === "fill" ? requestedScope : (SCOPE_ORDER.find((candidate) => scopeAvailability[candidate] === null) ?? requestedScope);
+  const sessionSourceId = colorSession?.sourceGroupId ?? null;
+  const sessionMergeId = colorSession?.mergeIntoGroupId ?? null;
+  const colorSourceId = useMemo(() => {
+    if (colorScope === "selection") return null;
+    const wanted = colorScope === "layer" ? selectedGroupId : (sessionSourceId ?? selectedGroupId);
+    return committedLayers.some((layer) => layer.groupId === wanted) ? wanted : null;
+  }, [colorScope, selectedGroupId, sessionSourceId, committedLayers]);
+  // La fusión solo vale si el destino sigue siendo una capa con el color elegido (si el color cambia, se vuelve a "no fusionar").
+  const colorMergeInto = useMemo(() => {
+    if (colorScope === "selection" || !sessionMergeId) return null;
+    return mergeCandidates(committedLayers, colorSourceId, activeTarget).some((layer) => layer.groupId === sessionMergeId) ? sessionMergeId : null;
+  }, [colorScope, sessionMergeId, committedLayers, colorSourceId, activeTarget]);
+
+  const hasColorSession = colorSession !== null;
+  const colorRequest = useMemo<RecolorRequest | null>(
+    () =>
+      hasColorSession && activeTarget
+        ? { target: activeTarget, objectIds: colorScope === "selection" ? selectedObjectIds : undefined, sourceGroupId: colorSourceId, mergeIntoGroupId: colorMergeInto }
+        : null,
+    [hasColorSession, activeTarget, colorScope, selectedObjectIds, colorSourceId, colorMergeInto],
+  );
+  // Estado CONFIRMADO sobre el que se planea (nunca el vivo: la previsualización lo cambia en cada paso y el plan se recalcularía en bucle).
+  const colorState = useMemo(
+    () => ({
+      objectsByLayer: committedObjectsByLayer,
+      frame: committedFrame,
+      layers: toLayerMetas(committedLayers, (layer) => (isolatedGroupId ? layer.groupId === isolatedGroupId : (serverVisibility[layer.groupId] ?? layer.visible))),
+    }),
+    [committedObjectsByLayer, committedFrame, committedLayers, serverVisibility, isolatedGroupId],
+  );
+  const colorPlan = useMemo(() => (colorRequest ? planRecolor(colorScope, colorState, colorRequest) : null), [colorRequest, colorScope, colorState]);
+  const colorRequestKey = colorRequest ? JSON.stringify([colorScope, colorRequest.target, colorSourceId, colorMergeInto, selectedObjectIds.size]) : null;
+  const colorConfirming = colorSession?.confirmKey != null && colorSession.confirmKey === colorRequestKey;
+  const colorNeedsConfirmation = colorPlan?.production ? needsConfirmation(colorPlan.summary, colorConfirmThreshold) : false;
+
+  const { beginGesture, previewEdit, cancelGesture } = editable;
+  const colorArmed = colorSession?.armed ?? false;
+  // Previsualización con el gesto de S01: parte SIEMPRE del estado confirmado, no llena la pila de undo y se descarta sin rastro. Si el plan no
+  // es aplicable (sin color, destino bloqueado...) no se muestra nada.
+  useEffect(() => {
+    if (!hasColorSession) return;
+    if (!colorArmed || !colorRequest || !colorPlan?.production) {
+      cancelGesture();
+      return;
+    }
+    beginGesture();
+    previewEdit((state) => planRecolor(colorScope, state, colorRequest).production);
+  }, [hasColorSession, colorArmed, colorRequest, colorPlan, colorScope, beginGesture, previewEdit, cancelGesture]);
+
+  // Tras aplicar, el plan sobre el estado ya confirmado dice "ya están en esa capa": no es un error que mostrar mientras no haya una interacción nueva.
+  const panelPlan = colorPlan && !colorArmed && !colorPlan.production ? { ...colorPlan, error: null } : colorPlan;
+
+  function startColorSession(tool: "fill" | "color") {
+    const scope: RecolorScope = tool === "fill" ? "selection" : selectedObjects.length > 0 ? "selection" : selectedGroupId ? "layer" : "document";
+    setColorSession({ scope, sourceGroupId: selectedGroupId, mergeIntoGroupId: null, confirmKey: null, armed: true });
+  }
+
+  function endColorSession() {
+    editable.cancelGesture();
+    setColorSession(null);
+  }
+
+  function cancelColorTool() {
+    endColorSession();
+    setColorMessage(null);
+    setActiveTool("select");
+  }
+
+  const updateColorSession = (patch: Partial<ColorSession>) => {
+    setColorMessage(null);
+    setColorSession((current) => (current ? { ...current, confirmKey: null, armed: true, ...patch } : current));
+  };
+
+  const handlePickColor = (groupId: string) => {
+    setActionNotice(null);
+    setColorMessage(null);
+    setActiveColor({ kind: "layer", groupId });
+    setColorSession((current) => (current ? { ...current, confirmKey: null, mergeIntoGroupId: null, armed: true } : current));
+  };
+
+  const handleFreeColor = (hex: string) => {
+    setColorMessage(null);
+    // Un color libre es un color NUEVO (capa nueva al aplicar): con el mismo hex ya elegido se conserva su id de capa futura.
+    if (activeColor?.kind === "new" && activeColor.hex === hex) return;
+    setActiveColor({ kind: "new", hex, groupId: crypto.randomUUID() });
+    setColorSession((current) => (current ? { ...current, confirmKey: null, mergeIntoGroupId: null, armed: true } : current));
+  };
+
+  const colorSummaryNotice = (plan: ColorPlan, label: string): string => {
+    const { summary } = plan;
+    const parts = [`${label} aplicado.`];
+    if (summary.destination?.created) parts.push(`Se creó la capa nueva «${summary.destination.name}» (sin guardar todavía).`);
+    if (summary.merge) parts.push(`«${summary.merge.fromName}» quedó vacía (no se eliminó).`);
+    if (summary.skippedLocked > 0) parts.push(`${plural(summary.skippedLocked, "objeto está", "objetos están")} en capas bloqueadas y no se modificó.`);
+    if (summary.skippedHidden > 0) parts.push(`${plural(summary.skippedHidden, "objeto está", "objetos están")} en capas ocultas y no se modificó.`);
+    return parts.join(" ");
+  };
+
+  /** Aplica Fill/Recolor como UN comando (objetos + estructura de capas). Descarta antes la previsualización y vuelve a evaluar contra el estado vigente. */
+  const commitColor = (scope: RecolorScope, request: RecolorRequest, plan: ColorPlan) => {
+    editable.cancelGesture();
+    const label = recolorLabel(plan.summary);
+    const result = applyEdit(label, (state) => planRecolor(scope, state, request).production);
+    if (!result.applied) {
+      setColorMessage(
+        result.reason === "blocked"
+          ? "La capa de origen o de destino está bloqueada u oculta: no se puede modificar. Desbloqueala o mostrala en el panel de Capas."
+          : result.reason === "no_change"
+            ? "No hay cambios para aplicar."
+            : TRANSFORM_PENDING_MESSAGE,
+      );
+      return;
+    }
+    setColorMessage(null);
+    setActionNotice(colorSummaryNotice(plan, label));
+    setColorSession((current) => (current ? { ...current, confirmKey: null, mergeIntoGroupId: null, armed: false } : current));
+    const destination = plan.summary.destination;
+    if (scope === "selection" && destination) {
+      // El color activo pasa a ser la capa destino (existente o recién creada) y el Inspector/paleta/capas la muestran.
+      setActiveColor({ kind: "layer", groupId: destination.groupId });
+      selectGroup(destination.groupId);
+    }
+  };
+
+  function handleColorApply() {
+    if (!colorSession || !colorRequest || !colorPlan?.production) return;
+    if (colorNeedsConfirmation && !colorConfirming) {
+      setColorSession({ ...colorSession, confirmKey: colorRequestKey });
+      return;
+    }
+    commitColor(colorScope, colorRequest, colorPlan);
+  }
+
+  // Fill sobre el canvas: aplica el color activo al objeto (o a toda la selección si el objeto forma parte de ella).
+  const handleFillObject = (objectId: string) => {
+    if (!colorSession) return;
+    setColorMessage(null);
+    setActionNotice(null);
+    if (!activeTarget) {
+      setColorMessage("Elegí un color (paleta, selector o Eyedropper) antes de rellenar.");
+      return;
+    }
+    const ids: ReadonlySet<string> = selectedObjectIds.has(objectId) ? selectedObjectIds : new Set([objectId]);
+    const request: RecolorRequest = { target: activeTarget, objectIds: ids };
+    const plan = planRecolor("selection", colorState, request);
+    if (!plan.production) {
+      setColorMessage(plan.error);
+      return;
+    }
+    if (!selectedObjectIds.has(objectId)) {
+      const hit = selectableObjects.find((object) => object.id === objectId);
+      handleSelectObjects([objectId], hit?.layerGroupId ?? null);
+    }
+    if (needsConfirmation(plan.summary, colorConfirmThreshold)) {
+      // Alcance grande: no se aplica al click; el panel muestra la previsualización y pide confirmación.
+      setColorSession({ ...colorSession, armed: true, confirmKey: JSON.stringify(["selection", activeTarget, null, null, ids.size]) });
+      return;
+    }
+    commitColor("selection", request, plan);
+  };
+
+  const colorConfirmText = colorPlan
+    ? `${recolorHeadline(colorPlan.summary)}${colorScope === "document" ? " Alcance: TODO el documento." : ""}${colorPlan.summary.merge ? " Incluye fusionar capas." : ""} ¿Confirmás?`
+    : "";
 
   const handleFit = () => {
     if (!document) return;
@@ -584,23 +837,61 @@ export function EditorShell({
   // mentiroso, inmediatamente pisado por el resultado del PATCH (spec.md M2.2-S07, "Estado
   // Dirty/Saving/Saved/Error").
   const { markDirty } = workspaceSave;
+  // Capas creadas en el cliente (`isNew`, M3-S03): no existen en el servidor, así que su metadata se edita en LOCAL y NUNCA dispara un PATCH
+  // ni marca "dirty" del documento guardado (la geometría sin guardar ya la refleja `geometryDirty`). Las capas del servidor siguen como siempre.
+  const newLayerOf = (groupId: string) => documentLayers.find((layer) => layer.groupId === groupId && layer.isNew === true);
   const handleToggleVisibility = (groupId: string) => {
+    const created = newLayerOf(groupId);
+    if (created) {
+      editable.updateLocalLayer(groupId, { visible: !created.visible });
+      return;
+    }
     if (!savedProjectId) markDirty();
     toggleVisibility(groupId);
   };
   const handleToggleLocked = (groupId: string) => {
+    const created = newLayerOf(groupId);
+    if (created) {
+      editable.updateLocalLayer(groupId, { locked: !created.locked });
+      return;
+    }
     if (!savedProjectId) markDirty();
     toggleLocked(groupId);
   };
   const handleRenameLayer = (groupId: string, name: string) => {
+    const created = newLayerOf(groupId);
+    if (created) {
+      const trimmed = name.trim();
+      if (trimmed && trimmed !== created.name) editable.updateLocalLayer(groupId, { name: trimmed });
+      return;
+    }
     if (!savedProjectId) markDirty();
     renameLayer(groupId, name);
   };
   const handleReorderLayers = (orderedGroupIds: string[]) => {
-    if (!savedProjectId) markDirty();
-    reorderLayers(orderedGroupIds);
+    const newIds = new Set(documentLayers.filter((layer) => layer.isNew).map((layer) => layer.groupId));
+    if (newIds.size === 0) {
+      if (!savedProjectId) markDirty();
+      reorderLayers(orderedGroupIds);
+      return;
+    }
+    // El servidor solo conoce SUS capas: se le manda el nuevo orden de ellas (PATCH como siempre) y las capas nuevas se acomodan en local
+    // con un `order` fraccionario entre sus vecinas, para que el orden pedido se vea exacto sin persistir nada de las capas nuevas.
+    const serverIds = orderedGroupIds.filter((groupId) => !newIds.has(groupId));
+    const serverChanged = serverIds.length !== serverLayers.length || serverIds.some((groupId, index) => serverLayers[index]?.groupId !== groupId);
+    if (serverChanged) {
+      if (!savedProjectId) markDirty();
+      reorderLayers(serverIds);
+    }
+    const serverOrder = new Map(serverLayers.map((layer) => [layer.groupId, serverChanged ? serverIds.indexOf(layer.groupId) : layer.order]));
+    const orders = placeNewLayers(orderedGroupIds, (groupId) => newIds.has(groupId), (groupId) => serverOrder.get(groupId) ?? 0);
+    for (const [groupId, order] of Object.entries(orders)) editable.updateLocalLayer(groupId, { order });
   };
   const handleChangeOperation: typeof assignManufacturingOperation = (groupId, operation) => {
+    if (newLayerOf(groupId)) {
+      editable.updateLocalLayer(groupId, { manufacturingOperation: operation });
+      return;
+    }
     if (!savedProjectId) markDirty();
     assignManufacturingOperation(groupId, operation);
   };
@@ -614,8 +905,9 @@ export function EditorShell({
         saveErrorMessage={workspaceSave.errorMessage}
         canSave={status === "ready" && Boolean(document)}
         onSave={workspaceSave.save}
-        // TODO(M3-S13): persistir la geometría Y el marco del documento (serializeEditableLayer + serializeFrame -> DocumentVersion
-        // nueva con viewBox/mm) y limpiar `geometryDirty` al confirmar el guardado. Hasta entonces el indicador debe seguir diciendo
+        // TODO(M3-S13): persistir la geometría, el marco del documento Y la estructura de capas (serializeEditableLayer + serializeFrame ->
+        // DocumentVersion nueva con viewBox/mm; las capas `isNew` creadas por Fill se crean en el servidor con su color de paleta y los
+        // colores recoloreados se guardan sobre el mismo groupId) y limpiar `geometryDirty` al confirmar el guardado. Hasta entonces el indicador debe seguir diciendo
         // "Cambios de geometría sin guardar" (un crop o un giro del documento también lo activan).
         geometryDirty={geometryDirty}
         canUndo={editable.canUndo}
@@ -660,7 +952,7 @@ export function EditorShell({
                 />
               )}
               <VectorCanvas
-                layers={document.layers}
+                layers={documentLayers}
                 visibility={visibility}
                 sourceWidthPx={document.sourceWidthPx}
                 sourceHeightPx={document.sourceHeightPx}
@@ -680,6 +972,9 @@ export function EditorShell({
                 cropKeepRatio={cropKeepRatio}
                 onCropFrameChange={proposeCropFrame}
                 onOrientationShortcut={handleOrientationStep}
+                onPickColor={handlePickColor}
+                onFillObject={handleFillObject}
+                onToolShortcut={handleSelectTool}
               />
               {actionNotice && (
                 <p className="editor-shell__action-notice" role="status">
@@ -692,7 +987,7 @@ export function EditorShell({
 
         <aside className="editor-shell__right-rail" aria-label="Paneles del documento">
           <PreviewNavigator
-            layers={document?.layers ?? []}
+            layers={committedLayers}
             visibility={visibility}
             // La miniatura sigue el ÁREA DE TRABAJO confirmada (sus imágenes se serializan con ese viewBox).
             sourceWidthPx={committedFrame.width}
@@ -720,8 +1015,35 @@ export function EditorShell({
             />
           )}
 
+          {colorMode && colorSession && (
+            <ColorPanel
+              mode={colorMode}
+              layers={committedLayers}
+              target={activeTarget}
+              onPickLayer={handlePickColor}
+              onFreeColor={handleFreeColor}
+              scope={colorScope}
+              onScopeChange={(next) => updateColorSession({ scope: next, mergeIntoGroupId: null })}
+              scopeAvailability={scopeAvailability}
+              sourceGroupId={colorSourceId}
+              onSourceChange={(groupId) => updateColorSession({ sourceGroupId: groupId, mergeIntoGroupId: null })}
+              mergeIntoGroupId={colorMergeInto}
+              onMergeChange={(groupId) => updateColorSession({ mergeIntoGroupId: groupId })}
+              plan={panelPlan}
+              message={colorMessage}
+              confirming={colorConfirming}
+              confirmText={colorConfirmText}
+              onApply={handleColorApply}
+              onConfirm={() => colorRequest && colorPlan && commitColor(colorScope, colorRequest, colorPlan)}
+              onBack={() => updateColorSession({})}
+              onCancel={cancelColorTool}
+            />
+          )}
+
+          {activeTool === "eyedropper" && <EyedropperPanel layers={committedLayers} target={activeTarget} />}
+
           <EditorLayersPanel
-            layers={document?.layers ?? []}
+            layers={documentLayers}
             visibility={visibility}
             onToggleVisibility={handleToggleVisibility}
             onToggleLocked={handleToggleLocked}
@@ -735,7 +1057,7 @@ export function EditorShell({
           />
 
           <InspectorPanel
-            layers={document?.layers ?? []}
+            layers={documentLayers}
             selectedLayer={selectedLayer}
             isVisible={isSelectedVisible}
             onIsolate={() => {
@@ -780,7 +1102,12 @@ export function EditorShell({
           widthMm={frameSize?.widthMm ?? null}
           heightMm={frameSize?.heightMm ?? null}
         />
-        <PaletteBar layers={document?.layers ?? []} selectedGroupId={selectedGroupId} onSelectGroup={handleSelectGroup} />
+        <PaletteBar
+          layers={documentLayers}
+          selectedGroupId={selectedGroupId}
+          onSelectGroup={handleSelectGroup}
+          activeColorGroupId={activeTarget && documentLayers.some((layer) => layer.groupId === activeTarget.groupId) ? activeTarget.groupId : null}
+        />
       </footer>
     </div>
   );
