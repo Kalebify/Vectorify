@@ -70,7 +70,7 @@ app = FastAPI(
         "(M2-S03, análisis de solo lectura, ver app.core.component_analysis) y de unión física de "
         "piezas (M2-S06, modifica geometría: unión booleana + bridging simple con Shapely, ver "
         "app.core.physical_union) y del servicio de geometría sin estado del editor (M3-S04, ADR D4: "
-        "booleanas sobre anillos/polilíneas con Shapely, ver app.core.geometry_ops)."
+        "booleanas y offset sobre anillos/polilíneas con Shapely, ver app.core.geometry_ops y app.core.geometry_offset)."
     ),
     version=settings.service_version,
 )

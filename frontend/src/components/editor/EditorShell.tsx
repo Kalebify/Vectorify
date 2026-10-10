@@ -3,6 +3,7 @@ import { useCanvasTransform } from "../../hooks/useCanvasTransform";
 import { useClipboard } from "../../hooks/useClipboard";
 import { describeEditFailure, useDrawEraseTools } from "../../hooks/useDrawEraseTools";
 import { useBooleanOperation } from "../../hooks/useBooleanOperation";
+import { useOffsetOperation } from "../../hooks/useOffsetOperation";
 import { useEditableDocument, type ApplyEditResult, type EditProducer } from "../../hooks/useEditableDocument";
 import { usePathTool } from "../../hooks/usePathTool";
 import { useLaserWarnings } from "../../hooks/useLaserWarnings";
@@ -81,6 +82,29 @@ import {
   validateFrame,
 } from "../../lib/editor/frame";
 import { toDocumentUnits } from "../../lib/editor/geometry";
+import {
+  applyOffsetResult,
+  DEFAULT_MITRE_LIMIT,
+  DEFAULT_OFFSET_MM,
+  DEFAULT_OFFSET_TOLERANCE_MM,
+  effectiveDirection,
+  hasOpenLines,
+  insideUnavailableReason,
+  NO_SCALE_NOTICE,
+  offsetApplyBlock,
+  offsetConfirmText,
+  offsetDestinationText,
+  offsetLabel,
+  offsetNotice,
+  offsetOutcome,
+  offsetReadyText,
+  offsetResultColor,
+  offsetTargetCandidates,
+  offsetWarnings,
+  planOffset,
+  type OffsetDirection,
+  type OffsetTargetChoice,
+} from "../../lib/editor/offset";
 import { placeNewLayers, toLayerMetas } from "../../lib/editor/layers";
 import { matrixRotationDegrees } from "../../lib/editor/matrix";
 import { serializeEditableLayer } from "../../lib/editor/objects";
@@ -99,6 +123,7 @@ import { groupBounds, groupCenter, rotateAbout, setBounds } from "../../lib/edit
 import type { DocumentFrame, EditorEdit, EditProduction, Point, Rect } from "../../lib/editor/types";
 import { formatDisplayNumber, mmPerUnit as mmPerUnitOf, toMm } from "../../lib/editor/units";
 import { svgToDataUrl } from "../../lib/svgToDataUrl";
+import type { OffsetCapStyle, OffsetJoinStyle } from "../../types/geometry";
 import { ArrangeBar, type ArrangeNotice } from "./ArrangeBar";
 import { BooleanBar, type BooleanNotice } from "./BooleanBar";
 import { BooleanPanel, NEW_LAYER_VALUE } from "./BooleanPanel";
@@ -115,6 +140,7 @@ import { InspectorPanel } from "./InspectorPanel";
 import { ObjectInspector } from "./ObjectInspector";
 import { OrientationBar } from "./OrientationBar";
 import { PaletteBar } from "./PaletteBar";
+import { OffsetPanel, ORIGIN_LAYER_VALUE } from "./OffsetPanel";
 import { PathPanel } from "./PathPanel";
 import { PreviewNavigator } from "./PreviewNavigator";
 import { VectorCanvas } from "./VectorCanvas";
@@ -195,6 +221,32 @@ interface BooleanSession {
   keepOriginals: boolean;
   toleranceMm: number;
   /** Último intento de aplicar que falló (resultado vacío, documento cambió...). */
+  message: string | null;
+}
+
+/**
+ * Offset abierto (M3-S09): la herramienta Offset está activa. A diferencia de las booleanas los objetos NO se congelan: el offset sigue la selección viva
+ * del canvas (que en esta herramienta solo selecciona, no edita) y cada cambio de selección o de valores vuelve a pedir el resultado. Nada de esto toca el
+ * documento: aplicar es UN comando.
+ */
+interface OffsetSession {
+  direction: OffsetDirection;
+  /** Distancia ≥ 0 en mm (o u sin escala física). */
+  distance: number;
+  joinStyle: OffsetJoinStyle;
+  mitreLimit: number;
+  capStyle: OffsetCapStyle;
+  /** Por defecto se conserva el original: el offset se agrega como contorno nuevo. */
+  keepOriginals: boolean;
+  /** Capa del resultado: `ORIGIN_LAYER_VALUE` (default: la de cada objeto de origen), un groupId o NEW_LAYER_VALUE. */
+  target: string;
+  newHex: string;
+  /** Id de la capa que se creará si se elige «capa nueva» (fijo durante la sesión). */
+  newGroupId: string;
+  toleranceMm: number;
+  /** `requestKey` de la petición cuyo colapso el usuario confirmó: cualquier cambio de valores, selección u opciones la descarta. */
+  confirmKey: string | null;
+  /** Último intento de aplicar que falló. */
   message: string | null;
 }
 
@@ -387,6 +439,10 @@ export function EditorShell({
   const booleanOpen = booleanSession !== null;
   // Cerrar sin rastro: el hook cancela el cálculo en vuelo al quedarse sin petición; nada de esto toca el documento ni la pila de undo.
   const closeBooleanSession = useCallback(() => setBooleanSession(null), []);
+
+  // Offset (M3-S09): sesión abierta mientras la herramienta está activa.
+  const [offsetSession, setOffsetSession] = useState<OffsetSession | null>(null);
+  const [offsetApplying, setOffsetApplying] = useState(false);
 
   // Tras un cambio de marco (crop, rotar el documento, o su undo/redo) el documento se vuelve a ajustar y centrar (M3-S02).
   const refitTo = useCallback((target: DocumentFrame) => fitToScreen(canvasSize, { width: target.width, height: target.height }), [fitToScreen, canvasSize]);
@@ -721,6 +777,8 @@ export function EditorShell({
     // Cambiar de herramienta con una booleana abierta la cancela sin dejar rastro (el preview no entró a la pila de undo).
     closeBooleanSession();
     setBooleanNotice(null);
+    // Lo mismo con el offset (M3-S09): salir de la herramienta lo cancela sin rastro; entrar abre una sesión nueva con los valores por defecto.
+    setOffsetSession(null);
     // Cambiar de herramienta con Fill/Color a medias cancela la previsualización sin dejar rastro (nada entró a la pila de undo).
     if (colorSession) endColorSession();
     setColorMessage(null);
@@ -738,6 +796,23 @@ export function EditorShell({
       setCropError(null);
     }
     if (tool === "fill" || tool === "color") startColorSession(tool);
+    if (tool === "offset") {
+      if (!document) return;
+      setOffsetSession({
+        direction: "outside",
+        distance: DEFAULT_OFFSET_MM,
+        joinStyle: "round",
+        mitreLimit: DEFAULT_MITRE_LIMIT,
+        capStyle: "round",
+        keepOriginals: true,
+        target: ORIGIN_LAYER_VALUE,
+        newHex: "",
+        newGroupId: createId?.() ?? crypto.randomUUID(),
+        toleranceMm: DEFAULT_OFFSET_TOLERANCE_MM,
+        confirmKey: null,
+        message: null,
+      });
+    }
     setActiveTool(tool);
   };
 
@@ -1309,6 +1384,149 @@ export function EditorShell({
       }
     : undefined;
 
+  // ---- Offset (M3-S09) ----
+  // Desplaza el contorno de la selección una distancia en mm (exterior / interior, joins y caps) con preview del servidor (debounce + AbortController, una
+  // petición viva) y Apply/Cancel. Si TODOS los objetos colapsan Apply queda deshabilitado con la explicación; si ALGUNOS colapsan solo se aplica con la
+  // casilla de confirmación marcada. Cada resultado va a la capa de su objeto de origen (o a la destino elegida a propósito); aplicar es UN comando atómico y
+  // Cancel / el preview no dejan rastro (nada entra a la pila de undo). Ver lib/editor/offset.ts.
+  const offsetActive = offsetSession !== null && activeTool === "offset";
+  const closeOffset = () => {
+    setOffsetSession(null);
+    setActiveTool("select");
+  };
+  // Cualquier cambio de valores u opciones descarta la confirmación del colapso: lo que se confirma es el resultado que se vio.
+  const updateOffset = (patch: Partial<OffsetSession>) => setOffsetSession((current) => (current ? { ...current, message: null, confirmKey: null, ...patch } : current));
+
+  const offsetDirection = effectiveDirection(offsetSession?.direction ?? "outside", selectedObjects);
+  let offsetTargetChoice: OffsetTargetChoice | null = null;
+  if (offsetSession && offsetSession.target !== ORIGIN_LAYER_VALUE) {
+    offsetTargetChoice =
+      offsetSession.target === NEW_LAYER_VALUE
+        ? { kind: "new", hex: offsetSession.newHex, groupId: offsetSession.newGroupId }
+        : { kind: "layer", groupId: offsetSession.target };
+  }
+  const offsetDistance = offsetSession?.distance ?? DEFAULT_OFFSET_MM;
+  const offsetJoin = offsetSession?.joinStyle ?? "round";
+  const offsetMitre = offsetSession?.mitreLimit ?? DEFAULT_MITRE_LIMIT;
+  const offsetCap = offsetSession?.capStyle ?? "round";
+  const offsetKeep = offsetSession?.keepOriginals ?? true;
+  const offsetToleranceMm = offsetSession?.toleranceMm ?? DEFAULT_OFFSET_TOLERANCE_MM;
+  const offsetTargetKey = offsetTargetChoice ? JSON.stringify(offsetTargetChoice) : "";
+  const offsetPlanResult = useMemo(() => {
+    if (!offsetActive) return null;
+    return planOffset(selectedObjects, colorState, {
+      distance: offsetDistance,
+      direction: offsetDirection,
+      joinStyle: offsetJoin,
+      mitreLimit: offsetMitre,
+      capStyle: offsetCap,
+      toleranceMm: offsetToleranceMm,
+      mmFactor,
+      keepOriginals: offsetKeep,
+      targetLayer: offsetTargetKey ? (JSON.parse(offsetTargetKey) as OffsetTargetChoice) : null,
+    });
+  }, [offsetActive, selectedObjects, colorState, offsetDistance, offsetDirection, offsetJoin, offsetMitre, offsetCap, offsetToleranceMm, mmFactor, offsetKeep, offsetTargetKey]);
+  const offsetPlan = offsetPlanResult?.ok ? offsetPlanResult.plan : null;
+  const offsetRejection = offsetPlanResult && !offsetPlanResult.ok ? offsetPlanResult : null;
+
+  const offsetPreview = useOffsetOperation({ request: offsetPlan?.request ?? null, requestKey: offsetPlan?.requestKey ?? null });
+  const offsetOutcomeResult = useMemo(
+    () => (offsetPlan && offsetPreview.response ? offsetOutcome(offsetPlan, offsetPreview.response) : null),
+    [offsetPlan, offsetPreview.response],
+  );
+  const offsetOutcomeValue = offsetOutcomeResult?.ok ? offsetOutcomeResult.outcome : null;
+  const offsetPreviewError = offsetPreview.errorMessage ?? (offsetOutcomeResult && !offsetOutcomeResult.ok ? offsetOutcomeResult.error : null);
+  const offsetConfirmed = offsetSession?.confirmKey != null && offsetPlan !== null && offsetSession.confirmKey === offsetPlan.requestKey;
+
+  // Lo último, para el Apply asíncrono (tras esperar al servidor el estado puede ser otro).
+  const offsetLatest = useRef({ session: offsetSession, plan: offsetPlan });
+  useEffect(() => {
+    offsetLatest.current = { session: offsetSession, plan: offsetPlan };
+  });
+  const offsetApplyingRef = useRef(false);
+
+  const offsetApplyDisabledReason = (() => {
+    if (!offsetSession) return "No hay un offset abierto.";
+    if (offsetRejection) return offsetRejection.message;
+    if (!offsetPlan) return "No hay un offset para aplicar.";
+    if (offsetPreviewError) return "El cálculo falló: reintentalo o cambiá los valores.";
+    return offsetApplyBlock(offsetPlan, offsetOutcomeValue, offsetConfirmed);
+  })();
+
+  const handleOffsetApply = async () => {
+    const started = offsetLatest.current;
+    if (!started.session || !started.plan || offsetApplyingRef.current) return;
+    offsetApplyingRef.current = true;
+    setOffsetApplying(true);
+    try {
+      // Si cambió algo desde el último preview, se recalcula primero; si ya está calculado, se usa tal cual.
+      const ensured = await offsetPreview.ensure();
+      const latest = offsetLatest.current;
+      if (!latest.session || !latest.plan) return;
+      if (!ensured.ok) {
+        if (!ensured.aborted) updateOffset({ message: ensured.message, confirmKey: latest.session.confirmKey });
+        return;
+      }
+      if (latest.plan.requestKey !== started.plan.requestKey) {
+        updateOffset({ message: "El offset cambió mientras se calculaba: revisá el resultado y volvé a aplicar." });
+        return;
+      }
+      const plan = latest.plan;
+      const confirmed = latest.session.confirmKey !== null && latest.session.confirmKey === plan.requestKey;
+      const before = selectedObjectIds;
+      const fresh = editable.getSnapshot();
+      const applied = applyOffsetResult(plan, fresh, ensured.response, { confirmed, createId });
+      if (!applied.ok) {
+        updateOffset({ message: applied.error, confirmKey: latest.session.confirmKey });
+        return;
+      }
+      const production = applied.production;
+      const result = applyEdit(offsetLabel(applied.summary), (current) => (current.objectsByLayer === fresh.objectsByLayer ? production : null));
+      if (!result.applied) {
+        updateOffset({ message: result.reason === "blocked" ? "Alguna capa está bloqueada u oculta: no se puede modificar. No se hizo ningún cambio." : describeEditFailure(result) });
+        return;
+      }
+      if (result.edit) selectionJournal.set(result.edit, { before, after: new Set(applied.resultIds) });
+      handleSelectObjects(applied.resultIds, applied.activeGroupId);
+      closeOffset();
+      setActionNotice(offsetNotice(applied.summary));
+    } finally {
+      offsetApplyingRef.current = false;
+      setOffsetApplying(false);
+    }
+  };
+
+  // Apply = Enter, Cancel = Escape (como las booleanas). Enter dentro de un campo, lista desplegable o sobre un botón conserva su significado propio.
+  useEffect(() => {
+    if (!offsetActive) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeOffset();
+      } else if (event.key === "Enter") {
+        if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.tagName === "BUTTON" || target.isContentEditable)) return;
+        event.preventDefault();
+        if (offsetApplyDisabledReason === null) void handleOffsetApply();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  });
+
+  const offsetWarningList = offsetPlan && offsetOutcomeValue ? offsetWarnings(offsetPlan, offsetOutcomeValue) : [];
+  const offsetOverlay =
+    offsetActive && offsetPlan
+      ? {
+          objects: offsetPlan.objects.map((object, index) => ({ object, collapsed: offsetOutcomeValue?.objects[index]?.collapsed ?? false })),
+          shapes: (offsetOutcomeValue?.objects ?? []).flatMap((entry) => {
+            const color = offsetResultColor(offsetPlan, entry.object, colorState.layers);
+            return entry.shapes.map((shape) => ({ ...shape, color }));
+          }),
+        }
+      : undefined;
+
   // ---- Draw / Erase (M3-S04) ----
   // Toda geometría nueva pertenece a una capa identificada (la activa, o una «Dibujo» nueva en el mismo comando); Erase resta geometría real en el
   // servidor. La orquestación (borrador de la pluma, pipelines trazo -> servidor -> UN comando, teclado) vive en `useDrawEraseTools`.
@@ -1531,6 +1749,7 @@ export function EditorShell({
                 toolSurface={drawEraseSurface}
                 pathSurface={pathSurface}
                 booleanOverlay={booleanOverlay}
+                offsetOverlay={offsetOverlay}
                 onEditPath={(objectId, layerGroupId) => {
                   handleSelectObjects([objectId], layerGroupId);
                   handleSelectTool("path");
@@ -1613,6 +1832,64 @@ export function EditorShell({
               onApply={() => void handleBooleanApply()}
               onCancel={closeBooleanSession}
               onRetry={booleanPreview.retry}
+            />
+          )}
+
+          {offsetActive && offsetSession && (
+            <OffsetPanel
+              direction={offsetDirection}
+              onDirectionChange={(direction) => updateOffset({ direction })}
+              insideDisabledReason={insideUnavailableReason(selectedObjects)}
+              onlyLines={selectedObjects.length > 0 && selectedObjects.every((object) => hasOpenLines([object]))}
+              distance={offsetSession.distance}
+              unitLabel={mmFactor === null ? "u" : "mm"}
+              onDistanceChange={(distance) => updateOffset({ distance })}
+              scaleNotice={offsetPlan?.scaleNotice ?? (mmFactor === null ? NO_SCALE_NOTICE : null)}
+              joinStyle={offsetSession.joinStyle}
+              onJoinStyleChange={(joinStyle) => updateOffset({ joinStyle })}
+              mitreLimit={offsetSession.mitreLimit}
+              onMitreLimitChange={(mitreLimit) => updateOffset({ mitreLimit })}
+              hasLines={hasOpenLines(selectedObjects)}
+              capStyle={offsetSession.capStyle}
+              onCapStyleChange={(capStyle) => updateOffset({ capStyle })}
+              keepOriginals={offsetSession.keepOriginals}
+              onKeepOriginalsChange={(keepOriginals) => updateOffset({ keepOriginals })}
+              targetValue={offsetSession.target}
+              onTargetChange={(target) => updateOffset({ target })}
+              targetCandidates={offsetTargetCandidates(selectedObjects, colorState.layers).map(({ layer, isOriginLayer }) => ({
+                groupId: layer.groupId,
+                name: layer.name,
+                colorHex: layer.colorHex,
+                isOriginLayer,
+              }))}
+              newColorHex={offsetSession.newHex}
+              onNewColorChange={(newHex) => updateOffset({ newHex })}
+              targetIssue={offsetPlan?.targetIssue ?? null}
+              destinationText={offsetPlan ? offsetDestinationText(offsetPlan, colorState.layers) : null}
+              toleranceMm={offsetSession.toleranceMm}
+              onToleranceChange={(toleranceMm) => updateOffset({ toleranceMm })}
+              preview={{
+                status: offsetPreviewError ? "error" : offsetPreview.status,
+                readyText: offsetPlan && offsetOutcomeValue ? offsetReadyText(offsetPlan, offsetOutcomeValue) : null,
+                warnings: offsetWarningList,
+                errorMessage: offsetPreviewError,
+              }}
+              rejection={offsetRejection ? { message: offsetRejection.message, info: offsetRejection.reason === "none_selected" } : null}
+              confirmation={
+                offsetOutcomeValue?.needsConfirmation
+                  ? {
+                      text: offsetConfirmText(offsetOutcomeValue),
+                      confirmed: offsetConfirmed,
+                      onChange: (confirmed) => updateOffset({ confirmKey: confirmed && offsetPlan ? offsetPlan.requestKey : null }),
+                    }
+                  : null
+              }
+              message={offsetSession.message}
+              applying={offsetApplying}
+              applyDisabledReason={offsetApplyDisabledReason}
+              onApply={() => void handleOffsetApply()}
+              onCancel={closeOffset}
+              onRetry={offsetPreview.retry}
             />
           )}
 

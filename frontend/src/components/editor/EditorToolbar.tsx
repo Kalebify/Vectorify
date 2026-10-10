@@ -1,4 +1,4 @@
-export type EditorTool = "select" | "pan" | "move" | "crop" | "fill" | "color" | "eyedropper" | "draw" | "erase" | "path";
+export type EditorTool = "select" | "pan" | "move" | "crop" | "fill" | "color" | "eyedropper" | "draw" | "erase" | "offset" | "path";
 
 interface ToolDefinition {
   id: EditorTool | string;
@@ -18,7 +18,8 @@ interface ToolDefinition {
  * Recolor con alcance explícito selección/capa/documento) y AGREGA el Eyedropper (atajo I; el wireframe obligatorio original no lo
  * traía: se hace visible acá porque Fill/Recolor lo necesitan para tomar un color EXISTENTE del documento). M3-S04 habilita Draw (pluma y
  * mano alzada, en la capa activa) y Erase (borrar objetos o restar geometría con un pincel, calculado en el servidor). M3-S05 habilita
- * Path (editar nodos, handles y Bézier del path seleccionado; también con doble click sobre un objeto con Select). El resto queda
+ * Path (editar nodos, handles y Bézier del path seleccionado; también con doble click sobre un objeto con Select). M3-S09 habilita Offset
+ * (desplazar el contorno de la selección en mm, hacia afuera o hacia adentro, con preview y Apply/Cancel). El resto queda
  * deshabilitado con `disabled` + `title`/`aria-describedby` indicando que llega en MVP3 (cada una en su tarjeta).
  *
  * **Move (M3-S01)** = "mover sin handles": mismo arrastre, Shift+click y flechas
@@ -35,7 +36,7 @@ const TOOLS: ToolDefinition[] = [
   { id: "eyedropper", icon: "💧", label: "Eyedropper", enabled: true, shortcut: "I -- tomar el color de la capa de un objeto" },
   { id: "draw", icon: "✎", label: "Draw", enabled: true, shortcut: "pluma y mano alzada; crea formas y líneas en la capa activa" },
   { id: "erase", icon: "⌫", label: "Erase", enabled: true, shortcut: "borrar objetos o restar geometría con un pincel" },
-  { id: "offset", icon: "⤢", label: "Offset", enabled: false },
+  { id: "offset", icon: "⤢", label: "Offset", enabled: true, shortcut: "desplazar el contorno de la selección en mm, hacia afuera o hacia adentro" },
   { id: "cut", icon: "✂", label: "Cut", enabled: false },
   { id: "path", icon: "⌁", label: "Path", enabled: true, shortcut: "editar los nodos y handles del path seleccionado; doble click sobre un objeto con Select" },
 ];

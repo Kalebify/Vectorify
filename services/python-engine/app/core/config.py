@@ -170,6 +170,11 @@ class Settings(BaseSettings):
     max_geometry_operands: int = 500
     max_geometry_vertices: int = 500_000
     max_geometry_request_bytes: int = 32_000_000
+    # Offset (M3-S09): tope de |distance| (unidades de documento; el cliente aplica además su propio tope en mm, 1000 mm) y del límite de
+    # inglete (razón largo del inglete / distancia; GEOS recorta la punta pasado el límite). Se espejan 1:1 en
+    # Geometry:MaxOffsetDistance / Geometry:MaxMitreLimit de Vectorify.Api.
+    max_geometry_offset_distance: float = 1_000_000.0
+    max_geometry_mitre_limit: float = 100.0
 
     # Validación raster-vs-vector por capa (M2.1-S03): después de vectorizar
     # la máscara de una capa, se rasteriza el SVG resultante de vuelta (ver

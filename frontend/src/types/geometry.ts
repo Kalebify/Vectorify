@@ -62,10 +62,64 @@ export interface BooleanResponse {
   pieceCount: number;
 }
 
-/** Códigos de error estables de `/api/v2/geometry/boolean` (ApiErrorResponse.Code) + los del cliente HTTP. */
+// ---- Offset (M3-S09): `POST /api/v2/geometry/offset`, refleja `Vectorify.Api.Contracts.GeometryOffsetRequest/Response` ----
+
+/** Forma de las esquinas del offset: redondo (default), inglete (con límite) o bisel. */
+export type OffsetJoinStyle = "round" | "mitre" | "bevel";
+
+/** Forma de los extremos de una línea abierta: redondo (default), plano o cuadrado. Solo afecta a líneas. */
+export type OffsetCapStyle = "round" | "flat" | "square";
+
+export interface OffsetRequest {
+  /** Polígonos y polilíneas (nunca un pincel), en unidades de documento: el mismo formato de anillos de las booleanas. */
+  subjects: GeometrySubject[];
+  /** FIRMADA y en unidades de documento: > 0 exterior (agranda), < 0 interior (encoge). 0 se rechaza. Las líneas solo admiten > 0 (ambos lados). */
+  distance: number;
+  joinStyle: OffsetJoinStyle;
+  /** Razón máxima entre el largo del inglete y la distancia (> 0); pasado el límite el servidor recorta la punta. Solo afecta a `mitre`. */
+  mitreLimit: number;
+  capStyle: OffsetCapStyle;
+  /** Unidades de documento (> 0): resolución de los arcos redondos y umbral de "pieza despreciable" (área < tolerancia²). */
+  tolerance: number;
+}
+
+/** Resultado del offset de UN subject: lo que pasó, nunca en silencio. */
+export interface OffsetResultItem {
+  subjectIndex: number;
+  /** Polígonos válidos (anillos cerrados, exterior primero); vacío si `collapsed`. */
+  geometries: PolygonGeometry[];
+  /** No queda NADA del subject (se encogió hasta desaparecer o ya era degenerado). */
+  collapsed: boolean;
+  /** Piezas disjuntas del subject antes del offset. */
+  piecesBefore: number;
+  /** Piezas del resultado: más que las que sobreviven del subject = el subject se PARTIÓ. */
+  splitCount: number;
+  /** Piezas del subject que desaparecen del todo (solo hacia adentro). */
+  lostPieces: number;
+  holesBefore: number;
+  holesAfter: number;
+  /** Offset interior a partir del cual TODO el subject colapsa (radio del máximo círculo inscrito); `null` para líneas. */
+  maxInwardOffset: number | null;
+}
+
+export interface OffsetResponse {
+  distance: number;
+  joinStyle: OffsetJoinStyle;
+  mitreLimit: number;
+  capStyle: OffsetCapStyle;
+  tolerance: number;
+  results: OffsetResultItem[];
+  pieceCount: number;
+}
+
+/** Códigos de error estables de `/api/v2/geometry/*` (ApiErrorResponse.Code) + los del cliente HTTP. */
 export type GeometryErrorCode =
   | "invalid_parameters"
   | "unknown_operation"
+  | "invalid_distance"
+  | "unknown_join_style"
+  | "unknown_cap_style"
+  | "invalid_mitre_limit"
   | "invalid_tolerance"
   | "invalid_coordinates"
   | "too_many_subjects"

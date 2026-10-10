@@ -139,7 +139,7 @@ function validPoint(point: unknown): point is GeometryPoint {
   return Array.isArray(point) && point.length === 2 && typeof point[0] === "number" && typeof point[1] === "number" && Number.isFinite(point[0]) && Number.isFinite(point[1]);
 }
 
-function validPiece(piece: unknown, expected: "polygon" | "line" | null): string | null {
+export function validPiece(piece: unknown, expected: "polygon" | "line" | null): string | null {
   if (typeof piece !== "object" || piece === null) return "una pieza no tiene la forma esperada";
   const { type, coordinates } = piece as { type?: unknown; coordinates?: unknown };
   if (type !== "polygon" && type !== "line") return `una pieza tiene un tipo desconocido («${String(type)}»)`;

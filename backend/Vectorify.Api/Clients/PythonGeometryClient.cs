@@ -33,22 +33,106 @@ public sealed class PythonGeometryClient : IPythonGeometryClient
             Operands = [.. parameters.Operands.Select(ToPayload)],
             Tolerance = parameters.Tolerance,
         };
-        using var content = new StringContent(JsonSerializer.Serialize(requestPayload), Encoding.UTF8, "application/json");
+
+        var (state, body, message) = await PostAsync("/api/v1/geometry/boolean", JsonSerializer.Serialize(requestPayload), "la operación de geometría", cancellationToken);
+        if (state != PythonGeometryState.Success)
+        {
+            return Failure(state, message!);
+        }
+
+        PythonGeometryPayload? payload;
+        try
+        {
+            payload = JsonSerializer.Deserialize<PythonGeometryPayload>(body!, JsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Respuesta no-JSON del motor Python en la operación de geometría");
+            return Failure(PythonGeometryState.InvalidResponse, "La respuesta del motor Python no es un JSON válido.");
+        }
+
+        if (payload?.Results is null || payload.Operation is null || payload.Scope is null)
+        {
+            _logger.LogWarning("Respuesta incompleta del motor Python en la operación de geometría");
+            return Failure(PythonGeometryState.InvalidResponse, "La respuesta del motor Python no contiene los campos esperados.");
+        }
+
+        if (!TryValidate(parameters, payload, out var reason, out var mapped))
+        {
+            _logger.LogWarning("Respuesta de geometría rechazada por la validación defensiva adicional: {Reason}", reason);
+            return Failure(PythonGeometryState.InvalidResponse, reason!);
+        }
+
+        return new PythonGeometryResult(PythonGeometryState.Success, mapped, Message: null);
+    }
+
+    public async Task<PythonGeometryOffsetResult> OffsetAsync(GeometryOffsetParameters parameters, CancellationToken cancellationToken = default)
+    {
+        var requestPayload = new PythonGeometryOffsetRequestPayload
+        {
+            Subjects = [.. parameters.Subjects.Select(ToPayload)],
+            Distance = parameters.Distance,
+            JoinStyle = parameters.JoinStyle.ToWireName(),
+            MitreLimit = parameters.MitreLimit,
+            CapStyle = parameters.CapStyle.ToWireName(),
+            Tolerance = parameters.Tolerance,
+        };
+
+        var (state, body, message) = await PostAsync("/api/v1/geometry/offset", JsonSerializer.Serialize(requestPayload), "el offset de geometría", cancellationToken);
+        if (state != PythonGeometryState.Success)
+        {
+            return new PythonGeometryOffsetResult(state, null, message);
+        }
+
+        PythonGeometryOffsetPayload? payload;
+        try
+        {
+            payload = JsonSerializer.Deserialize<PythonGeometryOffsetPayload>(body!, JsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Respuesta no-JSON del motor Python en el offset de geometría");
+            return new PythonGeometryOffsetResult(PythonGeometryState.InvalidResponse, null, "La respuesta del motor Python no es un JSON válido.");
+        }
+
+        if (payload?.Results is null || payload.JoinStyle is null || payload.CapStyle is null)
+        {
+            _logger.LogWarning("Respuesta incompleta del motor Python en el offset de geometría");
+            return new PythonGeometryOffsetResult(PythonGeometryState.InvalidResponse, null, "La respuesta del motor Python no contiene los campos esperados.");
+        }
+
+        if (!TryValidateOffset(parameters, payload, out var reason, out var mapped))
+        {
+            _logger.LogWarning("Respuesta de offset rechazada por la validación defensiva adicional: {Reason}", reason);
+            return new PythonGeometryOffsetResult(PythonGeometryState.InvalidResponse, null, reason);
+        }
+
+        return new PythonGeometryOffsetResult(PythonGeometryState.Success, mapped, Message: null);
+    }
+
+    /// <summary>
+    /// POST JSON al motor Python con el manejo común de fallas: devuelve el cuerpo de un 2xx, o el estado tipado (timeout, sin
+    /// conexión, error HTTP mapeado) con su mensaje. Nunca lanza.
+    /// </summary>
+    private async Task<(PythonGeometryState State, string? Body, string? Message)> PostAsync(
+        string path, string json, string operationName, CancellationToken cancellationToken)
+    {
+        using var content = new StringContent(json, Encoding.UTF8, "application/json");
 
         HttpResponseMessage response;
         try
         {
-            response = await _httpClient.PostAsync("/api/v1/geometry/boolean", content, cancellationToken);
+            response = await _httpClient.PostAsync(path, content, cancellationToken);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            _logger.LogWarning("Timeout en la operación de geometría contra el motor Python en {BaseAddress}", _httpClient.BaseAddress);
-            return Failure(PythonGeometryState.Timeout, "Tiempo de espera agotado en la operación de geometría.");
+            _logger.LogWarning("Timeout en {Operation} contra el motor Python en {BaseAddress}", operationName, _httpClient.BaseAddress);
+            return (PythonGeometryState.Timeout, null, $"Tiempo de espera agotado en {operationName}.");
         }
         catch (HttpRequestException ex)
         {
             _logger.LogWarning(ex, "Motor Python no disponible en {BaseAddress}", _httpClient.BaseAddress);
-            return Failure(PythonGeometryState.Unavailable, "No se pudo establecer conexión con el motor Python.");
+            return (PythonGeometryState.Unavailable, null, "No se pudo establecer conexión con el motor Python.");
         }
 
         using (response)
@@ -60,38 +144,16 @@ public sealed class PythonGeometryClient : IPythonGeometryClient
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                return Failure(PythonGeometryState.Timeout, "Tiempo de espera agotado al leer la respuesta del motor Python.");
+                return (PythonGeometryState.Timeout, null, "Tiempo de espera agotado al leer la respuesta del motor Python.");
             }
 
             if (!response.IsSuccessStatusCode)
             {
-                return MapErrorResponse(response.StatusCode, body);
+                var (state, message) = MapErrorResponse(response.StatusCode, body);
+                return (state, null, message);
             }
 
-            PythonGeometryPayload? payload;
-            try
-            {
-                payload = JsonSerializer.Deserialize<PythonGeometryPayload>(body, JsonOptions);
-            }
-            catch (JsonException ex)
-            {
-                _logger.LogWarning(ex, "Respuesta no-JSON del motor Python en la operación de geometría");
-                return Failure(PythonGeometryState.InvalidResponse, "La respuesta del motor Python no es un JSON válido.");
-            }
-
-            if (payload?.Results is null || payload.Operation is null || payload.Scope is null)
-            {
-                _logger.LogWarning("Respuesta incompleta del motor Python en la operación de geometría");
-                return Failure(PythonGeometryState.InvalidResponse, "La respuesta del motor Python no contiene los campos esperados.");
-            }
-
-            if (!TryValidate(parameters, payload, out var reason, out var mapped))
-            {
-                _logger.LogWarning("Respuesta de geometría rechazada por la validación defensiva adicional: {Reason}", reason);
-                return Failure(PythonGeometryState.InvalidResponse, reason!);
-            }
-
-            return new PythonGeometryResult(PythonGeometryState.Success, mapped, Message: null);
+            return (PythonGeometryState.Success, body, null);
         }
     }
 
@@ -185,6 +247,118 @@ public sealed class PythonGeometryClient : IPythonGeometryClient
         return true;
     }
 
+    /// <summary>
+    /// Verifica que la respuesta del offset sea coherente con LA petición (M3-S09): los parámetros que Python dice haber usado son los
+    /// pedidos, una entrada por subject en orden, SOLO polígonos con anillos cerrados y coordenadas finitas, y los datos que el cliente
+    /// muestra al usuario (colapso, piezas, huecos, offset interior máximo) coherentes entre sí y con la geometría devuelta: un
+    /// `collapsed` que no coincide con las piezas, o un conteo de huecos inventado, harían que el editor mintiera.
+    /// </summary>
+    private static bool TryValidateOffset(
+        GeometryOffsetParameters parameters, PythonGeometryOffsetPayload payload, out string? reason, out GeometryOffsetResponse? response)
+    {
+        response = null;
+        if (payload.Distance != parameters.Distance)
+        {
+            reason = $"El motor Python respondió la distancia {payload.Distance} en vez de {parameters.Distance}.";
+            return false;
+        }
+
+        if (!string.Equals(payload.JoinStyle, parameters.JoinStyle.ToWireName(), StringComparison.Ordinal)
+            || !string.Equals(payload.CapStyle, parameters.CapStyle.ToWireName(), StringComparison.Ordinal)
+            || payload.MitreLimit != parameters.MitreLimit)
+        {
+            reason = "El motor Python respondió joins/caps/límite de inglete distintos de los pedidos.";
+            return false;
+        }
+
+        if (!double.IsFinite(payload.Tolerance) || payload.Tolerance <= 0)
+        {
+            reason = "La tolerancia devuelta por el motor Python no es un número finito mayor que 0.";
+            return false;
+        }
+
+        if (payload.Results!.Count != parameters.Subjects.Count)
+        {
+            reason = $"El motor Python devolvió {payload.Results.Count} resultados; se esperaban {parameters.Subjects.Count}.";
+            return false;
+        }
+
+        var mappedResults = new List<GeometryOffsetResultPayload>(payload.Results.Count);
+        var pieceCount = 0;
+        for (var index = 0; index < payload.Results.Count; index++)
+        {
+            var item = payload.Results[index];
+            if (item.Geometries is null)
+            {
+                reason = "Un resultado del motor Python no trae la lista de geometrías.";
+                return false;
+            }
+
+            if (item.SubjectIndex != index)
+            {
+                reason = $"El resultado {index} trae subject_index {item.SubjectIndex}, que no corresponde a su posición.";
+                return false;
+            }
+
+            var mappedPieces = new List<GeometryPiecePayload>(item.Geometries.Count);
+            var holes = 0;
+            foreach (var piece in item.Geometries)
+            {
+                // El offset de un polígono o de una línea siempre es un polígono.
+                if (!TryValidatePiece(piece, "polygon", out reason))
+                {
+                    return false;
+                }
+
+                holes += piece.Coordinates!.Value.GetArrayLength() - 1;
+                mappedPieces.Add(new GeometryPiecePayload(piece.Type!, piece.Coordinates!.Value));
+            }
+
+            var isLine = parameters.Subjects[index] is GeometryShape.Line;
+            if (item.Collapsed != (mappedPieces.Count == 0) || item.SplitCount != mappedPieces.Count)
+            {
+                reason = $"El resultado {index} declara collapsed={item.Collapsed} y split_count={item.SplitCount} pero trae {mappedPieces.Count} piezas.";
+                return false;
+            }
+
+            if (item.PiecesBefore < 0 || item.LostPieces < 0 || item.LostPieces > item.PiecesBefore || item.HolesBefore < 0
+                || (isLine && (item.PiecesBefore > 1 || item.LostPieces != 0 || item.HolesBefore != 0)))
+            {
+                reason = $"El resultado {index} trae conteos de piezas o huecos incoherentes (pieces_before, lost_pieces, holes_before).";
+                return false;
+            }
+
+            if (item.HolesAfter != holes)
+            {
+                reason = $"El resultado {index} declara holes_after={item.HolesAfter} pero sus piezas tienen {holes} huecos.";
+                return false;
+            }
+
+            // Una línea no tiene interior (max_inward_offset nulo); un polígono siempre informa un número finito >= 0.
+            var maxInward = item.MaxInwardOffset;
+            if (isLine ? maxInward is not null : maxInward is null || !double.IsFinite(maxInward.Value) || maxInward.Value < 0)
+            {
+                reason = $"El resultado {index} trae un max_inward_offset que no corresponde a {(isLine ? "una línea" : "un polígono")}.";
+                return false;
+            }
+
+            pieceCount += mappedPieces.Count;
+            mappedResults.Add(new GeometryOffsetResultPayload(
+                item.SubjectIndex, mappedPieces, item.Collapsed, item.PiecesBefore, item.SplitCount, item.LostPieces, item.HolesBefore, item.HolesAfter, maxInward));
+        }
+
+        if (payload.PieceCount != pieceCount)
+        {
+            reason = $"piece_count ({payload.PieceCount}) no coincide con la cantidad real de piezas ({pieceCount}).";
+            return false;
+        }
+
+        reason = null;
+        response = new GeometryOffsetResponse(
+            payload.Distance, payload.JoinStyle!, payload.MitreLimit, payload.CapStyle!, payload.Tolerance, mappedResults, pieceCount);
+        return true;
+    }
+
     private static bool TryValidatePiece(PythonGeometryPiecePayload piece, string? allowedType, out string? reason)
     {
         if (piece.Type is not ("polygon" or "line") || piece.Coordinates is not { } coordinates || coordinates.ValueKind != JsonValueKind.Array)
@@ -273,7 +447,7 @@ public sealed class PythonGeometryClient : IPythonGeometryClient
         return true;
     }
 
-    private PythonGeometryResult MapErrorResponse(System.Net.HttpStatusCode statusCode, string body)
+    private (PythonGeometryState State, string Message) MapErrorResponse(System.Net.HttpStatusCode statusCode, string body)
     {
         PythonErrorPayload? errorPayload;
         try
@@ -306,7 +480,7 @@ public sealed class PythonGeometryClient : IPythonGeometryClient
             _logger.LogWarning("El motor Python respondió con código {StatusCode} en la operación de geometría", (int)statusCode);
         }
 
-        return Failure(state, message);
+        return (state, message);
     }
 
     private static PythonGeometryResult Failure(PythonGeometryState state, string message) => new(state, null, message);

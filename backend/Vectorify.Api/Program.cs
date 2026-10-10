@@ -314,7 +314,8 @@ builder.Services
     .Validate(o => o.MaxSubjects > 0 && o.MaxOperands > 0, "Geometry:MaxSubjects/MaxOperands deben ser mayores a 0.")
     .Validate(o => o.MaxVertices > 0, "Geometry:MaxVertices debe ser mayor a 0.")
     .Validate(o => o.MaxTolerance > 0 && o.MaxCoordinateMagnitude > 0, "Geometry:MaxTolerance/MaxCoordinateMagnitude deben ser mayores a 0.")
-    .Validate(o => o.MaxRequestBodyBytes > 0, "Geometry:MaxRequestBodyBytes debe ser mayor a 0.");
+    .Validate(o => o.MaxRequestBodyBytes > 0, "Geometry:MaxRequestBodyBytes debe ser mayor a 0.")
+    .Validate(o => o.MaxOffsetDistance > 0 && o.MaxMitreLimit > 0, "Geometry:MaxOffsetDistance/MaxMitreLimit deben ser mayores a 0.");
 
 builder.Services.AddHttpClient<IPythonGeometryClient, PythonGeometryClient>((sp, client) =>
 {

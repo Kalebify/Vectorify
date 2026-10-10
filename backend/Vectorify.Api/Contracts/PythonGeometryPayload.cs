@@ -80,3 +80,80 @@ public sealed class PythonGeometryShapePayload
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? Radius { get; set; }
 }
+
+/// <summary>Forma cruda (snake_case, tal como la serializa Pydantic) de la respuesta de POST /api/v1/geometry/offset del motor Python (M3-S09).</summary>
+public sealed class PythonGeometryOffsetPayload
+{
+    [JsonPropertyName("distance")]
+    public double Distance { get; set; }
+
+    [JsonPropertyName("join_style")]
+    public string? JoinStyle { get; set; }
+
+    [JsonPropertyName("mitre_limit")]
+    public double MitreLimit { get; set; }
+
+    [JsonPropertyName("cap_style")]
+    public string? CapStyle { get; set; }
+
+    [JsonPropertyName("tolerance")]
+    public double Tolerance { get; set; }
+
+    [JsonPropertyName("results")]
+    public List<PythonGeometryOffsetResultPayload>? Results { get; set; }
+
+    [JsonPropertyName("piece_count")]
+    public int PieceCount { get; set; }
+}
+
+public sealed class PythonGeometryOffsetResultPayload
+{
+    [JsonPropertyName("subject_index")]
+    public int SubjectIndex { get; set; }
+
+    [JsonPropertyName("geometries")]
+    public List<PythonGeometryPiecePayload>? Geometries { get; set; }
+
+    [JsonPropertyName("collapsed")]
+    public bool Collapsed { get; set; }
+
+    [JsonPropertyName("pieces_before")]
+    public int PiecesBefore { get; set; }
+
+    [JsonPropertyName("split_count")]
+    public int SplitCount { get; set; }
+
+    [JsonPropertyName("lost_pieces")]
+    public int LostPieces { get; set; }
+
+    [JsonPropertyName("holes_before")]
+    public int HolesBefore { get; set; }
+
+    [JsonPropertyName("holes_after")]
+    public int HolesAfter { get; set; }
+
+    [JsonPropertyName("max_inward_offset")]
+    public double? MaxInwardOffset { get; set; }
+}
+
+/// <summary>Cuerpo JSON del offset que Vectorify.Api le envía a Python (ya validado): mismos nombres que GeometryOffsetRequest de Pydantic.</summary>
+public sealed class PythonGeometryOffsetRequestPayload
+{
+    [JsonPropertyName("subjects")]
+    public List<PythonGeometryShapePayload> Subjects { get; set; } = [];
+
+    [JsonPropertyName("distance")]
+    public double Distance { get; set; }
+
+    [JsonPropertyName("join_style")]
+    public string JoinStyle { get; set; } = string.Empty;
+
+    [JsonPropertyName("mitre_limit")]
+    public double MitreLimit { get; set; }
+
+    [JsonPropertyName("cap_style")]
+    public string CapStyle { get; set; } = string.Empty;
+
+    [JsonPropertyName("tolerance")]
+    public double Tolerance { get; set; }
+}

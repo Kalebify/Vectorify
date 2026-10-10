@@ -10,4 +10,10 @@ namespace Vectorify.Api.Geometry;
 public interface IGeometryRequestValidator
 {
     GeometryValidationResult Validate(GeometryBooleanRequest? request);
+
+    /// <summary>
+    /// Valida la petición de POST /api/v2/geometry/offset (M3-S09): distancia finita, distinta de 0 y dentro del tope (y solo positiva si
+    /// hay líneas), join/cap conocidos, límite de inglete en rango, tolerancia, y las mismas reglas de formas y límites que las booleanas.
+    /// </summary>
+    GeometryValidationResult ValidateOffset(GeometryOffsetRequest? request);
 }
