@@ -1,0 +1,19 @@
+{
+  "card_id": "3e8d77b2-6398-81ff-8daa-cc17007c1461",
+  "card_url": "https://app.notion.com/p/3e8d77b2639881ff8daacc17007c1461",
+  "title": "M3-S10 · Cut / Split de geometría",
+  "stack": "Frontend, Vector, Laser, ASP.NET Core, Python -- herramienta Cut: dividir (piezas comparten borde) o separar con ranura en mm a lo largo de una polilinea, preview con piezas coloreadas, POST /api/v2/geometry/split sobre Shapely",
+  "branch": "sprint/3e8d77b2-m3-s10-cut-split",
+  "column": "Doing",
+  "phase": "implementation",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "pr_url": null,
+  "started_at": "2026-10-11T00:00:00Z",
+  "exceptions": [
+    "Corrida autonoma de MVP 3 (S01..S16) confirmada por el usuario: mergea el orquestador; ante un error la tarjeta pasa a Bloqueado y se sigue.",
+    "ENTORNO: el conector de Notion estaba desconectado al iniciar esta tarjeta: NO se pudo leer el cuerpo de la tarjeta (UX/Tests) ni mover su estado en el tablero; la spec se redacto con Objetivo + Criterio de aceptacion. Pendiente: mover M3-S09 y M3-S10 en Notion y publicar sus reportes de QA cuando el conector vuelva.",
+    "ENTORNO: Docker Desktop no arranca en el equipo; los tests con Testcontainers/PostgreSQL no pueden correr (se documenta en el PR).",
+    "DECISION: dos modos de corte explicitos (dividir sin hueco / ranura con ancho en mm); un corte que no atraviesa no divide salvo 'extender'; sin seleccion se cortan los objetos visibles y desbloqueados cruzados, listados antes de aplicar."
+  ]
+}
