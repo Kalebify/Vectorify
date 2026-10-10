@@ -11,7 +11,8 @@ import { abortAwareFetch, svgResponse } from "./abortableFetch";
  *
  * Capas: A «Rojo» (#ff0000: r1 = 0..40 x 0..40, r2 = 0..40 x 100..140), B «Azul» (#0000ff: b1 = 100..140 x 100..140) y C «Líneas»
  * (#00aa00: ln1 = línea abierta y = 20 de x 200 a 260, `fill: none`, trazo de 0,5 u). El `fetch` respeta AbortSignal y cuenta las
- * llamadas al servicio de geometría (`geometryCalls`), que el test responde con `geometry`.
+ * llamadas al servicio de geometría (`geometryCalls`, booleanas y Draw/Erase), que el test responde con `geometry`, y al offset (`offsetCalls`, M3-S09), que
+ * responde con `offset`.
  */
 
 export const PROJECT_ID = "11111111-1111-1111-1111-111111111111";
@@ -66,6 +67,8 @@ export interface WorkspaceOptions {
   lockedB?: boolean;
   /** Responde al servicio de geometría; el cuerpo ya viene parseado. Puede devolver una promesa que el test resuelve a mano. */
   geometry?: (body: Record<string, unknown>) => Response | Promise<Response>;
+  /** Responde al offset del servicio de geometría (M3-S09, `POST /api/v2/geometry/offset`); mismo criterio que `geometry`. */
+  offset?: (body: Record<string, unknown>) => Response | Promise<Response>;
   /** SVG propio de una capa (M3-S05: los tests de Path necesitan curvas, compuestos y matrices); sin él se usa el SVG por defecto de la capa. */
   svg?: Partial<Record<"A" | "B" | "C", string>>;
 }
@@ -80,6 +83,7 @@ function layerState(groupId: string, options: WorkspaceOptions) {
 export function installWorkspaceFetch(options: WorkspaceOptions = {}) {
   const validation = { ownMismatchRatio: 0, ownMismatchTolerance: 0.02, ownMismatchWithinTolerance: true, contaminationRatio: 0, contaminationTolerance: 0.02, contaminationWithinTolerance: true, warnings: [] };
   const geometryCalls: Array<Record<string, unknown>> = [];
+  const offsetCalls: Array<Record<string, unknown>> = [];
 
   const fetchMock = abortAwareFetch((url, init) => {
     const method = init?.method ?? "GET";
@@ -87,6 +91,11 @@ export function installWorkspaceFetch(options: WorkspaceOptions = {}) {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
       geometryCalls.push(body);
       return options.geometry ? options.geometry(body) : jsonResponse({ code: "processing_error", message: "sin handler" }, 500);
+    }
+    if (method === "POST" && url.endsWith("/api/v2/geometry/offset")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      offsetCalls.push(body);
+      return options.offset ? options.offset(body) : jsonResponse({ code: "processing_error", message: "sin handler" }, 500);
     }
     if (method !== "GET") return jsonResponse({ entries: GROUPS.map((group, index) => ({ groupId: group.groupId, order: index, visible: true, locked: false, name: null })) });
     for (const group of GROUPS) {
@@ -156,11 +165,12 @@ export function installWorkspaceFetch(options: WorkspaceOptions = {}) {
     return jsonResponse({ code: "not_found", message: "No existe." }, 404);
   });
   vi.stubGlobal("fetch", fetchMock);
-  return Object.assign(fetchMock, { geometryCalls });
+  return Object.assign(fetchMock, { geometryCalls, offsetCalls });
 }
 
-export async function renderWorkspace({ strict = false, minPaths = 4 }: { strict?: boolean; minPaths?: number } = {}) {
-  const shell = <EditorShell projectId={PROJECT_ID} imageId={IMAGE_ID} paletteId={PALETTE_ID} projectName="mi-diseño.svg" dimensionWidthMm={160} savedProjectId={null} onClose={vi.fn()} />;
+export async function renderWorkspace({ strict = false, minPaths = 4, dimensionWidthMm = 160 }: { strict?: boolean; minPaths?: number; dimensionWidthMm?: number | null } = {}) {
+  // `dimensionWidthMm: null` = documento SIN escala física (M3-S09: el offset opera en unidades y lo avisa).
+  const shell = <EditorShell projectId={PROJECT_ID} imageId={IMAGE_ID} paletteId={PALETTE_ID} projectName="mi-diseño.svg" dimensionWidthMm={dimensionWidthMm} savedProjectId={null} onClose={vi.fn()} />;
   const utils = render(strict ? <StrictMode>{shell}</StrictMode> : shell);
   const canvas = await screen.findByRole("application");
   await waitFor(() => expect(Konva.stages[Konva.stages.length - 1]?.find("Path").length).toBeGreaterThanOrEqual(minPaths));

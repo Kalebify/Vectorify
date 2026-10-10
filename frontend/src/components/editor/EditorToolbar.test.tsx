@@ -11,7 +11,7 @@ describe("EditorToolbar — shell completo del wireframe", () => {
     }
   });
 
-  it("Select, Pan, Move (M3-S01), Crop (M3-S02), Fill, Color, Eyedropper (M3-S03), Draw, Erase (M3-S04) y Path (M3-S05) están habilitados; el resto está deshabilitado pero VISIBLE, con tooltip de MVP3", () => {
+  it("Select, Pan, Move (M3-S01), Crop (M3-S02), Fill, Color, Eyedropper (M3-S03), Draw, Erase (M3-S04), Path (M3-S05) y Offset (M3-S09) están habilitados; el resto está deshabilitado pero VISIBLE, con tooltip de MVP3", () => {
     render(<EditorToolbar activeTool="select" onSelectTool={vi.fn()} />);
 
     expect(screen.getByRole("button", { name: /^Select/ })).toBeEnabled();
@@ -24,8 +24,9 @@ describe("EditorToolbar — shell completo del wireframe", () => {
     expect(screen.getByRole("button", { name: /^Draw/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Erase/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Path/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Offset/ })).toBeEnabled();
 
-    for (const label of ["Offset", "Cut"]) {
+    for (const label of ["Cut"]) {
       const button = screen.getByRole("button", { name: new RegExp(`^${label}`) });
       expect(button).toBeDisabled();
       expect(button).toHaveAttribute("title", expect.stringContaining("MVP3"));
@@ -111,11 +112,23 @@ describe("EditorToolbar — shell completo del wireframe", () => {
     }
   });
 
+  it("Offset (M3-S09) se activa con aria-pressed y llama a onSelectTool('offset')", () => {
+    const onSelectTool = vi.fn();
+    const { rerender } = render(<EditorToolbar activeTool="select" onSelectTool={onSelectTool} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Offset/ }));
+    expect(onSelectTool).toHaveBeenCalledWith("offset");
+
+    rerender(<EditorToolbar activeTool="offset" onSelectTool={onSelectTool} />);
+    expect(screen.getByRole("button", { name: /^Offset/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /^Offset/ })).toHaveAttribute("title", expect.stringContaining("en mm"));
+  });
+
   it("clickear una herramienta deshabilitada no llama a onSelectTool", () => {
     const onSelectTool = vi.fn();
     render(<EditorToolbar activeTool="select" onSelectTool={onSelectTool} />);
 
-    fireEvent.click(screen.getByRole("button", { name: /^Offset/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Cut/ }));
     expect(onSelectTool).not.toHaveBeenCalled();
   });
 });

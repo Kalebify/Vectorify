@@ -72,7 +72,7 @@ validada". Se elige **Shapely (GEOS, OverlayNG)** porque (1) ya está en el moto
 (Clipper2 habría exigido un binding nativo/NuGet nuevo o reescribir el servicio); (3) OverlayNG es **robusto ante bordes que se
 tocan y vértices coincidentes** (Shapely 2.1.2 fijado en `requirements.txt`, GEOS 3.13: noding robusto, sin las `TopologyException` del overlay
 clásico) y devuelve geometría **válida**, que además se revalida y se ordena de forma determinista antes de salir;
-(4) el mismo núcleo servirá a offset, corte y puentes (S09–S11). Contra: el resultado son polilíneas (Clipper2 también); el
+(4) el mismo núcleo sirve a offset (S09, implementado) y servirá a corte y puentes (S10–S11). Contra: el resultado son polilíneas (Clipper2 también); el
 costo asumido es la latencia de un viaje al servidor, que la UI absorbe con preview, debounce y cancelación. No se reabre salvo
 que una tarjeta posterior demuestre un caso que GEOS no resuelva.
 
@@ -141,6 +141,52 @@ sus curvas.
 - Preview con `AbortController` + debounce sobre `useGeometryOperation` (una petición viva a la vez; un resultado solo vale para su
   petición); Apply usa el resultado ya calculado (o recalcula si cambió algo); un único comando atómico por Apply; Cancel y el preview no
   tocan la pila de undo.
+
+**Offset (decisión de M3-S09): mismo servicio, mismo motor, endpoint propio.** `buffer` de Shapely/GEOS (la misma elección de S08: sin dependencias nuevas;
+Clipper2 sigue descartado). Reusa el formato de anillos, los límites, el timeout y las validaciones de S04, y el hook de preview de S08 (generalizado a
+`useGeometryPreview`; `useBooleanOperation` y `useOffsetOperation` son envoltorios finos). Contrato:
+
+- Petición `POST /api/v2/geometry/offset` (Python: `POST /api/v1/geometry/offset`): `{ subjects: [polygon|line…], distance, joinStyle: "round"|"mitre"|"bevel",
+  mitreLimit, capStyle: "round"|"flat"|"square", tolerance }`. En el cable de Python los nombres van en snake_case (`join_style`, `mitre_limit`, `cap_style`; igual que
+  `subject_index`/`piece_count` de S04) y en el de ASP.NET Core/el editor en camelCase. Los `subjects` son los de las booleanas (un pincel `bufferedLine` no es un subject).
+  - `distance` es **FIRMADA y en unidades de documento**: > 0 exterior (agranda), < 0 interior (encoge), 0 se rechaza. El panel trabaja con una distancia ≥ 0 y una
+    **dirección** explícita; los **mm** se convierten con `mmPerUnit` (`lib/editor/units.ts`). **Sin escala física el panel opera en unidades (u) con un aviso
+    visible; nunca inventa mm.** `tolerance` (default 0,01 mm) se convierte igual: gobierna la resolución de los arcos redondos (`quad_segs` acotado, como el pincel
+    de S04) y descarta piezas de área < tolerancia².
+  - Una **línea** (polilínea abierta, o cerrada si repite el primer vértice) solo se desplaza **a ambos lados**: el resultado es un polígono de ancho total
+    2·|distance| con `capStyle` en los extremos (una polilínea cerrada da un anillo con hueco). Una `distance` negativa con alguna línea se rechaza (422/400) en vez
+    de reinterpretarse; el editor deshabilita *Interior* con el motivo.
+  - `joinStyle`: `round` (default), `mitre` (inglete: `mitreLimit` es la razón máx. largo del inglete / distancia, default 2; pasado el límite GEOS recorta la punta
+    a `mitreLimit·distance`) y `bevel`. Hacia adentro el join solo actúa en las esquinas cóncavas.
+- Respuesta (`ASP.NET`, camelCase; Python, snake_case): `{ distance, joinStyle, mitreLimit, capStyle, tolerance, results: [{ subjectIndex, geometries, collapsed,
+  piecesBefore, splitCount, lostPieces, holesBefore, holesAfter, maxInwardOffset }], pieceCount }`. `results` trae una entrada por subject, en orden. `geometries`
+  son **solo polígonos** (anillos cerrados, exterior antihorario, huecos horarios, cada anillo desde su vértice mínimo, orden determinista, `is_valid`).
+  **Nada falla en silencio**: `collapsed` = no queda nada; `splitCount` = piezas del resultado (el subject se **partió** si supera `piecesBefore − lostPieces`);
+  `lostPieces` = piezas del subject que desaparecen del todo (solo hacia adentro); `holesBefore/After`; `maxInwardOffset` = radio del máximo círculo inscrito
+  (`shapely.maximum_inscribed_circle`, exacto salvo `tolerance`): con un offset interior igual o mayor TODO el subject colapsa (`null` para líneas). Hacia adentro
+  cada pieza del subject se encoge por separado (el resultado es el mismo y así se sabe cuáles desaparecen). `ASP.NET` y el editor revalidan que la respuesta
+  corresponda a LA petición (mismos parámetros, una entrada por subject, solo polígonos, `collapsed`/`splitCount`/`holesAfter` coherentes con la geometría,
+  `maxInwardOffset` nulo solo en líneas); si no, 502 `invalid_response` y el editor no toca nada.
+- Límites y errores: los de S04 (500 subjects, 500 000 vértices, |coordenada| ≤ 1e9, cuerpo ≤ 32 MB, timeout 15 s Python / 20 s cliente) más `|distance|` ≤
+  `Geometry:MaxOffsetDistance` (1 000 000 u; el editor además acota a 1000 mm) y `0 < mitreLimit ≤ Geometry:MaxMitreLimit` (100). Códigos 400 de ASP.NET Core:
+  `invalid_distance` (0, NaN/Infinity, fuera de tope, interior con líneas), `unknown_join_style`, `unknown_cap_style`, `invalid_mitre_limit`, y los de S04
+  (`invalid_tolerance`, `invalid_coordinates`, `invalid_parameters`, `too_many_subjects`, `too_many_vertices`); 413 `payload_too_large`; 503/504/502 uniformes.
+  Python responde 422 con `invalid_parameters`/`too_many_geometry_*`, 413, 504 y 500 `geometry_result_invalid`.
+
+**Offset en el editor (M3-S09), decisiones de UX/dominio** (`lib/editor/offset.ts`, herramienta **Offset** del toolbar):
+- La herramienta Offset sigue la **selección viva** (en ella el canvas solo selecciona: no arrastra ni transforma); cada cambio de selección o de valores vuelve a
+  pedir el resultado (debounce 250 ms, `AbortController`, una petición viva). Presets 0,1 / 0,25 / 0,5 / 1 / 2 / 5 mm, campo libre validado (> 0, ≤ 1000 mm) y flechas ↑/↓.
+- **Colapso y división nunca en silencio.** Si **todos** los objetos colapsan, Apply queda deshabilitado con la explicación y el máximo interior ("≈ X mm"); si
+  **algunos** colapsan (o pierden piezas) se aplica solo a los demás **y solo con la casilla de confirmación marcada** (se descarta ante cualquier cambio de valores,
+  selección u opciones); el objeto que colapsa **nunca se modifica ni se borra**, ni siquiera con «Reemplazar». División, huecos que se pierden o se ganan y piezas
+  despreciables descartadas se informan antes de aplicar y en el aviso posterior (la división no pierde nada: no pide confirmación).
+- **Capa.** Cada resultado va a la **capa de su objeto de origen** (el panel dice cuál) con el color de esa capa, o a una capa destino elegida a propósito (existente
+  desbloqueada y visible, o capa nueva con un color: mecánica de S03, mismo comando). Una capa de origen **bloqueada u oculta rechaza la operación completa** (como S08).
+- **Originales.** Por defecto se **conservan** (el offset es un contorno nuevo); «Reemplazar» los sustituye en su lugar. Cada pieza disjunta es un objeto nuevo (ids
+  nuevos, `fill` = color de la capa destino, sin matriz, huecos como subpaths) y se inserta **justo encima** de su objeto de origen (con destino en otra capa, al tope
+  de ella, en orden de pintado). Un solo comando atómico por Apply; el preview y Cancel no tocan la pila de undo.
+- El resultado son **polilíneas** aplanadas a la tolerancia (no preserva los Bézier). Un objeto sin relleno con varios subpaths desplaza cada subpath por separado
+  (los contornos resultantes pueden solaparse; la unión de S08 los funde). Sin compensación automática de kerf/material (fuera de alcance).
 
 ### D5. Persistencia de geometría (M3-S13)
 Serialización `EditableDocument → SVG por capa` (mismo formato de origen, `<path data-vid d fill transform>`)

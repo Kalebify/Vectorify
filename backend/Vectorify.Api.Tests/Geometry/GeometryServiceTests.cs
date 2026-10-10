@@ -34,6 +34,10 @@ public sealed class GeometryServiceTests
             LastParameters = parameters;
             return Task.FromResult(Respond());
         }
+
+        // El offset (M3-S09) se prueba en GeometryOffsetServiceTests: acá solo cumple la interfaz.
+        public Task<PythonGeometryOffsetResult> OffsetAsync(GeometryOffsetParameters parameters, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("Las pruebas de booleanas no piden offset.");
     }
 
     private static (GeometryService Service, FakePythonGeometryClient Client) Create()

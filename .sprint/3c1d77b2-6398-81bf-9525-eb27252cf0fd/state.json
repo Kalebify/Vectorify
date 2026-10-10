@@ -1,0 +1,18 @@
+{
+  "card_id": "3c1d77b2-6398-81bf-9525-eb27252cf0fd",
+  "card_url": "https://app.notion.com/p/3c1d77b2639881bf9525eb27252cf0fd",
+  "title": "M3-S09 · Offset de geometría",
+  "stack": "Vector, Laser, Frontend, ASP.NET Core, Python -- offset interior/exterior en mm con Shapely buffer (joins/caps/mitre), POST /api/v2/geometry/offset, preview + Apply/Cancel, deteccion de colapso y division, maxInwardOffset",
+  "branch": "sprint/3e8d77b2-m3-s09-offset",
+  "column": "Done",
+  "phase": "review",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "pr_url": "https://github.com/Kalebify/Vectorify/pull/56",
+  "started_at": "2026-10-09T00:00:00Z",
+  "exceptions": [
+    "Corrida autonoma de MVP 3 (S01..S16) confirmada por el usuario: mergea el orquestador; ante un error la tarjeta pasa a Bloqueado y se sigue.",
+    "DECISION DE MOTOR: Shapely buffer (opcion validada en lugar de Clipper2, igual que S08).",
+    "DECISION: colapso nunca en silencio (Apply deshabilitado si todos colapsan; confirmacion explicita si colapsan algunos); por defecto se conserva el original; la capa del resultado es la de origen, o una destino explicita; sin escala fisica el panel avisa y trabaja en unidades."
+  ]
+}

@@ -31,4 +31,13 @@ public sealed class GeometryOptions
 
     /// <summary>Tamaño máximo del cuerpo de la petición; mayor ⇒ 413 sin parsearlo.</summary>
     public long MaxRequestBodyBytes { get; set; } = 32_000_000;
+
+    /// <summary>
+    /// Offset (M3-S09): valor absoluto máximo de la distancia (unidades de documento; el editor aplica además su propio tope en mm).
+    /// Una distancia 0 o por encima de este tope ⇒ 400 <c>invalid_distance</c>. Espejo de <c>max_geometry_offset_distance</c> del motor.
+    /// </summary>
+    public double MaxOffsetDistance { get; set; } = 1_000_000;
+
+    /// <summary>Offset (M3-S09): límite de inglete máximo (razón largo del inglete / distancia); ≤ 0 o mayor ⇒ 400 <c>invalid_mitre_limit</c>.</summary>
+    public double MaxMitreLimit { get; set; } = 100;
 }

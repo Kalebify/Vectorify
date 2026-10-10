@@ -10,7 +10,8 @@ using Microsoft.Extensions.Logging;
 namespace Vectorify.Api.Tests.TestSupport;
 
 /// <summary>
-/// Motor Python simulado SOLO para el servicio de geometría (M3-S04): Kestrel en loopback con POST /api/v1/geometry/boolean.
+/// Motor Python simulado SOLO para el servicio de geometría (M3-S04, M3-S09): Kestrel en loopback con POST /api/v1/geometry/boolean y
+/// /api/v1/geometry/offset (la misma respuesta para ambas rutas: cada test levanta el suyo y solo llama a una).
 /// No calcula geometría (eso lo prueban services/python-engine/tests con Shapely real): devuelve lo que el test le pida y
 /// registra cuántas veces lo llamaron y con qué cuerpo, para verificar que una petición inválida NUNCA llega a Python.
 /// </summary>
@@ -18,6 +19,7 @@ public sealed class FakePythonGeometryServer : IAsyncDisposable
 {
     private readonly WebApplication _app;
     private readonly List<string> _bodies = [];
+    private readonly List<string> _paths = [];
     private readonly object _lock = new();
 
     public string BaseUrl { get; }
@@ -25,6 +27,12 @@ public sealed class FakePythonGeometryServer : IAsyncDisposable
     public int RequestCount
     {
         get { lock (_lock) { return _bodies.Count; } }
+    }
+
+    /// <summary>Ruta de cada petición recibida (para verificar que offset y booleanas llegan a la ruta correcta de Python).</summary>
+    public IReadOnlyList<string> Paths
+    {
+        get { lock (_lock) { return [.. _paths]; } }
     }
 
     public IReadOnlyList<string> Bodies
@@ -47,13 +55,14 @@ public sealed class FakePythonGeometryServer : IAsyncDisposable
         var app = builder.Build();
         FakePythonGeometryServer? server = null;
 
-        app.MapPost("/api/v1/geometry/boolean", async context =>
+        RequestDelegate handler = async context =>
         {
             using var reader = new StreamReader(context.Request.Body);
             var body = await reader.ReadToEndAsync(context.RequestAborted);
             lock (server!._lock)
             {
                 server._bodies.Add(body);
+                server._paths.Add(context.Request.Path.Value ?? string.Empty);
             }
 
             if (delay is { } duration)
@@ -65,7 +74,9 @@ public sealed class FakePythonGeometryServer : IAsyncDisposable
             context.Response.StatusCode = statusCode;
             context.Response.ContentType = "application/json";
             await context.Response.WriteAsync(responseBody, context.RequestAborted);
-        });
+        };
+        app.MapPost("/api/v1/geometry/boolean", handler);
+        app.MapPost("/api/v1/geometry/offset", handler);
 
         try
         {

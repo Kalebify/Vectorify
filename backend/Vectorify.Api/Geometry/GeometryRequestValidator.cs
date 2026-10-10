@@ -8,7 +8,9 @@ namespace Vectorify.Api.Geometry;
 /// <summary>
 /// Implementación de <see cref="IGeometryRequestValidator"/>. Los códigos de error son estables (el frontend los mapea):
 /// invalid_parameters (cuerpo/estructura), unknown_operation, invalid_tolerance, invalid_coordinates (null/NaN/Infinity/
-/// fuera de límites), too_many_subjects, too_many_operands, too_many_vertices. Todos terminan en 400.
+/// fuera de límites), too_many_subjects, too_many_operands, too_many_vertices. El offset (M3-S09) suma invalid_distance
+/// (0, NaN/Infinity, fuera del tope, interior con líneas), unknown_join_style, unknown_cap_style e invalid_mitre_limit.
+/// Todos terminan en 400.
 /// </summary>
 public sealed class GeometryRequestValidator : IGeometryRequestValidator
 {
@@ -92,6 +94,81 @@ public sealed class GeometryRequestValidator : IGeometryRequestValidator
         }
 
         return GeometryValidationResult.Success(new GeometryBooleanParameters(operation, subjects, operands, tolerance.Value));
+    }
+
+    /// <summary>Límite de inglete por defecto (M3-S09) cuando la petición no lo trae: el mismo que el panel del editor.</summary>
+    public const double DefaultMitreLimit = 2;
+
+    public GeometryValidationResult ValidateOffset(GeometryOffsetRequest? request)
+    {
+        if (request is null)
+        {
+            return Fail("invalid_parameters", "El cuerpo de la petición es requerido.");
+        }
+
+        var distance = request.Distance;
+        if (distance is null || !double.IsFinite(distance.Value) || distance.Value == 0 || Math.Abs(distance.Value) > _options.MaxOffsetDistance)
+        {
+            return Fail(
+                "invalid_distance",
+                $"distance debe ser un número finito distinto de 0 con valor absoluto <= {_options.MaxOffsetDistance} (unidades de documento).");
+        }
+
+        // Join y cap son opcionales (default round); uno presente pero desconocido es un error, no se reinterpreta.
+        var joinStyle = OffsetJoinStyle.Round;
+        if (request.JoinStyle is not null && !OffsetStyleNames.TryParseJoin(request.JoinStyle, out joinStyle))
+        {
+            return Fail("unknown_join_style", $"joinStyle '{request.JoinStyle}' desconocido. Valores válidos: round, mitre, bevel.");
+        }
+
+        var capStyle = OffsetCapStyle.Round;
+        if (request.CapStyle is not null && !OffsetStyleNames.TryParseCap(request.CapStyle, out capStyle))
+        {
+            return Fail("unknown_cap_style", $"capStyle '{request.CapStyle}' desconocido. Valores válidos: round, flat, square.");
+        }
+
+        var mitreLimit = request.MitreLimit ?? DefaultMitreLimit;
+        if (!double.IsFinite(mitreLimit) || mitreLimit <= 0 || mitreLimit > _options.MaxMitreLimit)
+        {
+            return Fail("invalid_mitre_limit", $"mitreLimit debe ser un número finito en el rango (0, {_options.MaxMitreLimit}].");
+        }
+
+        var tolerance = request.Tolerance;
+        if (tolerance is null || !double.IsFinite(tolerance.Value) || tolerance.Value <= 0 || tolerance.Value > _options.MaxTolerance)
+        {
+            return Fail("invalid_tolerance", $"tolerance debe ser un número finito en el rango (0, {_options.MaxTolerance}].");
+        }
+
+        if (request.Subjects is null || request.Subjects.Count == 0)
+        {
+            return Fail("invalid_parameters", "subjects es requerido y no puede estar vacío.");
+        }
+
+        if (request.Subjects.Count > _options.MaxSubjects)
+        {
+            return Fail("too_many_subjects", $"La petición trae {request.Subjects.Count} subjects; el máximo es {_options.MaxSubjects}.");
+        }
+
+        var vertexCount = 0;
+        var subjects = new List<GeometryShape>(request.Subjects.Count);
+        for (var index = 0; index < request.Subjects.Count; index++)
+        {
+            var (shape, failure) = ParseShape(request.Subjects[index], allowBufferedLine: false, $"subjects[{index}]", ref vertexCount);
+            if (failure is not null)
+            {
+                return failure;
+            }
+
+            subjects.Add(shape!);
+        }
+
+        // Una línea abierta no tiene interior: solo se desplaza a ambos lados. Se rechaza en vez de reinterpretarla.
+        if (distance.Value < 0 && subjects.Any(shape => shape is GeometryShape.Line))
+        {
+            return Fail("invalid_distance", "Una línea solo se desplaza a ambos lados: la distancia interior (negativa) no aplica a líneas.");
+        }
+
+        return GeometryValidationResult.Success(new GeometryOffsetParameters(subjects, distance.Value, joinStyle, mitreLimit, capStyle, tolerance.Value));
     }
 
     private static GeometryValidationResult Fail(string code, string message) => GeometryValidationResult.Failure(code, message);

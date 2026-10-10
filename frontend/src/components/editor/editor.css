@@ -1415,3 +1415,56 @@
   display: block;
   pointer-events: none;
 }
+
+/* ---------- M3-S09: Offset (panel y overlay; reusa las clases .boolean-panel / .boolean-overlay) ---------- */
+
+.offset-panel__scale {
+  margin: 0;
+  padding: var(--editor-space-1) var(--editor-space-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid #b26a00;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-h);
+}
+
+.offset-panel__presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--editor-space-1);
+}
+
+.offset-panel__presets .crop-panel__preset[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.offset-panel__warnings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.offset-panel__warning {
+  padding: var(--editor-space-1) var(--editor-space-2);
+  border-left: 3px solid #b26a00;
+  background: var(--editor-panel-bg);
+  color: var(--text-h);
+}
+
+.offset-panel__warning--collapse,
+.offset-panel__warning--partial {
+  border-left-color: #d11a2a;
+}
+
+.offset-panel__confirm {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--editor-space-1);
+  font-size: 12px;
+  color: var(--text-h);
+}

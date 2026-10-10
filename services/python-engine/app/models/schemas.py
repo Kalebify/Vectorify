@@ -704,6 +704,53 @@ class GeometryBooleanResponse(BaseModel):
     piece_count: int = Field(ge=0)
 
 
+# ---- Offset de geometría (M3-S09): mismo servicio y mismo formato de anillos que las booleanas ----
+
+OffsetJoinStyle = Literal["round", "mitre", "bevel"]
+OffsetCapStyle = Literal["round", "flat", "square"]
+
+
+class GeometryOffsetRequest(BaseModel):
+    """Cuerpo de POST /api/v1/geometry/offset. `distance` está FIRMADA y en unidades de documento (> 0 exterior,
+    < 0 interior; 0 se rechaza); `join_style`/`mitre_limit` gobiernan las esquinas, `cap_style` los extremos de
+    las líneas (que solo se desplazan a ambos lados) y `tolerance` (> 0) la resolución de los arcos y el umbral
+    de pieza despreciable (área < tolerance²)."""
+
+    subjects: list[SubjectGeometry] = Field(min_length=1)
+    distance: float = Field(allow_inf_nan=False)
+    join_style: OffsetJoinStyle = "round"
+    mitre_limit: float = Field(default=2.0, allow_inf_nan=False)
+    cap_style: OffsetCapStyle = "round"
+    tolerance: float = Field(gt=0, le=1_000_000, allow_inf_nan=False)
+
+
+class OffsetResultItem(BaseModel):
+    """Resultado del offset de UN subject (ver app.core.geometry_offset): `geometries` son polígonos válidos;
+    `collapsed` = no queda nada; `split_count` = piezas del resultado (más que las piezas que sobreviven del subject
+    = se partió); `lost_pieces` = piezas del subject que desaparecen del todo; `holes_before`/`holes_after` y
+    `max_inward_offset` (offset interior a partir del cual todo el subject colapsa; `null` para líneas)."""
+
+    subject_index: int
+    geometries: list[PolygonPiece]
+    collapsed: bool
+    pieces_before: int = Field(ge=0)
+    split_count: int = Field(ge=0)
+    lost_pieces: int = Field(ge=0)
+    holes_before: int = Field(ge=0)
+    holes_after: int = Field(ge=0)
+    max_inward_offset: float | None
+
+
+class GeometryOffsetResponse(BaseModel):
+    distance: float
+    join_style: OffsetJoinStyle
+    mitre_limit: float
+    cap_style: OffsetCapStyle
+    tolerance: float
+    results: list[OffsetResultItem]
+    piece_count: int = Field(ge=0)
+
+
 class ErrorResponse(BaseModel):
     """Forma común de error controlado, igual convención que
     Vectorify.Api.Contracts.ApiErrorResponse: `code` es estable, `message` es

@@ -28,3 +28,6 @@ public enum PythonGeometryState
 }
 
 public sealed record PythonGeometryResult(PythonGeometryState State, GeometryBooleanResponse? Response, string? Message);
+
+/// <summary>Resultado tipado, sin excepciones, del offset (M3-S09) contra el motor Python: mismos estados que las booleanas.</summary>
+public sealed record PythonGeometryOffsetResult(PythonGeometryState State, GeometryOffsetResponse? Response, string? Message);

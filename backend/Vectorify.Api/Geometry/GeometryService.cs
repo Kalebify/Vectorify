@@ -5,7 +5,8 @@ namespace Vectorify.Api.Geometry;
 
 /// <summary>
 /// Implementación de <see cref="IGeometryService"/>: validar -> llamar a Python -> mapear el estado del cliente a un
-/// código de error estable. Mismo patrón que Checking.CheckService, sin la parte de localizar un SVG de origen.
+/// código de error estable. Mismo patrón que Checking.CheckService, sin la parte de localizar un SVG de origen. Sirve a las
+/// booleanas (M3-S04/S08) y al offset (M3-S09).
 /// </summary>
 public sealed class GeometryService : IGeometryService
 {
@@ -43,6 +44,31 @@ public sealed class GeometryService : IGeometryService
             parameters.Operation, parameters.Subjects.Count, parameters.Operands.Count, pythonResult.Response!.PieceCount);
 
         return new GeometryBooleanResult.Ready(pythonResult.Response);
+    }
+
+    public async Task<GeometryOffsetResult> OffsetAsync(GeometryOffsetRequest? request, CancellationToken cancellationToken)
+    {
+        var validation = _validator.ValidateOffset(request);
+        if (!validation.IsValid)
+        {
+            return new GeometryOffsetResult.ValidationFailed(validation.ErrorCode!, validation.ErrorMessage!);
+        }
+
+        var parameters = validation.OffsetParameters!;
+        var pythonResult = await _pythonClient.OffsetAsync(parameters, cancellationToken);
+
+        if (pythonResult.State != PythonGeometryState.Success)
+        {
+            return new GeometryOffsetResult.UpstreamError(
+                MapErrorCode(pythonResult.State),
+                pythonResult.Message ?? "No se pudo completar el offset de geometría.");
+        }
+
+        _logger.LogInformation(
+            "Offset de geometría completado ({SubjectCount} subjects, distancia {Distance}, join {Join}, {PieceCount} piezas)",
+            parameters.Subjects.Count, parameters.Distance, parameters.JoinStyle.ToWireName(), pythonResult.Response!.PieceCount);
+
+        return new GeometryOffsetResult.Ready(pythonResult.Response);
     }
 
     private static string MapErrorCode(PythonGeometryState state) => state switch
