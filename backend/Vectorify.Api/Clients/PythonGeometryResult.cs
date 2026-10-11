@@ -31,3 +31,6 @@ public sealed record PythonGeometryResult(PythonGeometryState State, GeometryBoo
 
 /// <summary>Resultado tipado, sin excepciones, del offset (M3-S09) contra el motor Python: mismos estados que las booleanas.</summary>
 public sealed record PythonGeometryOffsetResult(PythonGeometryState State, GeometryOffsetResponse? Response, string? Message);
+
+/// <summary>Resultado tipado, sin excepciones, del corte (M3-S10) contra el motor Python: mismos estados que las booleanas.</summary>
+public sealed record PythonGeometrySplitResult(PythonGeometryState State, GeometrySplitResponse? Response, string? Message);

@@ -110,6 +110,50 @@ public sealed class PythonGeometryClient : IPythonGeometryClient
         return new PythonGeometryOffsetResult(PythonGeometryState.Success, mapped, Message: null);
     }
 
+    public async Task<PythonGeometrySplitResult> SplitAsync(GeometrySplitParameters parameters, CancellationToken cancellationToken = default)
+    {
+        var requestPayload = new PythonGeometrySplitRequestPayload
+        {
+            Subjects = [.. parameters.Subjects.Select(ToPayload)],
+            Cutter = new PythonGeometryCutterPayload { Points = parameters.CutterPoints },
+            Mode = parameters.Mode.ToWireName(),
+            SlotWidth = parameters.SlotWidth,
+            Extend = parameters.Extend,
+            Tolerance = parameters.Tolerance,
+        };
+
+        var (state, body, message) = await PostAsync("/api/v1/geometry/split", JsonSerializer.Serialize(requestPayload), "el corte de geometría", cancellationToken);
+        if (state != PythonGeometryState.Success)
+        {
+            return new PythonGeometrySplitResult(state, null, message);
+        }
+
+        PythonGeometrySplitPayload? payload;
+        try
+        {
+            payload = JsonSerializer.Deserialize<PythonGeometrySplitPayload>(body!, JsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Respuesta no-JSON del motor Python en el corte de geometría");
+            return new PythonGeometrySplitResult(PythonGeometryState.InvalidResponse, null, "La respuesta del motor Python no es un JSON válido.");
+        }
+
+        if (payload?.Results is null || payload.Mode is null)
+        {
+            _logger.LogWarning("Respuesta incompleta del motor Python en el corte de geometría");
+            return new PythonGeometrySplitResult(PythonGeometryState.InvalidResponse, null, "La respuesta del motor Python no contiene los campos esperados.");
+        }
+
+        if (!TryValidateSplit(parameters, payload, out var reason, out var mapped))
+        {
+            _logger.LogWarning("Respuesta de corte rechazada por la validación defensiva adicional: {Reason}", reason);
+            return new PythonGeometrySplitResult(PythonGeometryState.InvalidResponse, null, reason);
+        }
+
+        return new PythonGeometrySplitResult(PythonGeometryState.Success, mapped, Message: null);
+    }
+
     /// <summary>
     /// POST JSON al motor Python con el manejo común de fallas: devuelve el cuerpo de un 2xx, o el estado tipado (timeout, sin
     /// conexión, error HTTP mapeado) con su mensaje. Nunca lanza.
@@ -356,6 +400,100 @@ public sealed class PythonGeometryClient : IPythonGeometryClient
         reason = null;
         response = new GeometryOffsetResponse(
             payload.Distance, payload.JoinStyle!, payload.MitreLimit, payload.CapStyle!, payload.Tolerance, mappedResults, pieceCount);
+        return true;
+    }
+
+    /// <summary>
+    /// Verifica que la respuesta del corte sea coherente con LA petición (M3-S10): los parámetros que Python dice haber usado son los
+    /// pedidos, una entrada por subject en orden, piezas del tipo del subject (polígonos para un polígono, polilíneas para una línea) con
+    /// anillos cerrados y coordenadas finitas, y los datos que el cliente muestra (tocado, separado, piezas, descartadas) coherentes entre sí:
+    /// un `changed` sin tocar, un resultado "separado" con menos de 2 piezas o un `piece_count` inventado harían que el editor mintiera.
+    /// </summary>
+    private static bool TryValidateSplit(
+        GeometrySplitParameters parameters, PythonGeometrySplitPayload payload, out string? reason, out GeometrySplitResponse? response)
+    {
+        response = null;
+        if (!string.Equals(payload.Mode, parameters.Mode.ToWireName(), StringComparison.Ordinal)
+            || payload.SlotWidth != parameters.SlotWidth
+            || payload.Extend != parameters.Extend)
+        {
+            reason = "El motor Python respondió modo, ancho de ranura o extensión distintos de los pedidos.";
+            return false;
+        }
+
+        if (!double.IsFinite(payload.Tolerance) || payload.Tolerance <= 0)
+        {
+            reason = "La tolerancia devuelta por el motor Python no es un número finito mayor que 0.";
+            return false;
+        }
+
+        if (payload.Results!.Count != parameters.Subjects.Count)
+        {
+            reason = $"El motor Python devolvió {payload.Results.Count} resultados; se esperaban {parameters.Subjects.Count}.";
+            return false;
+        }
+
+        var mappedResults = new List<GeometrySplitResultPayload>(payload.Results.Count);
+        var pieceCount = 0;
+        for (var index = 0; index < payload.Results.Count; index++)
+        {
+            var item = payload.Results[index];
+            if (item.Pieces is null)
+            {
+                reason = "Un resultado del motor Python no trae la lista de piezas.";
+                return false;
+            }
+
+            if (item.SubjectIndex != index)
+            {
+                reason = $"El resultado {index} trae subject_index {item.SubjectIndex}, que no corresponde a su posición.";
+                return false;
+            }
+
+            // Un subject-línea solo puede dar líneas y un subject-polígono solo polígonos.
+            var allowed = parameters.Subjects[index] is GeometryShape.Line ? "line" : "polygon";
+            var mappedPieces = new List<GeometryPiecePayload>(item.Pieces.Count);
+            foreach (var piece in item.Pieces)
+            {
+                if (!TryValidatePiece(piece, allowed, out reason))
+                {
+                    return false;
+                }
+
+                mappedPieces.Add(new GeometryPiecePayload(piece.Type!, piece.Coordinates!.Value));
+            }
+
+            if (item.PieceCount != mappedPieces.Count)
+            {
+                reason = $"El resultado {index} declara piece_count={item.PieceCount} pero trae {mappedPieces.Count} piezas.";
+                return false;
+            }
+
+            // Cambiar exige haber tocado y haber SEPARADO (>= 2 piezas); lo que no cambió no descartó nada (es el subject tal cual).
+            if (item.Changed && (!item.Touched || mappedPieces.Count < 2))
+            {
+                reason = $"El resultado {index} declara changed=true con touched={item.Touched} y {mappedPieces.Count} piezas.";
+                return false;
+            }
+
+            if (item.Discarded < 0 || (!item.Changed && item.Discarded != 0))
+            {
+                reason = $"El resultado {index} trae un conteo de piezas descartadas incoherente ({item.Discarded}).";
+                return false;
+            }
+
+            pieceCount += mappedPieces.Count;
+            mappedResults.Add(new GeometrySplitResultPayload(item.SubjectIndex, item.Changed, item.Touched, mappedPieces, mappedPieces.Count, item.Discarded));
+        }
+
+        if (payload.PieceCount != pieceCount)
+        {
+            reason = $"piece_count ({payload.PieceCount}) no coincide con la cantidad real de piezas ({pieceCount}).";
+            return false;
+        }
+
+        reason = null;
+        response = new GeometrySplitResponse(payload.Mode!, payload.SlotWidth, payload.Extend, payload.Tolerance, mappedResults, pieceCount);
         return true;
     }
 

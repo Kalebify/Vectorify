@@ -4,7 +4,7 @@ GET /health -> { status, service, version }.
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 
 
 class HealthResponse(BaseModel):
@@ -748,6 +748,54 @@ class GeometryOffsetResponse(BaseModel):
     cap_style: OffsetCapStyle
     tolerance: float
     results: list[OffsetResultItem]
+    piece_count: int = Field(ge=0)
+
+
+# ---- Corte / división de geometría (M3-S10): mismo servicio y mismo formato de anillos que las booleanas ----
+
+SplitMode = Literal["split", "slot"]
+
+
+class CutterLine(BaseModel):
+    """Línea de corte: polilínea de >= 2 puntos (en unidades de documento) que se resuelve como una sola."""
+
+    points: list[GeometryPoint] = Field(min_length=2)
+
+
+class GeometrySplitRequest(BaseModel):
+    """Cuerpo de POST /api/v1/geometry/split. `mode` = `split` (dividir: las piezas comparten el borde del corte) o `slot`
+    (separar con hueco: se resta una ranura de ancho `slot_width`, > 0 en ese modo y ignorado en `split`); `extend`
+    prolonga el primer y el último tramo del corte para que crucen todo; `tolerance` (> 0) gobierna la resolución de
+    los arcos de la ranura y el umbral de pieza despreciable (área < tolerance², largo <= tolerance)."""
+
+    subjects: list[SubjectGeometry] = Field(min_length=1)
+    cutter: CutterLine
+    mode: SplitMode
+    slot_width: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    extend: StrictBool = False
+    tolerance: float = Field(gt=0, le=1_000_000, allow_inf_nan=False)
+
+
+class SplitResultItem(BaseModel):
+    """Resultado del corte de UN subject (ver app.core.geometry_split): `touched` = el corte (o su ranura) lo alcanza;
+    `changed` = quedó separado en MÁS piezas que antes (si es false, `pieces` es el subject tal cual); `pieces` son
+    polígonos para un subject poligonal y polilíneas para uno lineal; `discarded` = piezas despreciables que se
+    descartaron de un resultado que cambió."""
+
+    subject_index: int
+    changed: bool
+    touched: bool
+    pieces: list[GeometryPiece]
+    piece_count: int = Field(ge=0)
+    discarded: int = Field(ge=0)
+
+
+class GeometrySplitResponse(BaseModel):
+    mode: SplitMode
+    slot_width: float
+    extend: bool
+    tolerance: float
+    results: list[SplitResultItem]
     piece_count: int = Field(ge=0)
 
 

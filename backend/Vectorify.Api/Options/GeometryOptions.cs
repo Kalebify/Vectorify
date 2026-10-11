@@ -40,4 +40,10 @@ public sealed class GeometryOptions
 
     /// <summary>Offset (M3-S09): límite de inglete máximo (razón largo del inglete / distancia); ≤ 0 o mayor ⇒ 400 <c>invalid_mitre_limit</c>.</summary>
     public double MaxMitreLimit { get; set; } = 100;
+
+    /// <summary>
+    /// Corte (M3-S10): máximo de puntos de la línea de corte (cuentan además en <see cref="MaxVertices"/>); mayor ⇒ 400 <c>too_many_cutter_points</c>.
+    /// Espejo de <c>max_geometry_cutter_points</c> del motor. El ancho de la ranura se acota con <see cref="MaxOffsetDistance"/>.
+    /// </summary>
+    public int MaxCutterPoints { get; set; } = 10_000;
 }

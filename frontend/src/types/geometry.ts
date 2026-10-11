@@ -112,6 +112,52 @@ export interface OffsetResponse {
   pieceCount: number;
 }
 
+// ---- Corte / división (M3-S10): `POST /api/v2/geometry/split`, refleja `Vectorify.Api.Contracts.GeometrySplitRequest/Response` ----
+
+/** `split` = dividir (las piezas comparten el borde del corte); `slot` = separar con hueco (se resta una ranura de ancho `slotWidth` centrada en la línea). */
+export type SplitMode = "split" | "slot";
+
+/** Línea de corte: polilínea de >= 2 puntos distintos, en unidades de documento. */
+export interface CutterLine {
+  points: GeometryPoint[];
+}
+
+export interface SplitRequest {
+  /** Polígonos y polilíneas (nunca un pincel), en unidades de documento: el mismo formato de anillos de las booleanas. */
+  subjects: GeometrySubject[];
+  cutter: CutterLine;
+  mode: SplitMode;
+  /** Unidades de documento: > 0 en modo `slot`; en modo `split` se ignora (el cliente manda 0). */
+  slotWidth: number;
+  /** Prolonga el primer y el último tramo del corte para que crucen todo. */
+  extend: boolean;
+  /** Unidades de documento (> 0): resolución de los arcos de la ranura y umbral de "pieza despreciable" (área < tolerancia², largo <= tolerancia). */
+  tolerance: number;
+}
+
+/** Resultado del corte de UN subject: lo que pasó, nunca en silencio. */
+export interface SplitResultItem {
+  subjectIndex: number;
+  /** El corte (o su ranura) alcanza al subject. Permite distinguir «no lo toca» de «lo toca pero no lo atraviesa». */
+  touched: boolean;
+  /** `true` solo si el corte SEPARA al subject en más piezas que antes. Si es `false`, `pieces` es el subject tal cual (el cliente conserva su `d` con las curvas). */
+  changed: boolean;
+  /** Polígonos para un subject poligonal y polilíneas para uno lineal; anillos cerrados, orden determinista. */
+  pieces: GeometryPiece[];
+  pieceCount: number;
+  /** Piezas despreciables que el servidor descartó de un resultado que cambió (0 si no cambió). */
+  discarded: number;
+}
+
+export interface SplitResponse {
+  mode: SplitMode;
+  slotWidth: number;
+  extend: boolean;
+  tolerance: number;
+  results: SplitResultItem[];
+  pieceCount: number;
+}
+
 /** Códigos de error estables de `/api/v2/geometry/*` (ApiErrorResponse.Code) + los del cliente HTTP. */
 export type GeometryErrorCode =
   | "invalid_parameters"
@@ -120,6 +166,10 @@ export type GeometryErrorCode =
   | "unknown_join_style"
   | "unknown_cap_style"
   | "invalid_mitre_limit"
+  | "unknown_split_mode"
+  | "invalid_slot_width"
+  | "invalid_cutter"
+  | "too_many_cutter_points"
   | "invalid_tolerance"
   | "invalid_coordinates"
   | "too_many_subjects"

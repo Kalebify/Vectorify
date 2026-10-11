@@ -34,6 +34,9 @@ public sealed class GeometryOffsetServiceTests
             LastParameters = parameters;
             return Task.FromResult(Respond());
         }
+
+        public Task<PythonGeometrySplitResult> SplitAsync(GeometrySplitParameters parameters, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("Las pruebas de offset no piden corte.");
     }
 
     private static (GeometryService Service, FakePythonGeometryClient Client) Create()

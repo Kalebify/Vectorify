@@ -5,7 +5,7 @@ using Vectorify.Api.Contracts;
 namespace Vectorify.Api.Tests.TestSupport;
 
 /// <summary>
-/// Cuerpos JSON del servicio de geometría (M3-S04): peticiones del cliente (camelCase, como las manda el editor) y
+/// Cuerpos JSON del servicio de geometría (M3-S04, M3-S09, M3-S10): peticiones del cliente (camelCase, como las manda el editor) y
 /// respuestas crudas de Python (snake_case, como las serializa Pydantic) para simular al motor en los tests.
 /// </summary>
 internal static class GeometryPayloads
@@ -100,4 +100,60 @@ internal static class GeometryPayloads
         string.Create(
             CultureInfo.InvariantCulture,
             $$"""{"distance":{{distance}},"join_style":"{{joinStyle}}","mitre_limit":{{mitreLimit}},"cap_style":"{{capStyle}}","tolerance":{{tolerance}},"results":[{{resultsJson}}],"piece_count":{{pieceCount}}}""");
+
+    // ---- Corte (M3-S10) ----
+
+    /// <summary>Línea de corte vertical por el centro del cuadrado de 40 (x = 20), de un extremo al otro.</summary>
+    public const string Cutter = "{\"points\":[[20,-5],[20,45]]}";
+
+    /// <summary>Petición de corte válida por defecto: el cuadrado de 40 dividido por x = 20 (modo dividir, sin extender).</summary>
+    public static string SplitRequest(
+        string subjects = Square40,
+        string cutter = Cutter,
+        string mode = "split",
+        string slotWidth = "0",
+        string extend = "false",
+        string tolerance = "0.01") =>
+        $$"""{"subjects":[{{subjects}}],"cutter":{{cutter}},"mode":"{{mode}}","slotWidth":{{slotWidth}},"extend":{{extend}},"tolerance":{{tolerance}}}""";
+
+    public static GeometrySplitRequest ParseSplit(string json) =>
+        JsonSerializer.Deserialize<GeometrySplitRequest>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+
+    public const string LeftHalf = """{"type":"polygon","coordinates":[[[0,0],[20,0],[20,40],[0,40],[0,0]]]}""";
+    public const string RightHalf = """{"type":"polygon","coordinates":[[[20,0],[40,0],[40,40],[20,40],[20,0]]]}""";
+    public const string WholeSquare = """{"type":"polygon","coordinates":[[[0,0],[40,0],[40,40],[0,40],[0,0]]]}""";
+
+    /// <summary>
+    /// Un resultado de corte de Python (snake_case). Por defecto `changed` es verdadero si hay >= 2 piezas, `touched` si cambió y
+    /// `piece_count` la cantidad de piezas, que es lo coherente; cada test los pisa para fabricar respuestas mentirosas.
+    /// </summary>
+    public static string SplitResult(
+        int subjectIndex,
+        string piecesJson,
+        bool? changed = null,
+        bool? touched = null,
+        int? pieceCount = null,
+        int discarded = 0)
+    {
+        var pieces = PieceCountOf(piecesJson);
+        var isChanged = changed ?? pieces >= 2;
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $$"""{"subject_index":{{subjectIndex}},"changed":{{isChanged.ToString().ToLowerInvariant()}},"touched":{{(touched ?? isChanged).ToString().ToLowerInvariant()}},"pieces":{{piecesJson}},"piece_count":{{pieceCount ?? pieces}},"discarded":{{discarded}}}""");
+    }
+
+    public static string SplitResponse(
+        string resultsJson,
+        int pieceCount,
+        string mode = "split",
+        double slotWidth = 0,
+        bool extend = false,
+        double tolerance = 0.01) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $$"""{"mode":"{{mode}}","slot_width":{{slotWidth}},"extend":{{extend.ToString().ToLowerInvariant()}},"tolerance":{{tolerance}},"results":[{{resultsJson}}],"piece_count":{{pieceCount}}}""");
+
+    /// <summary>Respuesta cruda de Python para el corte por defecto: el cuadrado de 40 partido en dos mitades de 20 x 40.</summary>
+    public static string HalvesSplitResponse() =>
+        SplitResponse(SplitResult(0, $"[{LeftHalf},{RightHalf}]"), pieceCount: 2);
 }

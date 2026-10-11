@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { abortAwareFetch } from "../test/abortableFetch";
-import type { BooleanRequest, OffsetRequest } from "../types/geometry";
-import { postBooleanOperation, postOffsetOperation } from "./geometryApi";
+import type { BooleanRequest, OffsetRequest, SplitRequest } from "../types/geometry";
+import { postBooleanOperation, postOffsetOperation, postSplitOperation } from "./geometryApi";
 import { API_BASE_URL, ApiClientError } from "./httpClient";
 
 const REQUEST: BooleanRequest = {
@@ -117,5 +117,71 @@ describe("postOffsetOperation (M3-S09)", () => {
     const error = await postOffsetOperation(OFFSET, controller.signal).catch((caught: unknown) => caught);
 
     expect((error as ApiClientError).isAborted).toBe(true);
+  });
+});
+
+describe("postSplitOperation (M3-S10)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const SPLIT: SplitRequest = {
+    subjects: [{ type: "polygon", coordinates: [[[0, 0], [40, 0], [40, 20], [0, 20]]] }],
+    cutter: { points: [[20, -5], [20, 25]] },
+    mode: "slot",
+    slotWidth: 0.4,
+    extend: true,
+    tolerance: 0.02,
+  };
+
+  it("POST JSON a /api/v2/geometry/split (ni boolean ni offset) con la petición tal cual y la señal de aborto", async () => {
+    const payload = {
+      mode: "slot",
+      slotWidth: 0.4,
+      extend: true,
+      tolerance: 0.02,
+      pieceCount: 0,
+      results: [{ subjectIndex: 0, touched: false, changed: false, pieces: [], pieceCount: 0, discarded: 0 }],
+    };
+    const fetchMock = abortAwareFetch(() => new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const response = await postSplitOperation(SPLIT, controller.signal);
+
+    expect(response).toEqual(payload);
+    expect(fetchMock.urls).toEqual([`${API_BASE_URL}/api/v2/geometry/split`]);
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+    expect(JSON.parse(String(init.body))).toEqual(SPLIT);
+    expect(init.signal).toBe(controller.signal);
+  });
+
+  it("un error de la Web API llega como ApiClientError con status y el código propio del corte", async () => {
+    vi.stubGlobal("fetch", abortAwareFetch(() => new Response(JSON.stringify({ code: "invalid_cutter", message: "un punto" }), { status: 400, headers: { "Content-Type": "application/json" } })));
+
+    const error = await postSplitOperation(SPLIT).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiClientError);
+    expect((error as ApiClientError).status).toBe(400);
+    expect((error as ApiClientError).body).toEqual({ code: "invalid_cutter", message: "un punto" });
+  });
+
+  it("una señal ya abortada rechaza con isAborted", async () => {
+    const fetchMock = abortAwareFetch(() => new Response("{}"));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    controller.abort();
+
+    const error = await postSplitOperation(SPLIT, controller.signal).catch((caught: unknown) => caught);
+
+    expect((error as ApiClientError).isAborted).toBe(true);
+  });
+
+  it("sin conexión rechaza con isNetworkError", async () => {
+    vi.stubGlobal("fetch", abortAwareFetch(() => Promise.reject(new TypeError("Failed to fetch"))));
+
+    const error = await postSplitOperation(SPLIT).catch((caught: unknown) => caught);
+
+    expect((error as ApiClientError).isNetworkError).toBe(true);
   });
 });

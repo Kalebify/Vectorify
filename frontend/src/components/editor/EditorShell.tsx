@@ -3,6 +3,7 @@ import { useCanvasTransform } from "../../hooks/useCanvasTransform";
 import { useClipboard } from "../../hooks/useClipboard";
 import { describeEditFailure, useDrawEraseTools } from "../../hooks/useDrawEraseTools";
 import { useBooleanOperation } from "../../hooks/useBooleanOperation";
+import { useCutTool } from "../../hooks/useCutTool";
 import { useOffsetOperation } from "../../hooks/useOffsetOperation";
 import { useEditableDocument, type ApplyEditResult, type EditProducer } from "../../hooks/useEditableDocument";
 import { usePathTool } from "../../hooks/usePathTool";
@@ -105,6 +106,7 @@ import {
   type OffsetDirection,
   type OffsetTargetChoice,
 } from "../../lib/editor/offset";
+import { cutNotice } from "../../lib/editor/cut";
 import { placeNewLayers, toLayerMetas } from "../../lib/editor/layers";
 import { matrixRotationDegrees } from "../../lib/editor/matrix";
 import { serializeEditableLayer } from "../../lib/editor/objects";
@@ -141,6 +143,7 @@ import { ObjectInspector } from "./ObjectInspector";
 import { OrientationBar } from "./OrientationBar";
 import { PaletteBar } from "./PaletteBar";
 import { OffsetPanel, ORIGIN_LAYER_VALUE } from "./OffsetPanel";
+import { CutPanel } from "./CutPanel";
 import { PathPanel } from "./PathPanel";
 import { PreviewNavigator } from "./PreviewNavigator";
 import { VectorCanvas } from "./VectorCanvas";
@@ -1527,6 +1530,26 @@ export function EditorShell({
         }
       : undefined;
 
+  // ---- Cut (M3-S10) ----
+  // Divide o separa con hueco los objetos con una línea de corte dibujada en el canvas (superficie propia, como Draw), con preview de las piezas del servidor
+  // (debounce + AbortController, una petición viva) y Apply/Cancel. Sin selección corta todos los objetos visibles y desbloqueados que la línea cruza; cada pieza
+  // queda en la capa de su original; aplicar es UN comando atómico y Cancel / el preview no dejan rastro (nada entra a la pila de undo). Ver lib/editor/cut.ts.
+  const cut = useCutTool({
+    active: activeTool === "cut",
+    editable,
+    state: colorState,
+    selectedObjects,
+    mmFactor,
+    createId,
+    onApplied: (applied, edit) => {
+      if (edit) selectionJournal.set(edit, { before: selectedObjectIds, after: new Set(applied.resultIds) });
+      handleSelectObjects(applied.resultIds, applied.activeGroupId);
+      setActiveTool("select");
+      setActionNotice(cutNotice(applied.summary));
+    },
+    onClose: () => setActiveTool("select"),
+  });
+
   // ---- Draw / Erase (M3-S04) ----
   // Toda geometría nueva pertenece a una capa identificada (la activa, o una «Dibujo» nueva en el mismo comando); Erase resta geometría real en el
   // servidor. La orquestación (borrador de la pluma, pipelines trazo -> servidor -> UN comando, teclado) vive en `useDrawEraseTools`.
@@ -1746,10 +1769,11 @@ export function EditorShell({
                 onFillObject={handleFillObject}
                 onToolShortcut={handleSelectTool}
                 onDeleteSelection={() => performClipboardAction("delete")}
-                toolSurface={drawEraseSurface}
+                toolSurface={drawEraseSurface ?? cut.surface}
                 pathSurface={pathSurface}
                 booleanOverlay={booleanOverlay}
                 offsetOverlay={offsetOverlay}
+                cutOverlay={cut.overlay}
                 onEditPath={(objectId, layerGroupId) => {
                   handleSelectObjects([objectId], layerGroupId);
                   handleSelectTool("path");
@@ -1892,6 +1916,8 @@ export function EditorShell({
               onRetry={offsetPreview.retry}
             />
           )}
+
+          {activeTool === "cut" && <CutPanel {...cut.panel} />}
 
           {colorMode && colorSession && (
             <ColorPanel

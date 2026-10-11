@@ -282,6 +282,148 @@ describe("ToolSurface — Erase / modo Objeto", () => {
   });
 });
 
+describe("ToolSurface — Cut (M3-S10)", () => {
+  /** Cut no usa las props de Draw/Erase (opcionales): solo la línea de corte y sus tres gestos. */
+  function setupCut(overrides: Partial<ToolSurfaceProps> = {}) {
+    const props = {
+      tool: "cut",
+      viewport: VIEWPORT,
+      suspended: false,
+      cutLine: [],
+      cutFinished: false,
+      onCutPoint: vi.fn(),
+      onCutFinish: vi.fn(),
+      onCutSegment: vi.fn(),
+      ...overrides,
+    } satisfies ToolSurfaceProps;
+    const utils = render(<ToolSurface {...props} />);
+    return { ...utils, props, surface: screen.getByTestId("cut-surface") };
+  }
+
+  it("un click entrega UN punto, en coordenadas de documento y al SOLTAR (no al apretar)", () => {
+    const { surface, props } = setupCut();
+
+    fireEvent.pointerDown(surface, { pointerId: 1, button: 0, ...at(100, 30) });
+    expect(props.onCutPoint).not.toHaveBeenCalled();
+    fireEvent.pointerUp(surface, { pointerId: 1, ...at(100, 30) });
+
+    expect(props.onCutPoint).toHaveBeenCalledTimes(1);
+    expect(props.onCutPoint).toHaveBeenCalledWith({ x: 100, y: 30 });
+    expect(props.onCutSegment).not.toHaveBeenCalled();
+  });
+
+  it("un temblor de menos de 4 px entre apretar y soltar sigue siendo un click", () => {
+    const { surface, props } = setupCut();
+
+    fireEvent.pointerDown(surface, { pointerId: 1, button: 0, ...at(100, 30) });
+    fireEvent.pointerMove(surface, { pointerId: 1, ...at(102, 31) });
+    fireEvent.pointerUp(surface, { pointerId: 1, ...at(102, 31) });
+
+    expect(props.onCutPoint).toHaveBeenCalledWith({ x: 100, y: 30 });
+    expect(props.onCutSegment).not.toHaveBeenCalled();
+  });
+
+  it("un arrastre de 4 px o más entrega el SEGMENTO RECTO (inicio y fin) y ningún punto suelto", () => {
+    const { surface, props } = setupCut();
+
+    fireEvent.pointerDown(surface, { pointerId: 1, button: 0, ...at(50, 60) });
+    fireEvent.pointerMove(surface, { pointerId: 1, ...at(120, 61) });
+    fireEvent.pointerMove(surface, { pointerId: 1, ...at(200, 90) });
+    fireEvent.pointerUp(surface, { pointerId: 1, ...at(200, 90) });
+
+    expect(props.onCutSegment).toHaveBeenCalledTimes(1);
+    expect(props.onCutSegment).toHaveBeenCalledWith({ x: 50, y: 60 }, { x: 200, y: 90 }); // solo los extremos: el tramo es RECTO aunque el mouse zigzagueó
+    expect(props.onCutPoint).not.toHaveBeenCalled();
+  });
+
+  it("mientras se arrastra se ve el segmento en curso (y el click aislado no lo muestra)", () => {
+    const { surface } = setupCut();
+
+    fireEvent.pointerDown(surface, { pointerId: 1, button: 0, ...at(50, 60) });
+    expect(screen.queryByTestId("cut-drag")).not.toBeInTheDocument();
+    fireEvent.pointerMove(surface, { pointerId: 1, ...at(150, 60) });
+    const drag = screen.getByTestId("cut-drag");
+    expect(drag.getAttribute("x1")).toBe("290");
+    expect(drag.getAttribute("x2")).toBe("390");
+    fireEvent.pointerUp(surface, { pointerId: 1, ...at(150, 60) });
+    expect(screen.queryByTestId("cut-drag")).not.toBeInTheDocument();
+  });
+
+  it("Escape durante el arrastre lo descarta sin entregar nada", () => {
+    const { surface, props } = setupCut();
+
+    fireEvent.pointerDown(surface, { pointerId: 1, button: 0, ...at(50, 60) });
+    fireEvent.pointerMove(surface, { pointerId: 1, ...at(150, 60) });
+    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.pointerUp(surface, { pointerId: 1, ...at(150, 60) });
+
+    expect(props.onCutSegment).not.toHaveBeenCalled();
+    expect(props.onCutPoint).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("cut-drag")).not.toBeInTheDocument();
+  });
+
+  it("doble click termina la línea; con la línea ya terminada ni agrega puntos ni vuelve a terminar", () => {
+    const { surface, props, rerender } = setupCut({ cutLine: [{ x: 10, y: 10 }, { x: 80, y: 10 }] });
+    fireEvent.doubleClick(surface);
+    expect(props.onCutFinish).toHaveBeenCalledTimes(1);
+
+    rerender(<ToolSurface {...props} cutFinished />);
+    fireEvent.pointerDown(surface, { pointerId: 1, button: 0, ...at(100, 30) });
+    fireEvent.pointerUp(surface, { pointerId: 1, ...at(100, 30) });
+    fireEvent.doubleClick(surface);
+    expect(props.onCutPoint).not.toHaveBeenCalled();
+    expect(props.onCutSegment).not.toHaveBeenCalled();
+    expect(props.onCutFinish).toHaveBeenCalledTimes(1);
+  });
+
+  it("suspendida (pan temporal) o con otro botón del mouse no captura el puntero", () => {
+    const { surface, props, rerender } = setupCut();
+    fireEvent.pointerDown(surface, { pointerId: 1, pointerType: "mouse", button: 2, ...at(10, 10) });
+    fireEvent.pointerUp(surface, { pointerId: 1, ...at(10, 10) });
+    expect(props.onCutPoint).not.toHaveBeenCalled();
+
+    rerender(<ToolSurface {...props} suspended />);
+    expect(surface).toHaveStyle({ pointerEvents: "none" });
+  });
+
+  it("dibuja la línea con un círculo por punto y el tramo elástico hasta el cursor mientras no está terminada", () => {
+    const { surface, rerender, props } = setupCut({ cutLine: [{ x: 100, y: 100 }, { x: 160, y: 100 }] });
+    const preview = screen.getByTestId("cut-preview");
+    expect(preview.querySelectorAll("circle")).toHaveLength(2);
+    expect(preview.querySelector("polyline")!.getAttribute("points")).toBe("340,280 400,280");
+    expect(preview.querySelectorAll("line")).toHaveLength(0);
+
+    fireEvent.pointerMove(surface, { pointerId: 1, ...at(200, 140) });
+    const rubber = screen.getByTestId("cut-preview").querySelector("line")!;
+    expect(rubber.getAttribute("x1")).toBe("400");
+    expect(rubber.getAttribute("x2")).toBe("440");
+
+    rerender(<ToolSurface {...props} cutFinished />);
+    expect(screen.getByTestId("cut-preview").querySelectorAll("line")).toHaveLength(0);
+  });
+
+  it("sin puntos no hay preview", () => {
+    setupCut();
+
+    expect(screen.queryByTestId("cut-preview")).not.toBeInTheDocument();
+  });
+
+  it("convierte con el pan y el zoom vigentes (escala 2 y pan 20 px)", () => {
+    const { surface, props } = setupCut({ viewport: { ...VIEWPORT, scale: 2, panX: 20, panY: -10 } });
+
+    fireEvent.pointerDown(surface, { pointerId: 1, button: 0, clientX: 520, clientY: 290 });
+    fireEvent.pointerUp(surface, { pointerId: 1, clientX: 520, clientY: 290 });
+
+    expect(props.onCutPoint).toHaveBeenCalledWith({ x: 210, y: 120 });
+  });
+
+  it("la superficie tiene un nombre accesible que explica los gestos", () => {
+    setupCut();
+
+    expect(screen.getByRole("group", { name: /Superficie de corte.*doble click o Enter termina.*Retroceso.*segmento recto.*Escape/ })).toBeInTheDocument();
+  });
+});
+
 describe("ToolSurface — accesibilidad", () => {
   it("la superficie tiene un nombre accesible que describe el modo activo", () => {
     const { rerender, props } = setup();

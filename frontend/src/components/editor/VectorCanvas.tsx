@@ -17,6 +17,7 @@ import { screenToleranceToDocument } from "../../lib/editor/units";
 import { screenToDocument, type ViewportParams } from "../../lib/editor/viewport";
 import { IDENTITY_MATRIX, type AffineMatrix } from "../../lib/svgTransform";
 import { BooleanOverlay, type BooleanOverlayProps } from "./BooleanOverlay";
+import { CutOverlay, type CutOverlayProps } from "./CutOverlay";
 import { OffsetOverlay, type OffsetOverlayProps } from "./OffsetOverlay";
 import { EditorLayerNodes } from "./EditorLayerNodes";
 import type { EditorTool } from "./EditorToolbar";
@@ -93,6 +94,8 @@ interface VectorCanvasProps {
   booleanOverlay?: Omit<BooleanOverlayProps, "viewport">;
   /** Offset abierto (M3-S09): originales atenuados, resultado y objetos que colapsan. Solo lectura (no captura el puntero); el shell posee todo el estado. */
   offsetOverlay?: Omit<OffsetOverlayProps, "viewport">;
+  /** Cut abierto (M3-S10): objetos que se cortan atenuados, las piezas resultantes de colores distintos y los que el corte toca sin atravesar. Solo lectura; el shell posee todo el estado. */
+  cutOverlay?: Omit<CutOverlayProps, "viewport">;
   /** Doble click sobre un objeto con Select (M3-S05): el shell lo selecciona y pasa a la herramienta Path. */
   onEditPath?: (objectId: string, layerGroupId: string) => void;
   /**
@@ -206,6 +209,7 @@ export function VectorCanvas({
   pathSurface,
   booleanOverlay,
   offsetOverlay,
+  cutOverlay,
   onEditPath,
   onDeleteSelection,
 }: VectorCanvasProps) {
@@ -739,7 +743,7 @@ export function VectorCanvas({
 
     if (event.key === "Escape") {
       // Crop o una transformación pendiente: Escape es "Cancel" y lo resuelve el shell (no limpia la selección).
-      if (tool === "crop" || tool === "fill" || tool === "color" || tool === "draw" || tool === "erase" || tool === "offset" || tool === "path" || editingSuspended) return;
+      if (tool === "crop" || tool === "fill" || tool === "color" || tool === "draw" || tool === "erase" || tool === "offset" || tool === "cut" || tool === "path" || editingSuspended) return;
       const interaction = interactionRef.current;
       if (interaction) {
         // Cancela un drag/marquee en curso sin tocar la selección.
@@ -848,14 +852,14 @@ export function VectorCanvas({
   };
 
   const failedLayers = layers.filter((layer) => layerStatus[layer.groupId] === "error");
-  const TOOL_LABELS: Record<EditorTool, string> = { select: "Select", pan: "Pan", move: "Move", crop: "Crop", fill: "Fill", color: "Color", eyedropper: "Eyedropper", draw: "Draw", erase: "Erase", offset: "Offset", path: "Path" };
+  const TOOL_LABELS: Record<EditorTool, string> = { select: "Select", pan: "Pan", move: "Move", crop: "Crop", fill: "Fill", color: "Color", eyedropper: "Eyedropper", draw: "Draw", erase: "Erase", offset: "Offset", cut: "Cut", path: "Path" };
   const toolLabel = TOOL_LABELS[effectiveTool];
   // Margen del exterior atenuado de Crop: cubre cualquier vista razonable alrededor del área de trabajo y del marco propuesto.
   const dimMargin = Math.max(docFrame.width, docFrame.height);
   // Con Path el contorno lo dibuja la propia superficie de nodos (sobre el mismo `d`): un segundo contorno azul lo duplicaría.
   const showOutlines = selectedObjects.length > 0 && selectedObjects.length <= MAX_SELECTION_OUTLINES && tool !== "path";
   // Con Draw/Erase la capa activa (la de destino) NO se resalta: el contorno azul taparía el color real de las líneas que se dibujan (el panel dice cuál es).
-  const layerHighlightId = selectedObjectIds.size === 0 && tool !== "draw" && tool !== "erase" ? selectedGroupId : null;
+  const layerHighlightId = selectedObjectIds.size === 0 && tool !== "draw" && tool !== "erase" && tool !== "cut" ? selectedGroupId : null;
 
   return (
     <div
@@ -863,7 +867,7 @@ export function VectorCanvas({
       className={`vector-canvas-2 vector-canvas-2--${effectiveTool}`}
       tabIndex={0}
       role="application"
-      aria-label={`Canvas del documento. Herramienta activa: ${toolLabel}. Rueda del mouse para zoom. Mantené Espacio para pan temporal. Con foco: click o Control+A para seleccionar objetos, flechas para mover la selección (Shift: 10 unidades) o desplazar la vista si no hay selección, Suprimir para eliminar, Control o Comando más C, X, V y D para copiar, cortar, pegar y duplicar, Control o Comando más corchete derecho o izquierdo traen adelante o envían atrás la selección dentro de su capa (con Mayúscula, al frente o al fondo), Escape para limpiar, + y - para zoom. R y Mayúscula+R giran 90° la selección (o todo el documento sin selección), F y Mayúscula+F la reflejan; Enter aplica y Escape cancela. Con Crop activo, las flechas mueven el marco de recorte. Con Fill, Color u Offset, click selecciona y Fill además aplica el color activo al objeto; con Offset Enter aplica y Escape cancela. I activa el Eyedropper: click sobre un objeto toma el color de su capa. Con Draw o Erase, la superficie de dibujo captura el puntero: Escape cancela el trazo o el cálculo en curso. Doble click sobre un objeto con Select pasa a Path: click en un nodo lo selecciona, arrastre mueve, Suprimir elimina y las flechas mueven los nodos seleccionados.`}
+      aria-label={`Canvas del documento. Herramienta activa: ${toolLabel}. Rueda del mouse para zoom. Mantené Espacio para pan temporal. Con foco: click o Control+A para seleccionar objetos, flechas para mover la selección (Shift: 10 unidades) o desplazar la vista si no hay selección, Suprimir para eliminar, Control o Comando más C, X, V y D para copiar, cortar, pegar y duplicar, Control o Comando más corchete derecho o izquierdo traen adelante o envían atrás la selección dentro de su capa (con Mayúscula, al frente o al fondo), Escape para limpiar, + y - para zoom. R y Mayúscula+R giran 90° la selección (o todo el documento sin selección), F y Mayúscula+F la reflejan; Enter aplica y Escape cancela. Con Crop activo, las flechas mueven el marco de recorte. Con Fill, Color u Offset, click selecciona y Fill además aplica el color activo al objeto; con Offset Enter aplica y Escape cancela. I activa el Eyedropper: click sobre un objeto toma el color de su capa. Con Draw o Erase, la superficie de dibujo captura el puntero: Escape cancela el trazo o el cálculo en curso. Con Cut, la superficie de corte captura el puntero: click agrega un punto de la línea de corte, doble click o Enter la termina, arrastrar traza un segmento recto, Retroceso quita el último punto y Escape borra la línea o cancela el corte. Doble click sobre un objeto con Select pasa a Path: click en un nodo lo selecciona, arrastre mueve, Suprimir elimina y las flechas mueven los nodos seleccionados.`}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -1012,6 +1016,7 @@ export function VectorCanvas({
       )}
       {hasContainerSize && booleanOverlay && <BooleanOverlay {...booleanOverlay} viewport={viewport} />}
       {hasContainerSize && offsetOverlay && <OffsetOverlay {...offsetOverlay} viewport={viewport} />}
+      {hasContainerSize && cutOverlay && <CutOverlay {...cutOverlay} viewport={viewport} />}
       {hasContainerSize && pathSurface && tool === "path" && <PathSurface {...pathSurface} viewport={viewport} suspended={spacePanHeld || editingSuspended} pool={selectableObjects} />}
 
       {lockedSelected.length > 0 && (

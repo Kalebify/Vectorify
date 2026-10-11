@@ -38,6 +38,10 @@ public sealed class GeometryServiceTests
         // El offset (M3-S09) se prueba en GeometryOffsetServiceTests: acá solo cumple la interfaz.
         public Task<PythonGeometryOffsetResult> OffsetAsync(GeometryOffsetParameters parameters, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException("Las pruebas de booleanas no piden offset.");
+
+        // El corte (M3-S10) se prueba en GeometrySplitServiceTests: acá solo cumple la interfaz.
+        public Task<PythonGeometrySplitResult> SplitAsync(GeometrySplitParameters parameters, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("Las pruebas de booleanas no piden corte.");
     }
 
     private static (GeometryService Service, FakePythonGeometryClient Client) Create()

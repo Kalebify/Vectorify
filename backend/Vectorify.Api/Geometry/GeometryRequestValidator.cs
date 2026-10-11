@@ -9,7 +9,8 @@ namespace Vectorify.Api.Geometry;
 /// Implementación de <see cref="IGeometryRequestValidator"/>. Los códigos de error son estables (el frontend los mapea):
 /// invalid_parameters (cuerpo/estructura), unknown_operation, invalid_tolerance, invalid_coordinates (null/NaN/Infinity/
 /// fuera de límites), too_many_subjects, too_many_operands, too_many_vertices. El offset (M3-S09) suma invalid_distance
-/// (0, NaN/Infinity, fuera del tope, interior con líneas), unknown_join_style, unknown_cap_style e invalid_mitre_limit.
+/// (0, NaN/Infinity, fuera del tope, interior con líneas), unknown_join_style, unknown_cap_style e invalid_mitre_limit. El corte (M3-S10) suma
+/// unknown_split_mode, invalid_slot_width, invalid_cutter (ausente, &lt; 2 puntos o todos iguales) y too_many_cutter_points.
 /// Todos terminan en 400.
 /// </summary>
 public sealed class GeometryRequestValidator : IGeometryRequestValidator
@@ -169,6 +170,88 @@ public sealed class GeometryRequestValidator : IGeometryRequestValidator
         }
 
         return GeometryValidationResult.Success(new GeometryOffsetParameters(subjects, distance.Value, joinStyle, mitreLimit, capStyle, tolerance.Value));
+    }
+
+    public GeometryValidationResult ValidateSplit(GeometrySplitRequest? request)
+    {
+        if (request is null)
+        {
+            return Fail("invalid_parameters", "El cuerpo de la petición es requerido.");
+        }
+
+        if (!SplitModeNames.TryParse(request.Mode, out var mode))
+        {
+            return Fail("unknown_split_mode", $"mode '{request.Mode}' desconocido. Valores válidos: split, slot.");
+        }
+
+        // El ancho siempre debe ser finito y no negativo (en modo dividir se ignora, pero un valor absurdo no se acepta en silencio);
+        // en modo ranura además > 0 y dentro del tope de distancias.
+        var slotWidth = request.SlotWidth ?? 0;
+        if (!double.IsFinite(slotWidth) || slotWidth < 0 || (mode == SplitMode.Slot && (slotWidth == 0 || slotWidth > _options.MaxOffsetDistance)))
+        {
+            return Fail(
+                "invalid_slot_width",
+                mode == SplitMode.Slot
+                    ? $"slotWidth debe ser un número finito mayor que 0 y <= {_options.MaxOffsetDistance} (unidades de documento)."
+                    : "slotWidth debe ser un número finito mayor o igual que 0.");
+        }
+
+        var tolerance = request.Tolerance;
+        if (tolerance is null || !double.IsFinite(tolerance.Value) || tolerance.Value <= 0 || tolerance.Value > _options.MaxTolerance)
+        {
+            return Fail("invalid_tolerance", $"tolerance debe ser un número finito en el rango (0, {_options.MaxTolerance}].");
+        }
+
+        if (request.Subjects is null || request.Subjects.Count == 0)
+        {
+            return Fail("invalid_parameters", "subjects es requerido y no puede estar vacío.");
+        }
+
+        if (request.Subjects.Count > _options.MaxSubjects)
+        {
+            return Fail("too_many_subjects", $"La petición trae {request.Subjects.Count} subjects; el máximo es {_options.MaxSubjects}.");
+        }
+
+        var vertexCount = 0;
+        var subjects = new List<GeometryShape>(request.Subjects.Count);
+        for (var index = 0; index < request.Subjects.Count; index++)
+        {
+            var (shape, failure) = ParseShape(request.Subjects[index], allowBufferedLine: false, $"subjects[{index}]", ref vertexCount);
+            if (failure is not null)
+            {
+                return failure;
+            }
+
+            subjects.Add(shape!);
+        }
+
+        if (request.Cutter?.Points is not { ValueKind: JsonValueKind.Array } cutterElement)
+        {
+            return Fail("invalid_cutter", "cutter.points es requerido y debe ser una polilínea [[x, y], ...] de al menos 2 puntos.");
+        }
+
+        if (cutterElement.GetArrayLength() > _options.MaxCutterPoints)
+        {
+            return Fail(
+                "too_many_cutter_points",
+                $"La línea de corte trae {cutterElement.GetArrayLength()} puntos; el máximo es {_options.MaxCutterPoints}.");
+        }
+
+        var readPoints = ReadPoints(cutterElement, minPoints: 2, "cutter.points", ref vertexCount, out var cutterFailure);
+        if (cutterFailure is not null)
+        {
+            // La estructura inválida del corte tiene su propio código; NaN/Infinity y el tope de vértices conservan el de siempre.
+            return cutterFailure.ErrorCode == "invalid_parameters" ? Fail("invalid_cutter", cutterFailure.ErrorMessage!) : cutterFailure;
+        }
+
+        // Todos los puntos iguales: no hay dirección ni línea (Python lo rechazaría igual tras quitar los repetidos).
+        var cutterPoints = readPoints!;
+        if (cutterPoints.All(point => point[0] == cutterPoints[0][0] && point[1] == cutterPoints[0][1]))
+        {
+            return Fail("invalid_cutter", "cutter.points necesita al menos dos puntos distintos.");
+        }
+
+        return GeometryValidationResult.Success(new GeometrySplitParameters(subjects, cutterPoints, mode, slotWidth, request.Extend ?? false, tolerance.Value));
     }
 
     private static GeometryValidationResult Fail(string code, string message) => GeometryValidationResult.Failure(code, message);

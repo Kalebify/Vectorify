@@ -157,3 +157,74 @@ public sealed class PythonGeometryOffsetRequestPayload
     [JsonPropertyName("tolerance")]
     public double Tolerance { get; set; }
 }
+
+/// <summary>Forma cruda (snake_case, tal como la serializa Pydantic) de la respuesta de POST /api/v1/geometry/split del motor Python (M3-S10).</summary>
+public sealed class PythonGeometrySplitPayload
+{
+    [JsonPropertyName("mode")]
+    public string? Mode { get; set; }
+
+    [JsonPropertyName("slot_width")]
+    public double SlotWidth { get; set; }
+
+    [JsonPropertyName("extend")]
+    public bool Extend { get; set; }
+
+    [JsonPropertyName("tolerance")]
+    public double Tolerance { get; set; }
+
+    [JsonPropertyName("results")]
+    public List<PythonGeometrySplitResultPayload>? Results { get; set; }
+
+    [JsonPropertyName("piece_count")]
+    public int PieceCount { get; set; }
+}
+
+public sealed class PythonGeometrySplitResultPayload
+{
+    [JsonPropertyName("subject_index")]
+    public int SubjectIndex { get; set; }
+
+    [JsonPropertyName("changed")]
+    public bool Changed { get; set; }
+
+    [JsonPropertyName("touched")]
+    public bool Touched { get; set; }
+
+    [JsonPropertyName("pieces")]
+    public List<PythonGeometryPiecePayload>? Pieces { get; set; }
+
+    [JsonPropertyName("piece_count")]
+    public int PieceCount { get; set; }
+
+    [JsonPropertyName("discarded")]
+    public int Discarded { get; set; }
+}
+
+/// <summary>Cuerpo JSON del corte que Vectorify.Api le envía a Python (ya validado): mismos nombres que GeometrySplitRequest de Pydantic.</summary>
+public sealed class PythonGeometrySplitRequestPayload
+{
+    [JsonPropertyName("subjects")]
+    public List<PythonGeometryShapePayload> Subjects { get; set; } = [];
+
+    [JsonPropertyName("cutter")]
+    public PythonGeometryCutterPayload Cutter { get; set; } = new();
+
+    [JsonPropertyName("mode")]
+    public string Mode { get; set; } = string.Empty;
+
+    [JsonPropertyName("slot_width")]
+    public double SlotWidth { get; set; }
+
+    [JsonPropertyName("extend")]
+    public bool Extend { get; set; }
+
+    [JsonPropertyName("tolerance")]
+    public double Tolerance { get; set; }
+}
+
+public sealed class PythonGeometryCutterPayload
+{
+    [JsonPropertyName("points")]
+    public double[][] Points { get; set; } = [];
+}

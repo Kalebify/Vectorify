@@ -72,7 +72,7 @@ validada". Se elige **Shapely (GEOS, OverlayNG)** porque (1) ya está en el moto
 (Clipper2 habría exigido un binding nativo/NuGet nuevo o reescribir el servicio); (3) OverlayNG es **robusto ante bordes que se
 tocan y vértices coincidentes** (Shapely 2.1.2 fijado en `requirements.txt`, GEOS 3.13: noding robusto, sin las `TopologyException` del overlay
 clásico) y devuelve geometría **válida**, que además se revalida y se ordena de forma determinista antes de salir;
-(4) el mismo núcleo sirve a offset (S09, implementado) y servirá a corte y puentes (S10–S11). Contra: el resultado son polilíneas (Clipper2 también); el
+(4) el mismo núcleo sirve a offset (S09) y a corte (S10), ambos implementados, y servirá a puentes (S11). Contra: el resultado son polilíneas (Clipper2 también); el
 costo asumido es la latencia de un viaje al servidor, que la UI absorbe con preview, debounce y cancelación. No se reabre salvo
 que una tarjeta posterior demuestre un caso que GEOS no resuelva.
 
@@ -187,6 +187,59 @@ Clipper2 sigue descartado). Reusa el formato de anillos, los límites, el timeou
   de ella, en orden de pintado). Un solo comando atómico por Apply; el preview y Cancel no tocan la pila de undo.
 - El resultado son **polilíneas** aplanadas a la tolerancia (no preserva los Bézier). Un objeto sin relleno con varios subpaths desplaza cada subpath por separado
   (los contornos resultantes pueden solaparse; la unión de S08 los funde). Sin compensación automática de kerf/material (fuera de alcance).
+
+**Corte / división (decisión de M3-S10): mismo servicio, mismo motor, endpoint propio.** Shapely/GEOS (`unary_union` + `polygonize` para dividir polígonos,
+`buffer` para la ranura; la misma elección de S08/S09: sin dependencias nuevas). Reusa el formato de anillos, los límites, el timeout, las validaciones de S04 y el
+hook de preview (`useGeometryPreview`; `useCutOperation` es otro envoltorio fino). Contrato:
+
+- Petición `POST /api/v2/geometry/split` (Python: `POST /api/v1/geometry/split`): `{ subjects: [polygon|line…], cutter: { points: [[x,y],…] }, mode: "split"|"slot",
+  slotWidth, extend, tolerance }`. En el cable de Python los nombres van en snake_case (`slot_width`, `piece_count`, `subject_index`) y en el de ASP.NET Core/el editor
+  en camelCase. Los `subjects` son los de las booleanas (un pincel `bufferedLine` no es un subject).
+  - `cutter.points`: polilínea de **>= 2 puntos distintos** (los consecutivos repetidos se unifican; si quedan menos de 2, 400 `invalid_cutter` / 422), en unidades de
+    documento, tope `Geometry:MaxCutterPoints` (10 000). Cuentan además en el tope de vértices.
+  - `mode`: `split` (**dividir**: las piezas comparten el borde del corte; polígonos con `unary_union(borde, corte)` + `polygonize`, robusto con huecos, islas y varios
+    cruces; una polilínea se parte en cada punto donde el corte la cruza o la toca, y un tramo superpuesto (colineal) no cuenta como cruce) o `slot` (**separar con
+    hueco**: se resta una ranura de ancho `slotWidth` centrada en el corte, buffer de extremos **planos** y uniones redondas, así que el área quitada de un corte recto
+    es exactamente `slotWidth` × el largo atravesado y los extremos no se pasan del trazo dibujado).
+  - `slotWidth` es en **unidades de documento**, `> 0` y `<= Geometry:MaxOffsetDistance` en modo `slot` (400 `invalid_slot_width`); en modo `split` se ignora (el
+    editor manda 0) pero debe ser finito y no negativo. El panel lo pide en **mm** (default 0,2; rango 0,01–100) y convierte con `mmPerUnit`; **sin escala física opera en
+    unidades con un aviso visible, nunca inventa mm**. `tolerance` (default 0,01 mm) gobierna la resolución de los arcos de la ranura y descarta piezas de área < tolerancia²
+    (largo <= tolerancia en líneas).
+  - `extend`: el primer y el último tramo del corte se prolongan, en su propia dirección, una longitud mayor que la diagonal de todo lo involucrado (subjects + corte);
+    los vértices intermedios no se mueven. Sin `extend` el corte es exactamente la polilínea dibujada.
+- **Un corte que no atraviesa NO divide** (en los dos modos). Un objeto solo `changed` si el corte lo **separa en más piezas** (con área/largo útil) que las que ya tenía;
+  una línea que termina dentro de la forma, que corre por un borde, que solo la roza en un vértice, o una ranura que solo le hace una muesca, la dejan **idéntica**:
+  `changed: false` y `pieces` = el subject tal cual (el cliente conserva su `d` con las curvas). Una polilínea **cerrada** cortada una sola vez queda en una pieza abierta:
+  tampoco se considera separada. Si tras descartar astillas queda una sola pieza útil, tampoco.
+- Respuesta (Python snake_case, ASP.NET camelCase): `{ mode, slotWidth, extend, tolerance, results: [{ subjectIndex, touched, changed, pieces, pieceCount, discarded }],
+  pieceCount }`, una entrada por subject en orden. `touched` = el corte (o su ranura) alcanza al subject (permite decir «no lo toca» y «lo toca pero no lo atraviesa» por
+  separado); `pieces` son polígonos (anillos cerrados, exterior antihorario, huecos horarios, cada anillo desde su vértice mínimo, `is_valid`) para un subject poligonal y
+  polilíneas para uno lineal, en **orden determinista** (mismas entradas -> mismas salidas, byte a byte; el sentido de giro de los anillos y el del corte no importan);
+  `discarded` = piezas despreciables descartadas de un resultado que cambió (0 si no cambió). `ASP.NET` y el editor revalidan que la respuesta corresponda a LA petición
+  (mismos parámetros, una entrada por subject, piezas del tipo del subject, anillos cerrados y finitos, `pieceCount` por objeto y total, `changed` solo con `touched` y >= 2
+  piezas, `discarded` coherente); si no, 502 `invalid_response` y el editor no toca nada.
+- Límites y errores: los de S04 (500 subjects, 500 000 vértices, |coordenada| <= 1e9, cuerpo <= 32 MB, timeout 15 s Python / 20 s cliente) más `Geometry:MaxCutterPoints` y el ancho
+  de ranura. Códigos 400 de ASP.NET Core: `unknown_split_mode`, `invalid_slot_width`, `invalid_cutter` (ausente, < 2 puntos o todos iguales), `too_many_cutter_points`, y los de
+  S04 (`invalid_tolerance`, `invalid_coordinates` -- NaN/Infinity/null en subjects o corte --, `invalid_parameters`, `too_many_subjects`, `too_many_vertices`); 413 `payload_too_large`;
+  503/504/502 uniformes. Python responde 422 `invalid_parameters`/`too_many_geometry_*`, 413, 504 y 500 `geometry_result_invalid`.
+
+**Cut en el editor (M3-S10), decisiones de UX/dominio** (`lib/editor/cut.ts`, herramienta **Cut** del toolbar):
+- **Línea de corte**: polilínea dibujada en la superficie propia de la herramienta (`ToolSurface`, la misma de Draw/Erase): click por punto, doble click o Enter la termina,
+  Retroceso quita el último punto, Escape borra la línea (con la línea vacía, cierra la herramienta) y **arrastrar** traza un segmento recto (la línea completa). Una línea
+  terminada no acepta más puntos (Retroceso la reabre). Con la línea de 2+ puntos el preview sale solo (debounce 250 ms, `AbortController`, una petición viva); Enter con la
+  línea terminada aplica. Los puntos van en unidades de documento; el panel guía en mm.
+- **Dos modos visibles** (*Dividir* / *Separar con hueco*; el activo se indica siempre por escrito), ancho de ranura en mm y la opción **«Extender el corte hasta cruzar todo»**.
+- **Alcance explícito**: con selección, solo los objetos seleccionados; sin selección, **todos los objetos visibles y desbloqueados que la línea (ya extendida) cruza**,
+  listados antes de aplicar («Se cortarán N objetos: …»). Los objetos de capas bloqueadas u ocultas se **omiten e informan** (a diferencia de S08/S09 no se rechaza la
+  operación completa: no son operandos que se consuman) y un objeto de geometría ilegible se omite e informa. Cambiar la selección exige salir de Cut (la superficie captura el puntero).
+- **Resultado**: cada pieza disjunta es un objeto nuevo (ids nuevos, **misma capa** que el original —no hay decisión de capa—, mismo `fill`/`stroke`, sin matriz, huecos como
+  subpaths; `strokeWidth` escalado por la matriz horneada), y ocupa el lugar del original en el orden de pintado. Un objeto que el corte no separa conserva `d`, matriz e id. Un
+  comando atómico por Apply (`atomic`), undo/redo exactos, la selección pasa a las piezas (y Deshacer vuelve a seleccionar el original); el preview y Cancel no tocan la pila de undo.
+- **Nada en silencio**: el panel dice cuántos objetos y piezas salen, nombra («Rojo · objeto 2») los que el corte **toca sin atravesar** (con la sugerencia de prolongar o activar
+  «Extender»), los seleccionados que no toca, lo omitido por capa, lo no procesable y las piezas despreciables descartadas. **Si ningún objeto cambia, Apply queda
+  deshabilitado con la explicación.** Un error del servidor o una respuesta incoherente no modifica nada (Reintentar vuelve a pedir).
+- Las piezas son **polilíneas** aplanadas a la tolerancia (no preservan los Bézier). Fuera de alcance: cortes con curvas, varios cortes a la vez, snapping, reunir piezas (Unión de S08),
+  puentes (S11) y persistencia (S13).
 
 ### D5. Persistencia de geometría (M3-S13)
 Serialización `EditableDocument → SVG por capa` (mismo formato de origen, `<path data-vid d fill transform>`)

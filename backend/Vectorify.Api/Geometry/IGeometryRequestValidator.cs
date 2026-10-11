@@ -16,4 +16,10 @@ public interface IGeometryRequestValidator
     /// hay líneas), join/cap conocidos, límite de inglete en rango, tolerancia, y las mismas reglas de formas y límites que las booleanas.
     /// </summary>
     GeometryValidationResult ValidateOffset(GeometryOffsetRequest? request);
+
+    /// <summary>
+    /// Valida la petición de POST /api/v2/geometry/split (M3-S10): modo conocido, ancho de ranura (&gt; 0 y dentro del tope en modo ranura),
+    /// tolerancia, la línea de corte (&gt;= 2 puntos distintos, finitos y bajo el tope) y las mismas reglas de formas y límites que las booleanas.
+    /// </summary>
+    GeometryValidationResult ValidateSplit(GeometrySplitRequest? request);
 }
