@@ -4,7 +4,7 @@ GET /health -> { status, service, version }.
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, StrictBool
+from pydantic import BaseModel, Field, StrictBool, model_validator
 
 
 class HealthResponse(BaseModel):
@@ -796,6 +796,146 @@ class GeometrySplitResponse(BaseModel):
     extend: bool
     tolerance: float
     results: list[SplitResultItem]
+    piece_count: int = Field(ge=0)
+
+
+# ---- Piezas flotantes y bridges (M3-S11): mismo servicio y mismo formato de anillos que las booleanas ----
+
+FloatingMode = Literal["stencil", "parts"]
+BridgeReason = Literal[
+    "unknown_island",
+    "anchor_outside",
+    "width_below_tolerance",
+    "invalid_direction",
+    "no_crossing",
+    "too_short",
+    "locked_subject",
+    "no_connection",
+]
+
+
+class FloatingSubject(PolygonGeometry):
+    """Forma del análisis de piezas flotantes: un polígono (anillos con regla par-impar) más `locked`: una forma bloqueada cuenta para el
+    análisis pero un bridge NO la puede modificar (se rechaza con el motivo `locked_subject`)."""
+
+    locked: StrictBool = False
+
+
+class GeometryFloatingRequest(BaseModel):
+    """Cuerpo de POST /api/v1/geometry/floating. `mode` = `stencil` (las formas son cortes: flotante = isla rodeada de corte) o `parts` (las
+    formas son material: flotante = componente dentro de un hueco de otro). `tolerance` (> 0) descarta componentes de área < tolerance²."""
+
+    subjects: list[FloatingSubject] = Field(min_length=1)
+    mode: FloatingMode
+    tolerance: float = Field(gt=0, le=1_000_000, allow_inf_nan=False)
+
+
+class FloatingComponent(BaseModel):
+    """Un componente: `principal` (la hoja en `stencil`, sin polígono; un cuerpo no contenido en `parts`) o `floating`. `depth` = ancestros
+    en el árbol de contención; `parent` = id del componente que lo rodea; `subjects` = índices de las formas que lo forman."""
+
+    id: int = Field(ge=0)
+    kind: Literal["principal", "floating"]
+    depth: int = Field(ge=0)
+    parent: int | None
+    polygon: PolygonPiece | None
+    area: float | None
+    bounds: list[float] = Field(min_length=4, max_length=4)
+    subjects: list[int]
+
+
+class GeometryFloatingResponse(BaseModel):
+    mode: FloatingMode
+    tolerance: float
+    components: list[FloatingComponent]
+    floating_count: int = Field(ge=0)
+    main_count: int = Field(ge=0)
+    discarded: int = Field(ge=0)
+
+
+class BridgePoint(BaseModel):
+    x: GeometryCoordinate
+    y: GeometryCoordinate
+
+
+class BridgeInput(BaseModel):
+    """Un bridge pedido. Necesita `island` (id de una pieza flotante del análisis: el servidor sugiere ancla y dirección) o `anchor` (punto sobre
+    el borde de una pieza flotante; con `island` además se exige que sea esa). `direction` (cualquier vector no nulo; default: perpendicular al
+    borde, hacia afuera), `width` (unidades de documento, > 0) y `length` (opcional, desde el ancla; default: lo justo para cruzar el hueco)."""
+
+    island: int | None = Field(default=None, ge=0)
+    anchor: BridgePoint | None = None
+    direction: BridgePoint | None = None
+    width: float = Field(gt=0, le=GEOMETRY_COORDINATE_LIMIT, allow_inf_nan=False)
+    length: float | None = Field(default=None, gt=0, le=GEOMETRY_COORDINATE_LIMIT, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _needs_island_or_anchor(self) -> "BridgeInput":
+        if self.island is None and self.anchor is None:
+            raise ValueError("un bridge necesita `island` o `anchor`")
+        return self
+
+
+class GeometryBridgeRequest(BaseModel):
+    """Cuerpo de POST /api/v1/geometry/bridge. Con `suggest` el servidor completa, con una sugerencia de ancho `suggest_width`, cada pieza
+    flotante que ningún bridge válido de `bridges` cubre."""
+
+    subjects: list[FloatingSubject] = Field(min_length=1)
+    mode: FloatingMode
+    bridges: list[BridgeInput] = Field(default_factory=list)
+    suggest: StrictBool = False
+    suggest_width: float | None = Field(default=None, gt=0, le=GEOMETRY_COORDINATE_LIMIT, allow_inf_nan=False)
+    tolerance: float = Field(gt=0, le=1_000_000, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _suggest_needs_width(self) -> "GeometryBridgeRequest":
+        if self.suggest and self.suggest_width is None:
+            raise ValueError("`suggest` necesita `suggest_width`")
+        return self
+
+
+class BridgeResultItem(BaseModel):
+    """Resultado de UN bridge (en el orden pedido y luego los sugeridos): `valid`/`reason`; la pieza flotante (`island`), el ancla y la dirección
+    resueltas; `length` = largo del hueco que cruza; `area` = lo que realmente quita (stencil) o agrega (parts) = width × length; `reduces` = sumado a los bridges válidos anteriores
+    deja menos flotantes; `affects` = formas que modifica; `polygon` = su rectángulo."""
+
+    index: int = Field(ge=0)
+    suggested: bool
+    valid: bool
+    reason: BridgeReason | None
+    island: int | None
+    anchor: BridgePoint | None
+    direction: BridgePoint | None
+    width: float
+    length: float | None
+    area: float | None
+    reduces: bool
+    affects: list[int]
+    polygon: PolygonPiece | None
+
+
+class BridgeSubjectResult(BaseModel):
+    """Geometría resultante de UNA forma: `changed: false` = igual que la original (sin `geometries`: el cliente conserva su objeto)."""
+
+    subject_index: int
+    changed: bool
+    geometries: list[PolygonPiece]
+
+
+class BridgeReanalysis(BaseModel):
+    """Reanálisis de la geometría RESULTANTE: flotantes antes y después, y cuerpos principales que quedan."""
+
+    floating_before: int = Field(ge=0)
+    floating_after: int = Field(ge=0)
+    main_after: int = Field(ge=0)
+
+
+class GeometryBridgeResponse(BaseModel):
+    mode: FloatingMode
+    tolerance: float
+    bridges: list[BridgeResultItem]
+    results: list[BridgeSubjectResult]
+    reanalysis: BridgeReanalysis
     piece_count: int = Field(ge=0)
 
 

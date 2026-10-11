@@ -3,7 +3,7 @@ using Vectorify.Api.Geometry;
 namespace Vectorify.Api.Clients;
 
 /// <summary>
-/// Cliente tipado hacia el servicio de geometría (POST /api/v1/geometry/boolean, /offset y /split) del motor Python/FastAPI (M3-S04, M3-S09, M3-S10).
+/// Cliente tipado hacia el servicio de geometría (POST /api/v1/geometry/boolean, /offset, /split, /floating y /bridge) del motor Python/FastAPI (M3-S04, M3-S09, M3-S10, M3-S11).
 /// Mismo patrón que IPythonCheckClient: cada etapa tiene su propio cliente con su propio timeout.
 /// </summary>
 public interface IPythonGeometryClient
@@ -19,4 +19,10 @@ public interface IPythonGeometryClient
 
     /// <summary>Igual que <see cref="BooleanAsync"/> para el corte (M3-S10): nunca lanza y revalida la respuesta contra LA petición.</summary>
     Task<PythonGeometrySplitResult> SplitAsync(GeometrySplitParameters parameters, CancellationToken cancellationToken = default);
+
+    /// <summary>Igual que <see cref="BooleanAsync"/> para el análisis de piezas flotantes (M3-S11): nunca lanza y revalida la respuesta contra LA petición.</summary>
+    Task<PythonGeometryFloatingResult> FloatingAsync(GeometryFloatingParameters parameters, CancellationToken cancellationToken = default);
+
+    /// <summary>Igual que <see cref="BooleanAsync"/> para los bridges (M3-S11): nunca lanza y revalida la respuesta contra LA petición.</summary>
+    Task<PythonGeometryBridgeResult> BridgeAsync(GeometryBridgeParameters parameters, CancellationToken cancellationToken = default);
 }

@@ -96,6 +96,57 @@ public sealed class GeometryService : IGeometryService
         return new GeometrySplitResult.Ready(pythonResult.Response);
     }
 
+    public async Task<GeometryFloatingResult> FloatingAsync(GeometryFloatingRequest? request, CancellationToken cancellationToken)
+    {
+        var validation = _validator.ValidateFloating(request);
+        if (!validation.IsValid)
+        {
+            return new GeometryFloatingResult.ValidationFailed(validation.ErrorCode!, validation.ErrorMessage!);
+        }
+
+        var parameters = validation.FloatingParameters!;
+        var pythonResult = await _pythonClient.FloatingAsync(parameters, cancellationToken);
+
+        if (pythonResult.State != PythonGeometryState.Success)
+        {
+            return new GeometryFloatingResult.UpstreamError(
+                MapErrorCode(pythonResult.State),
+                pythonResult.Message ?? "No se pudo completar el análisis de piezas flotantes.");
+        }
+
+        _logger.LogInformation(
+            "Análisis de piezas flotantes completado ({SubjectCount} subjects, modo {Mode}, {FloatingCount} flotantes)",
+            parameters.Subjects.Count, parameters.Mode.ToWireName(), pythonResult.Response!.FloatingCount);
+
+        return new GeometryFloatingResult.Ready(pythonResult.Response);
+    }
+
+    public async Task<GeometryBridgeResult> BridgeAsync(GeometryBridgeRequest? request, CancellationToken cancellationToken)
+    {
+        var validation = _validator.ValidateBridge(request);
+        if (!validation.IsValid)
+        {
+            return new GeometryBridgeResult.ValidationFailed(validation.ErrorCode!, validation.ErrorMessage!);
+        }
+
+        var parameters = validation.BridgeParameters!;
+        var pythonResult = await _pythonClient.BridgeAsync(parameters, cancellationToken);
+
+        if (pythonResult.State != PythonGeometryState.Success)
+        {
+            return new GeometryBridgeResult.UpstreamError(
+                MapErrorCode(pythonResult.State),
+                pythonResult.Message ?? "No se pudieron calcular los bridges.");
+        }
+
+        _logger.LogInformation(
+            "Bridges calculados ({SubjectCount} subjects, modo {Mode}, {BridgeCount} bridges, flotantes {Before} -> {After})",
+            parameters.Subjects.Count, parameters.Mode.ToWireName(), pythonResult.Response!.Bridges.Count,
+            pythonResult.Response.Reanalysis.FloatingBefore, pythonResult.Response.Reanalysis.FloatingAfter);
+
+        return new GeometryBridgeResult.Ready(pythonResult.Response);
+    }
+
     private static string MapErrorCode(PythonGeometryState state) => state switch
     {
         PythonGeometryState.InvalidParameters => "invalid_parameters",

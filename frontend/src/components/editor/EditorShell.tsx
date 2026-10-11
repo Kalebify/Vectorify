@@ -4,6 +4,7 @@ import { useClipboard } from "../../hooks/useClipboard";
 import { describeEditFailure, useDrawEraseTools } from "../../hooks/useDrawEraseTools";
 import { useBooleanOperation } from "../../hooks/useBooleanOperation";
 import { useCutTool } from "../../hooks/useCutTool";
+import { useFloatingTool } from "../../hooks/useFloatingTool";
 import { useOffsetOperation } from "../../hooks/useOffsetOperation";
 import { useEditableDocument, type ApplyEditResult, type EditProducer } from "../../hooks/useEditableDocument";
 import { usePathTool } from "../../hooks/usePathTool";
@@ -107,6 +108,7 @@ import {
   type OffsetTargetChoice,
 } from "../../lib/editor/offset";
 import { cutNotice } from "../../lib/editor/cut";
+import { bridgeNotice } from "../../lib/editor/floating";
 import { placeNewLayers, toLayerMetas } from "../../lib/editor/layers";
 import { matrixRotationDegrees } from "../../lib/editor/matrix";
 import { serializeEditableLayer } from "../../lib/editor/objects";
@@ -144,6 +146,7 @@ import { OrientationBar } from "./OrientationBar";
 import { PaletteBar } from "./PaletteBar";
 import { OffsetPanel, ORIGIN_LAYER_VALUE } from "./OffsetPanel";
 import { CutPanel } from "./CutPanel";
+import { FloatingPanel } from "./FloatingPanel";
 import { PathPanel } from "./PathPanel";
 import { PreviewNavigator } from "./PreviewNavigator";
 import { VectorCanvas } from "./VectorCanvas";
@@ -389,7 +392,7 @@ export function EditorShell({
     assign: assignManufacturingOperation,
   } = useManufacturingOperations(projectId, imageId, paletteId, document?.layerSetId ?? null, savedProjectId, trackPatch);
 
-  const { transform, zoomBy, panBy, fitToScreen } = useCanvasTransform();
+  const { transform, zoomBy, panBy, fitToScreen, centerOn } = useCanvasTransform();
 
   // ---- Edición de geometría (M3-S01, ver docs/ADR_EDITOR_MVP3.md) ----
   // Estado editable + historial (la carga de los SVG de capa vive acá, ya no en VectorCanvas). La metadata de capas
@@ -1550,6 +1553,28 @@ export function EditorShell({
     onClose: () => setActiveTool("select"),
   });
 
+  // ---- Piezas flotantes y bridges (M3-S11) ----
+  // Analiza (con un botón, sobre la selección o las capas CUT visibles) qué piezas se caen al cortar, las resalta y navega a ellas (seleccionar un issue centra la vista),
+  // y las conecta con bridges en mm con preview del servidor (geometría + reanálisis «N flotantes → M»). Aplicar es UN comando atómico y Cancel / el análisis / el preview
+  // no dejan rastro (nada entra a la pila de undo). Ver lib/editor/floating.ts.
+  const floating = useFloatingTool({
+    active: activeTool === "floating",
+    editable,
+    state: colorState,
+    selectedObjects,
+    mmFactor,
+    viewScale: transform.scale,
+    createId,
+    onFocusRect: (rect) => centerOn(rect, canvasSize, frame),
+    onApplied: (applied, edit) => {
+      if (edit) selectionJournal.set(edit, { before: selectedObjectIds, after: new Set(applied.resultIds) });
+      handleSelectObjects(applied.resultIds, applied.activeGroupId);
+      setActiveTool("select");
+      setActionNotice(bridgeNotice(applied.summary));
+    },
+    onClose: () => setActiveTool("select"),
+  });
+
   // ---- Draw / Erase (M3-S04) ----
   // Toda geometría nueva pertenece a una capa identificada (la activa, o una «Dibujo» nueva en el mismo comando); Erase resta geometría real en el
   // servidor. La orquestación (borrador de la pluma, pipelines trazo -> servidor -> UN comando, teclado) vive en `useDrawEraseTools`.
@@ -1769,11 +1794,12 @@ export function EditorShell({
                 onFillObject={handleFillObject}
                 onToolShortcut={handleSelectTool}
                 onDeleteSelection={() => performClipboardAction("delete")}
-                toolSurface={drawEraseSurface ?? cut.surface}
+                toolSurface={drawEraseSurface ?? cut.surface ?? floating.surface}
                 pathSurface={pathSurface}
                 booleanOverlay={booleanOverlay}
                 offsetOverlay={offsetOverlay}
                 cutOverlay={cut.overlay}
+                floatingOverlay={floating.overlay}
                 onEditPath={(objectId, layerGroupId) => {
                   handleSelectObjects([objectId], layerGroupId);
                   handleSelectTool("path");
@@ -1918,6 +1944,7 @@ export function EditorShell({
           )}
 
           {activeTool === "cut" && <CutPanel {...cut.panel} />}
+          {activeTool === "floating" && <FloatingPanel {...floating.panel} />}
 
           {colorMode && colorSession && (
             <ColorPanel

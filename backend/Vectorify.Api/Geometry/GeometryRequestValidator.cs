@@ -10,7 +10,9 @@ namespace Vectorify.Api.Geometry;
 /// invalid_parameters (cuerpo/estructura), unknown_operation, invalid_tolerance, invalid_coordinates (null/NaN/Infinity/
 /// fuera de límites), too_many_subjects, too_many_operands, too_many_vertices. El offset (M3-S09) suma invalid_distance
 /// (0, NaN/Infinity, fuera del tope, interior con líneas), unknown_join_style, unknown_cap_style e invalid_mitre_limit. El corte (M3-S10) suma
-/// unknown_split_mode, invalid_slot_width, invalid_cutter (ausente, &lt; 2 puntos o todos iguales) y too_many_cutter_points.
+/// unknown_split_mode, invalid_slot_width, invalid_cutter (ausente, &lt; 2 puntos o todos iguales) y too_many_cutter_points. Las piezas flotantes y los
+/// bridges (M3-S11) suman unknown_floating_mode, invalid_bridge (sin isla ni ancla, isla negativa, dirección nula), invalid_bridge_width (ancho o largo no
+/// finito, &lt;= 0 o fuera del tope) y too_many_bridges.
 /// Todos terminan en 400.
 /// </summary>
 public sealed class GeometryRequestValidator : IGeometryRequestValidator
@@ -253,6 +255,197 @@ public sealed class GeometryRequestValidator : IGeometryRequestValidator
 
         return GeometryValidationResult.Success(new GeometrySplitParameters(subjects, cutterPoints, mode, slotWidth, request.Extend ?? false, tolerance.Value));
     }
+
+    public GeometryValidationResult ValidateFloating(GeometryFloatingRequest? request)
+    {
+        if (request is null)
+        {
+            return Fail("invalid_parameters", "El cuerpo de la petición es requerido.");
+        }
+
+        if (!FloatingModeNames.TryParse(request.Mode, out var mode))
+        {
+            return Fail("unknown_floating_mode", $"mode '{request.Mode}' desconocido. Valores válidos: stencil, parts.");
+        }
+
+        var tolerance = request.Tolerance;
+        if (tolerance is null || !double.IsFinite(tolerance.Value) || tolerance.Value <= 0 || tolerance.Value > _options.MaxTolerance)
+        {
+            return Fail("invalid_tolerance", $"tolerance debe ser un número finito en el rango (0, {_options.MaxTolerance}].");
+        }
+
+        var vertexCount = 0;
+        var (subjects, failure) = ParseFloatingSubjects(request.Subjects, ref vertexCount);
+        if (failure is not null)
+        {
+            return failure;
+        }
+
+        return GeometryValidationResult.Success(new GeometryFloatingParameters(subjects!, mode, tolerance.Value));
+    }
+
+    public GeometryValidationResult ValidateBridge(GeometryBridgeRequest? request)
+    {
+        if (request is null)
+        {
+            return Fail("invalid_parameters", "El cuerpo de la petición es requerido.");
+        }
+
+        if (!FloatingModeNames.TryParse(request.Mode, out var mode))
+        {
+            return Fail("unknown_floating_mode", $"mode '{request.Mode}' desconocido. Valores válidos: stencil, parts.");
+        }
+
+        var tolerance = request.Tolerance;
+        if (tolerance is null || !double.IsFinite(tolerance.Value) || tolerance.Value <= 0 || tolerance.Value > _options.MaxTolerance)
+        {
+            return Fail("invalid_tolerance", $"tolerance debe ser un número finito en el rango (0, {_options.MaxTolerance}].");
+        }
+
+        var bridgeRequests = request.Bridges ?? [];
+        if (bridgeRequests.Count > _options.MaxBridges)
+        {
+            return Fail("too_many_bridges", $"La petición trae {bridgeRequests.Count} bridges; el máximo es {_options.MaxBridges}.");
+        }
+
+        var suggest = request.Suggest ?? false;
+        if ((suggest || request.SuggestWidth is not null) && !IsValidSize(request.SuggestWidth))
+        {
+            return Fail("invalid_bridge_width", $"suggestWidth debe ser un número finito mayor que 0 y <= {_options.MaxOffsetDistance} (unidades de documento).");
+        }
+
+        var vertexCount = 0;
+        var (subjects, failure) = ParseFloatingSubjects(request.Subjects, ref vertexCount);
+        if (failure is not null)
+        {
+            return failure;
+        }
+
+        var bridges = new List<GeometryBridgeSpec>(bridgeRequests.Count);
+        for (var index = 0; index < bridgeRequests.Count; index++)
+        {
+            var (spec, bridgeFailure) = ParseBridge(bridgeRequests[index], $"bridges[{index}]");
+            if (bridgeFailure is not null)
+            {
+                return bridgeFailure;
+            }
+
+            bridges.Add(spec!);
+        }
+
+        return GeometryValidationResult.Success(
+            new GeometryBridgeParameters(subjects!, mode, bridges, suggest, suggest ? request.SuggestWidth : null, tolerance.Value));
+    }
+
+    private bool IsValidSize(double? value) => value is { } number && double.IsFinite(number) && number > 0 && number <= _options.MaxOffsetDistance;
+
+    /// <summary>Valida las formas del análisis de piezas flotantes: solo polígonos (el relleno), con <c>locked</c> opcional, dentro de los límites.</summary>
+    private (List<GeometryFloatingSubject>? Subjects, GeometryValidationResult? Failure) ParseFloatingSubjects(
+        IReadOnlyList<GeometryFloatingSubjectRequest>? requests, ref int vertexCount)
+    {
+        if (requests is null || requests.Count == 0)
+        {
+            return (null, Fail("invalid_parameters", "subjects es requerido y no puede estar vacío."));
+        }
+
+        if (requests.Count > _options.MaxSubjects)
+        {
+            return (null, Fail("too_many_subjects", $"La petición trae {requests.Count} subjects; el máximo es {_options.MaxSubjects}."));
+        }
+
+        var subjects = new List<GeometryFloatingSubject>(requests.Count);
+        for (var index = 0; index < requests.Count; index++)
+        {
+            var subject = requests[index];
+            if (subject is null)
+            {
+                return (null, Fail("invalid_parameters", $"subjects[{index}] no puede ser nulo."));
+            }
+
+            var (shape, failure) = ParseShape(
+                new GeometryShapeRequest(subject.Type, subject.Coordinates, null, null), allowBufferedLine: false, $"subjects[{index}]", ref vertexCount);
+            if (failure is not null)
+            {
+                return (null, failure);
+            }
+
+            if (shape is not GeometryShape.Polygon polygon)
+            {
+                return (null, Fail("invalid_parameters", $"subjects[{index}].type debe ser 'polygon': solo las formas con relleno se analizan."));
+            }
+
+            subjects.Add(new GeometryFloatingSubject(polygon.Rings, subject.Locked ?? false));
+        }
+
+        return (subjects, null);
+    }
+
+    /// <summary>Valida UN bridge: isla o ancla, isla no negativa, ancla/dirección finitas (dirección no nula), ancho y largo finitos dentro del tope.</summary>
+    private (GeometryBridgeSpec? Spec, GeometryValidationResult? Failure) ParseBridge(GeometryBridgeItemRequest? bridge, string path)
+    {
+        if (bridge is null)
+        {
+            return (null, Fail("invalid_parameters", $"{path} no puede ser nulo."));
+        }
+
+        if (bridge.Island is null && bridge.Anchor is null)
+        {
+            return (null, Fail("invalid_bridge", $"{path} necesita 'island' o 'anchor'."));
+        }
+
+        if (bridge.Island is < 0)
+        {
+            return (null, Fail("invalid_bridge", $"{path}.island no puede ser negativo."));
+        }
+
+        double[]? anchor = null;
+        if (bridge.Anchor is not null)
+        {
+            anchor = ReadPoint(bridge.Anchor);
+            if (anchor is null)
+            {
+                return (null, Fail(
+                    "invalid_coordinates",
+                    $"{path}.anchor: x e y deben ser números finitos (no null, NaN ni Infinity) con valor absoluto <= {_options.MaxCoordinateMagnitude}."));
+            }
+        }
+
+        double[]? direction = null;
+        if (bridge.Direction is not null)
+        {
+            direction = ReadPoint(bridge.Direction);
+            if (direction is null)
+            {
+                return (null, Fail(
+                    "invalid_coordinates",
+                    $"{path}.direction: x e y deben ser números finitos (no null, NaN ni Infinity) con valor absoluto <= {_options.MaxCoordinateMagnitude}."));
+            }
+
+            if (direction[0] == 0 && direction[1] == 0)
+            {
+                return (null, Fail("invalid_bridge", $"{path}.direction no puede ser el vector nulo."));
+            }
+        }
+
+        if (!IsValidSize(bridge.Width))
+        {
+            return (null, Fail("invalid_bridge_width", $"{path}.width debe ser un número finito mayor que 0 y <= {_options.MaxOffsetDistance} (unidades de documento)."));
+        }
+
+        if (bridge.Length is not null && !IsValidSize(bridge.Length))
+        {
+            return (null, Fail("invalid_bridge_width", $"{path}.length debe ser un número finito mayor que 0 y <= {_options.MaxOffsetDistance} (unidades de documento)."));
+        }
+
+        return (new GeometryBridgeSpec(bridge.Island, anchor, direction, bridge.Width!.Value, bridge.Length), null);
+    }
+
+    private double[]? ReadPoint(GeometryPointRequest point) =>
+        point.X is { } x && point.Y is { } y
+        && double.IsFinite(x) && double.IsFinite(y)
+        && Math.Abs(x) <= _options.MaxCoordinateMagnitude && Math.Abs(y) <= _options.MaxCoordinateMagnitude
+            ? [x, y]
+            : null;
 
     private static GeometryValidationResult Fail(string code, string message) => GeometryValidationResult.Failure(code, message);
 

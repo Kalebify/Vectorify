@@ -1492,3 +1492,97 @@
 .cut-panel__warning--invalid {
   border-left-color: #d11a2a;
 }
+
+/* ---------- M3-S11: piezas flotantes y bridges (panel y overlay; reusa .boolean-panel / .boolean-overlay / .offset-panel__warnings) ---------- */
+
+.floating-panel__scope {
+  margin: 0;
+}
+
+.floating-panel__result {
+  display: block;
+  font-size: 14px;
+  color: var(--text-h);
+}
+
+.floating-panel__subheading {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-h);
+}
+
+.floating-panel__issues,
+.floating-panel__bridge-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.floating-panel__issues {
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.floating-panel__issues:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.floating-panel__issue {
+  padding: var(--editor-space-1) var(--editor-space-2);
+  border-left: 3px solid transparent;
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.floating-panel__issue--selected {
+  border-left-color: #dc2626;
+  background: var(--editor-panel-bg);
+  font-weight: 600;
+}
+
+.floating-panel__bridges {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-1);
+}
+
+.floating-panel__bridge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--editor-space-1);
+  padding: var(--editor-space-1) var(--editor-space-2);
+  border-left: 3px solid #15803d;
+  background: var(--editor-panel-bg);
+  color: var(--text-h);
+}
+
+.floating-panel__bridge--invalid {
+  border-left-color: #d11a2a;
+}
+
+.floating-panel__bridge-actions {
+  display: flex;
+  gap: var(--editor-space-1);
+  flex-shrink: 0;
+}
+
+.floating-panel__warning--uncovered,
+.floating-panel__warning--unsuggested {
+  border-left-color: #d11a2a;
+}
+
+.floating-panel__warning--not_reducing,
+.floating-panel__warning--locked,
+.floating-panel__warning--discarded,
+.floating-panel__warning--skipped,
+.floating-panel__warning--omitted {
+  border-left-color: #b26a00;
+}

@@ -12,7 +12,8 @@ import { abortAwareFetch, svgResponse } from "./abortableFetch";
  * Capas: A «Rojo» (#ff0000: r1 = 0..40 x 0..40, r2 = 0..40 x 100..140), B «Azul» (#0000ff: b1 = 100..140 x 100..140) y C «Líneas»
  * (#00aa00: ln1 = línea abierta y = 20 de x 200 a 260, `fill: none`, trazo de 0,5 u). El `fetch` respeta AbortSignal y cuenta las
  * llamadas al servicio de geometría (`geometryCalls`, booleanas y Draw/Erase), que el test responde con `geometry`, al offset (`offsetCalls`, M3-S09), que
- * responde con `offset`, y al corte (`splitCalls`, M3-S10), que responde con `split`.
+ * responde con `offset`, al corte (`splitCalls`, M3-S10), que responde con `split`, y a las piezas flotantes (`floatingCalls`) y los bridges (`bridgeCalls`, M3-S11), que
+ * responden con `floating` y `bridge`. `operations` asigna la operación de fabricación de cada capa (default `unassigned`).
  */
 
 export const PROJECT_ID = "11111111-1111-1111-1111-111111111111";
@@ -71,6 +72,12 @@ export interface WorkspaceOptions {
   offset?: (body: Record<string, unknown>) => Response | Promise<Response>;
   /** Responde al corte del servicio de geometría (M3-S10, `POST /api/v2/geometry/split`); mismo criterio que `geometry`. */
   split?: (body: Record<string, unknown>) => Response | Promise<Response>;
+  /** Responde al análisis de piezas flotantes (M3-S11, `POST /api/v2/geometry/floating`); mismo criterio que `geometry`. */
+  floating?: (body: Record<string, unknown>) => Response | Promise<Response>;
+  /** Responde a los bridges (M3-S11, `POST /api/v2/geometry/bridge`); mismo criterio que `geometry`. */
+  bridge?: (body: Record<string, unknown>) => Response | Promise<Response>;
+  /** Operación de fabricación por capa (A = Rojo, B = Azul, C = Líneas); sin ella, `unassigned`. */
+  operations?: Partial<Record<"A" | "B" | "C", "cut" | "engrave" | "ignore" | "unassigned">>;
   /** SVG propio de una capa (M3-S05: los tests de Path necesitan curvas, compuestos y matrices); sin él se usa el SVG por defecto de la capa. */
   svg?: Partial<Record<"A" | "B" | "C", string>>;
 }
@@ -87,6 +94,8 @@ export function installWorkspaceFetch(options: WorkspaceOptions = {}) {
   const geometryCalls: Array<Record<string, unknown>> = [];
   const offsetCalls: Array<Record<string, unknown>> = [];
   const splitCalls: Array<Record<string, unknown>> = [];
+  const floatingCalls: Array<Record<string, unknown>> = [];
+  const bridgeCalls: Array<Record<string, unknown>> = [];
 
   const fetchMock = abortAwareFetch((url, init) => {
     const method = init?.method ?? "GET";
@@ -104,6 +113,16 @@ export function installWorkspaceFetch(options: WorkspaceOptions = {}) {
       const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
       splitCalls.push(body);
       return options.split ? options.split(body) : jsonResponse({ code: "processing_error", message: "sin handler" }, 500);
+    }
+    if (method === "POST" && url.endsWith("/api/v2/geometry/floating")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      floatingCalls.push(body);
+      return options.floating ? options.floating(body) : jsonResponse({ code: "processing_error", message: "sin handler" }, 500);
+    }
+    if (method === "POST" && url.endsWith("/api/v2/geometry/bridge")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      bridgeCalls.push(body);
+      return options.bridge ? options.bridge(body) : jsonResponse({ code: "processing_error", message: "sin handler" }, 500);
     }
     if (method !== "GET") return jsonResponse({ entries: GROUPS.map((group, index) => ({ groupId: group.groupId, order: index, visible: true, locked: false, name: null })) });
     for (const group of GROUPS) {
@@ -128,7 +147,7 @@ export function installWorkspaceFetch(options: WorkspaceOptions = {}) {
           svgUrl: `/vectors/${group.vectorId}`,
           pathCount: group.paths,
           componentCount: null,
-          manufacturingOperation: "unassigned",
+          manufacturingOperation: options.operations?.[group.groupId === GROUP_A_ID ? "A" : group.groupId === GROUP_B_ID ? "B" : "C"] ?? "unassigned",
           ...layerState(group.groupId, options),
           order: index,
           rasterValidation: validation,
@@ -173,7 +192,7 @@ export function installWorkspaceFetch(options: WorkspaceOptions = {}) {
     return jsonResponse({ code: "not_found", message: "No existe." }, 404);
   });
   vi.stubGlobal("fetch", fetchMock);
-  return Object.assign(fetchMock, { geometryCalls, offsetCalls, splitCalls });
+  return Object.assign(fetchMock, { geometryCalls, offsetCalls, splitCalls, floatingCalls, bridgeCalls });
 }
 
 export async function renderWorkspace({ strict = false, minPaths = 4, dimensionWidthMm = 160 }: { strict?: boolean; minPaths?: number; dimensionWidthMm?: number | null } = {}) {

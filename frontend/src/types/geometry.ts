@@ -158,6 +158,139 @@ export interface SplitResponse {
   pieceCount: number;
 }
 
+// ---- Piezas flotantes y bridges (M3-S11): `POST /api/v2/geometry/floating` y `/bridge`, reflejan `Vectorify.Api.Contracts.GeometryFloatingRequest/Response` y `GeometryBridgeRequest/Response` ----
+
+/**
+ * Qué significa «flotante»: `stencil` (Plantilla) = las formas son CORTES (vacío) y flotante es cada isla de material rodeada de corte (se cae al cortar);
+ * `parts` (Piezas) = las formas son MATERIAL y flotante es un componente que está dentro de un hueco de otro (desconectado del cuerpo principal).
+ */
+export type FloatingMode = "stencil" | "parts";
+
+/** Forma del análisis: un polígono (anillos con regla par-impar) y si está bloqueada (cuenta para el análisis, pero ningún bridge la modifica). */
+export interface FloatingSubject extends PolygonGeometry {
+  locked: boolean;
+}
+
+export interface FloatingRequest {
+  subjects: FloatingSubject[];
+  mode: FloatingMode;
+  /** Unidades de documento (> 0): umbral de componente despreciable (área < tolerancia²). */
+  tolerance: number;
+}
+
+export type FloatingComponentKind = "principal" | "floating";
+
+/** Un componente de la unión de las formas. En `stencil` el único principal es la HOJA (id 0, sin polígono ni área). */
+export interface FloatingComponent {
+  /** = su posición en la lista (orden determinista: profundidad, coordenadas). */
+  id: number;
+  kind: FloatingComponentKind;
+  /** Ancestros en el árbol de contención (la hoja / el cuerpo principal = 0). */
+  depth: number;
+  /** Id del componente que lo rodea (siempre anterior en la lista), o `null` en un principal. */
+  parent: number | null;
+  /** Polígono (anillos cerrados; los huecos son los de la propia pieza). `null` solo en la hoja de `stencil`. */
+  polygon: PolygonGeometry | null;
+  area: number | null;
+  /** [minX, minY, maxX, maxY] en unidades de documento. */
+  bounds: [number, number, number, number];
+  /** Índices (en `subjects`) de las formas que lo forman. */
+  subjects: number[];
+}
+
+export interface FloatingResponse {
+  mode: FloatingMode;
+  tolerance: number;
+  components: FloatingComponent[];
+  floatingCount: number;
+  mainCount: number;
+  /** Componentes despreciables (área < tolerancia²) que el servidor descartó. */
+  discarded: number;
+}
+
+export interface BridgePoint {
+  x: number;
+  y: number;
+}
+
+/** Un bridge pedido: `island` (el servidor sugiere ancla y dirección) y/o `anchor` (punto sobre el borde de una pieza flotante). Medidas en unidades de documento. */
+export interface BridgeInput {
+  island?: number;
+  anchor?: BridgePoint;
+  /** Cualquier vector no nulo; sin él, perpendicular al borde hacia afuera. */
+  direction?: BridgePoint;
+  width: number;
+  /** Largo desde el ancla; sin él, lo justo para cruzar el hueco. */
+  length?: number;
+}
+
+export interface BridgeRequest {
+  subjects: FloatingSubject[];
+  mode: FloatingMode;
+  bridges: BridgeInput[];
+  /** El servidor completa con una sugerencia cada pieza flotante que ningún bridge válido cubre. */
+  suggest: boolean;
+  suggestWidth?: number;
+  tolerance: number;
+}
+
+/** Motivos estables por los que un bridge no es válido. */
+export type BridgeReason =
+  | "unknown_island"
+  | "anchor_outside"
+  | "width_below_tolerance"
+  | "invalid_direction"
+  | "no_crossing"
+  | "too_short"
+  | "locked_subject"
+  | "no_connection";
+
+export interface BridgeResultItem {
+  index: number;
+  suggested: boolean;
+  valid: boolean;
+  reason: BridgeReason | null;
+  /** Id de la pieza flotante a la que pertenece el ancla. */
+  island: number | null;
+  anchor: BridgePoint | null;
+  /** Unitaria. */
+  direction: BridgePoint | null;
+  width: number;
+  /** Largo del hueco que cruza. */
+  length: number | null;
+  /** Lo que realmente quita (stencil) o agrega (parts) = ancho × largo. */
+  area: number | null;
+  /** Sumado a los bridges válidos anteriores deja menos flotantes. */
+  reduces: boolean;
+  /** Índices de las formas que modifica. */
+  affects: number[];
+  /** Su rectángulo: un solo anillo cerrado. */
+  polygon: PolygonGeometry | null;
+}
+
+/** Geometría resultante de UNA forma. `changed: false` = igual (sin geometrías: el cliente conserva su objeto con sus curvas). */
+export interface BridgeSubjectResult {
+  subjectIndex: number;
+  changed: boolean;
+  geometries: PolygonGeometry[];
+}
+
+export interface BridgeReanalysis {
+  floatingBefore: number;
+  floatingAfter: number;
+  mainAfter: number;
+}
+
+export interface BridgeResponse {
+  mode: FloatingMode;
+  tolerance: number;
+  /** Los pedidos, en orden, y después los sugeridos. */
+  bridges: BridgeResultItem[];
+  results: BridgeSubjectResult[];
+  reanalysis: BridgeReanalysis;
+  pieceCount: number;
+}
+
 /** Códigos de error estables de `/api/v2/geometry/*` (ApiErrorResponse.Code) + los del cliente HTTP. */
 export type GeometryErrorCode =
   | "invalid_parameters"
@@ -170,6 +303,10 @@ export type GeometryErrorCode =
   | "invalid_slot_width"
   | "invalid_cutter"
   | "too_many_cutter_points"
+  | "unknown_floating_mode"
+  | "invalid_bridge"
+  | "invalid_bridge_width"
+  | "too_many_bridges"
   | "invalid_tolerance"
   | "invalid_coordinates"
   | "too_many_subjects"

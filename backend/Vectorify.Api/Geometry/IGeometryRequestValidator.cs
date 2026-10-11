@@ -22,4 +22,16 @@ public interface IGeometryRequestValidator
     /// tolerancia, la línea de corte (&gt;= 2 puntos distintos, finitos y bajo el tope) y las mismas reglas de formas y límites que las booleanas.
     /// </summary>
     GeometryValidationResult ValidateSplit(GeometrySplitRequest? request);
+
+    /// <summary>
+    /// Valida la petición de POST /api/v2/geometry/floating (M3-S11): modo conocido (stencil/parts), tolerancia, y que cada forma sea un polígono bien
+    /// formado (anillos de &gt;= 3 puntos finitos, <c>locked</c> opcional) dentro de los límites de subjects/vértices.
+    /// </summary>
+    GeometryValidationResult ValidateFloating(GeometryFloatingRequest? request);
+
+    /// <summary>
+    /// Valida la petición de POST /api/v2/geometry/bridge (M3-S11): lo mismo que el análisis más los bridges (cada uno con isla o ancla, dirección no nula,
+    /// ancho y largo finitos dentro del tope, tope de bridges) y el ancho de <c>suggest</c>.
+    /// </summary>
+    GeometryValidationResult ValidateBridge(GeometryBridgeRequest? request);
 }

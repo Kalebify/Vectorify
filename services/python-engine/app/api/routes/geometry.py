@@ -10,6 +10,10 @@ from app.models.schemas import (
     ErrorResponse,
     GeometryBooleanRequest,
     GeometryBooleanResponse,
+    GeometryBridgeRequest,
+    GeometryBridgeResponse,
+    GeometryFloatingRequest,
+    GeometryFloatingResponse,
     GeometryOffsetRequest,
     GeometryOffsetResponse,
     GeometrySplitRequest,
@@ -135,6 +139,75 @@ async def split_operation(
 ) -> GeometrySplitResponse:
     parsed = await _read_request(request, settings, GeometrySplitRequest)
     return service.process_split(parsed)
+
+
+@router.post(
+    "/geometry/floating",
+    response_model=GeometryFloatingResponse,
+    summary="Análisis de piezas flotantes (islas) de un conjunto de formas, en modo plantilla o piezas",
+    description=(
+        "Análisis SIN estado del servicio de geometría (M3-S11, ADR D4). Recibe como cuerpo JSON `subjects` (polígonos con regla par-impar; `locked` "
+        "no cambia el análisis: los bloqueados cuentan), `mode` (`stencil` = las formas son CORTES y flotante es cada isla de material rodeada de corte; "
+        "`parts` = las formas son MATERIAL y flotante es un componente dentro de un hueco de otro) y `tolerance` (> 0). Devuelve los `components` "
+        "(`principal`/`floating`, `depth`, `parent`, polígono, área, `bounds` y las formas que lo forman) en orden determinista, y los recuentos. "
+        "Límites: 500 subjects, 500 000 vértices. Solo lo llama Vectorify.Api."
+    ),
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {"application/json": {"schema": GeometryFloatingRequest.model_json_schema()}},
+        }
+    },
+    responses={
+        413: {"model": ErrorResponse, "description": "Cuerpo demasiado grande"},
+        422: {"model": ErrorResponse, "description": "Cuerpo inválido (esquema, NaN/Infinity, modo, tolerancia), demasiados subjects o vértices"},
+        500: {"model": ErrorResponse, "description": "Error inesperado o resultado inválido de la operación"},
+        504: {"model": ErrorResponse, "description": "La operación excedió el tiempo máximo configurado"},
+    },
+)
+async def floating_analysis(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    service: GeometryService = Depends(get_geometry_service),
+) -> GeometryFloatingResponse:
+    parsed = await _read_request(request, settings, GeometryFloatingRequest)
+    return service.process_floating(parsed)
+
+
+@router.post(
+    "/geometry/bridge",
+    response_model=GeometryBridgeResponse,
+    summary="Bridges que conectan piezas flotantes: geometría resultante y reanálisis",
+    description=(
+        "Bridges SIN estado del servicio de geometría (M3-S11, ADR D4). Recibe `subjects` (con `locked` opcional: no se modifican), `mode`, `bridges` "
+        "(`island` o `anchor`, `direction`, `width`, `length`), `suggest`/`suggest_width` (completa con una sugerencia cada pieza flotante sin bridge "
+        "válido) y `tolerance`. Devuelve por bridge si es válido (o el motivo), su rectángulo, el área que quita (stencil) o agrega (parts), la geometría "
+        "resultante por forma (`changed: false` = igual) y el REANÁLISIS `floating_before` -> `floating_after`. Límites: 500 subjects, 500 000 vértices, "
+        "200 bridges. Solo lo llama Vectorify.Api."
+    ),
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {"application/json": {"schema": GeometryBridgeRequest.model_json_schema()}},
+        }
+    },
+    responses={
+        413: {"model": ErrorResponse, "description": "Cuerpo demasiado grande"},
+        422: {
+            "model": ErrorResponse,
+            "description": "Cuerpo inválido (esquema, NaN/Infinity, bridge sin isla ni ancla, ancho o largo fuera de tope), demasiados subjects, vértices o bridges",
+        },
+        500: {"model": ErrorResponse, "description": "Error inesperado o resultado inválido de la operación"},
+        504: {"model": ErrorResponse, "description": "La operación excedió el tiempo máximo configurado"},
+    },
+)
+async def bridge_operation(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    service: GeometryService = Depends(get_geometry_service),
+) -> GeometryBridgeResponse:
+    parsed = await _read_request(request, settings, GeometryBridgeRequest)
+    return service.process_bridge(parsed)
 
 
 async def _read_request(request: Request, settings: Settings, model: type[ModelT]) -> ModelT:

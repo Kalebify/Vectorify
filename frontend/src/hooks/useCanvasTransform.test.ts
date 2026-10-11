@@ -113,3 +113,48 @@ describe("useCanvasTransform — reset y fitToScreen", () => {
     expect(result.current.transform.scale).toBe(4);
   });
 });
+
+describe("useCanvasTransform — centerOn (M3-S11)", () => {
+  const container = { width: 800, height: 600 };
+  const frame = { x: 0, y: 0, width: 320, height: 240 };
+
+  it("centra un rectángulo del documento con un zoom razonable: pan y zoom salen de focusTransform", () => {
+    const { result } = renderHook(() => useCanvasTransform());
+
+    act(() => result.current.centerOn({ x: 200, y: 50, width: 40, height: 20 }, container, frame));
+
+    // 40 x 20 u en 800 x 600: 800 · 0,4 / 40 = 8 (techo del canvas y de 8 > 6) -> 6; el centro (220, 60) cae en el del contenedor: pan = -(220 - 160) · 6.
+    expect(result.current.transform.scale).toBe(6);
+    expect(result.current.transform.panX).toBe(-360);
+    expect(result.current.transform.panY).toBe(-(60 - 120) * 6);
+  });
+
+  it("respeta los límites de zoom del hook", () => {
+    const { result } = renderHook(() => useCanvasTransform({ maxScale: 3 }));
+
+    act(() => result.current.centerOn({ x: 10, y: 10, width: 1, height: 1 }, container, frame));
+
+    expect(result.current.transform.scale).toBe(3);
+  });
+
+  it("sin contenedor medido (0 x 0) o con un rectángulo no finito no cambia la vista", () => {
+    const { result } = renderHook(() => useCanvasTransform());
+    act(() => result.current.panBy(12, 5));
+    const before = result.current.transform;
+
+    act(() => result.current.centerOn({ x: 0, y: 0, width: 10, height: 10 }, { width: 0, height: 0 }, frame));
+    act(() => result.current.centerOn({ x: NaN, y: 0, width: 10, height: 10 }, container, frame));
+
+    expect(result.current.transform).toBe(before);
+  });
+
+  it("centrar dos veces el mismo rectángulo es idempotente", () => {
+    const { result } = renderHook(() => useCanvasTransform());
+
+    act(() => result.current.centerOn({ x: 20, y: 20, width: 100, height: 50 }, container, frame));
+    const first = result.current.transform;
+    act(() => result.current.centerOn({ x: 20, y: 20, width: 100, height: 50 }, container, frame));
+
+    expect(result.current.transform).toEqual(first);
+  });
+});

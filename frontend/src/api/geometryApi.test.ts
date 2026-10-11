@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { abortAwareFetch } from "../test/abortableFetch";
-import type { BooleanRequest, OffsetRequest, SplitRequest } from "../types/geometry";
-import { postBooleanOperation, postOffsetOperation, postSplitOperation } from "./geometryApi";
+import type { BooleanRequest, BridgeRequest, FloatingRequest, OffsetRequest, SplitRequest } from "../types/geometry";
+import { postBooleanOperation, postBridgeOperation, postFloatingAnalysis, postOffsetOperation, postSplitOperation } from "./geometryApi";
 import { API_BASE_URL, ApiClientError } from "./httpClient";
 
 const REQUEST: BooleanRequest = {
@@ -183,5 +183,68 @@ describe("postSplitOperation (M3-S10)", () => {
     const error = await postSplitOperation(SPLIT).catch((caught: unknown) => caught);
 
     expect((error as ApiClientError).isNetworkError).toBe(true);
+  });
+});
+
+describe("postFloatingAnalysis / postBridgeOperation (M3-S11)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const SUBJECTS = [{ type: "polygon" as const, locked: false, coordinates: [[[0, 0], [20, 0], [20, 20], [0, 20]], [[5, 5], [15, 5], [15, 15], [5, 15]]] as [number, number][][] }];
+  const FLOATING: FloatingRequest = { subjects: SUBJECTS, mode: "stencil", tolerance: 0.02 };
+  const BRIDGE: BridgeRequest = { subjects: SUBJECTS, mode: "stencil", bridges: [{ island: 1, width: 1.6 }], suggest: false, tolerance: 0.02 };
+
+  it("el análisis hace POST JSON a /api/v2/geometry/floating con la petición tal cual y la señal de aborto", async () => {
+    const payload = { mode: "stencil", tolerance: 0.02, components: [], floatingCount: 0, mainCount: 0, discarded: 0 };
+    const fetchMock = abortAwareFetch(() => new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const response = await postFloatingAnalysis(FLOATING, controller.signal);
+
+    expect(response).toEqual(payload);
+    expect(fetchMock.urls).toEqual([`${API_BASE_URL}/api/v2/geometry/floating`]);
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["Content-Type"]).toBe("application/json");
+    expect(JSON.parse(String(init.body))).toEqual(FLOATING);
+    expect(init.signal).toBe(controller.signal);
+  });
+
+  it("los bridges hacen POST JSON a /api/v2/geometry/bridge con la petición tal cual y la señal de aborto", async () => {
+    const payload = { mode: "stencil", tolerance: 0.02, bridges: [], results: [], reanalysis: { floatingBefore: 1, floatingAfter: 0, mainAfter: 1 }, pieceCount: 0 };
+    const fetchMock = abortAwareFetch(() => new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    const response = await postBridgeOperation(BRIDGE, controller.signal);
+
+    expect(response).toEqual(payload);
+    expect(fetchMock.urls).toEqual([`${API_BASE_URL}/api/v2/geometry/bridge`]);
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual(BRIDGE);
+    expect(init.signal).toBe(controller.signal);
+  });
+
+  it("un error de la Web API llega como ApiClientError con status y el código propio de los bridges", async () => {
+    vi.stubGlobal("fetch", abortAwareFetch(() => new Response(JSON.stringify({ code: "invalid_bridge_width", message: "ancho" }), { status: 400, headers: { "Content-Type": "application/json" } })));
+
+    const error = await postBridgeOperation(BRIDGE).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiClientError);
+    expect((error as ApiClientError).status).toBe(400);
+    expect((error as ApiClientError).body).toEqual({ code: "invalid_bridge_width", message: "ancho" });
+  });
+
+  it("una señal ya abortada rechaza con isAborted y sin conexión con isNetworkError, en ambas rutas", async () => {
+    vi.stubGlobal("fetch", abortAwareFetch(() => new Response("{}")));
+    const controller = new AbortController();
+    controller.abort();
+    expect(((await postFloatingAnalysis(FLOATING, controller.signal).catch((caught: unknown) => caught)) as ApiClientError).isAborted).toBe(true);
+    expect(((await postBridgeOperation(BRIDGE, controller.signal).catch((caught: unknown) => caught)) as ApiClientError).isAborted).toBe(true);
+
+    vi.stubGlobal("fetch", abortAwareFetch(() => Promise.reject(new TypeError("Failed to fetch"))));
+    expect(((await postFloatingAnalysis(FLOATING).catch((caught: unknown) => caught)) as ApiClientError).isNetworkError).toBe(true);
+    expect(((await postBridgeOperation(BRIDGE).catch((caught: unknown) => caught)) as ApiClientError).isNetworkError).toBe(true);
   });
 });

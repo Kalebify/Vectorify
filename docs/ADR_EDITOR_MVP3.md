@@ -72,7 +72,7 @@ validada". Se elige **Shapely (GEOS, OverlayNG)** porque (1) ya está en el moto
 (Clipper2 habría exigido un binding nativo/NuGet nuevo o reescribir el servicio); (3) OverlayNG es **robusto ante bordes que se
 tocan y vértices coincidentes** (Shapely 2.1.2 fijado en `requirements.txt`, GEOS 3.13: noding robusto, sin las `TopologyException` del overlay
 clásico) y devuelve geometría **válida**, que además se revalida y se ordena de forma determinista antes de salir;
-(4) el mismo núcleo sirve a offset (S09) y a corte (S10), ambos implementados, y servirá a puentes (S11). Contra: el resultado son polilíneas (Clipper2 también); el
+(4) el mismo núcleo sirve a offset (S09), a corte (S10) y a puentes / piezas flotantes (S11), todos implementados. Contra: el resultado son polilíneas (Clipper2 también); el
 costo asumido es la latencia de un viaje al servidor, que la UI absorbe con preview, debounce y cancelación. No se reabre salvo
 que una tarjeta posterior demuestre un caso que GEOS no resuelva.
 
@@ -240,6 +240,64 @@ hook de preview (`useGeometryPreview`; `useCutOperation` es otro envoltorio fino
   deshabilitado con la explicación.** Un error del servidor o una respuesta incoherente no modifica nada (Reintentar vuelve a pedir).
 - Las piezas son **polilíneas** aplanadas a la tolerancia (no preservan los Bézier). Fuera de alcance: cortes con curvas, varios cortes a la vez, snapping, reunir piezas (Unión de S08),
   puentes (S11) y persistencia (S13).
+
+**Piezas flotantes y bridges (decisión de M3-S11): mismo servicio, mismo motor, dos endpoints propios.** Shapely/GEOS (`unary_union`, `difference`/`union`, `STRtree`; la misma
+elección de S08–S10: sin dependencias nuevas) sobre el formato de anillos de S04. Reusa los límites, el timeout, las validaciones y el hook de preview (`useGeometryPreview`;
+`useFloatingAnalysis` y `useBridgeOperation` son otros envoltorios finos). Referencia de conceptos (no se modifica): `component_analysis` (contención/profundidad) y
+`physical_union._build_bridge` (puente rectangular con solape) del flujo clásico de MVP 1. Contrato:
+
+- **Qué es «flotante» — dos modos explícitos (`mode`), siempre visibles en el panel, default `stencil`.** La unión de TODAS las formas (los bloqueados cuentan) con la regla par-impar por forma:
+  - `stencil` (**Plantilla**): las formas son **cortes** (vacío); el material es la hoja menos esas formas. Una **isla** es material rodeado por completo de corte: cada **hueco** (anillo
+    interior) de la unión, a cualquier profundidad (un corte dentro de una isla no la conecta: la isla sigue flotando y sus huecos son islas más profundas). La hoja (lo que rodea todo) es
+    el único principal: id 0, sin polígono. Ejemplos: la contra-forma de una A, O o R; los centros de un stencil.
+  - `parts` (**Piezas**): las formas son **material**; flotante = componente de la unión que está dentro de un hueco de otro (contención). Dos componentes disjuntos sin contención no flotan.
+- **Análisis** `POST /api/v2/geometry/floating` (Python: `/api/v1/geometry/floating`): `{ subjects: [{ type: "polygon", coordinates, locked? }], mode, tolerance }` → `{ mode, tolerance,
+  components: [{ id, kind: "principal"|"floating", depth, parent, polygon, area, bounds, subjects }], floatingCount, mainCount, discarded }`. Solo **polígonos** (las líneas abiertas no tienen
+  relleno). `id` = posición en un orden **determinista** (profundidad, coordenadas canónicas): mismas entradas → mismas salidas, byte a byte; el sentido de giro no cambia nada. `depth` = ancestros
+  en el árbol de contención; `parent` = id del componente que lo rodea (siempre anterior); `subjects` = formas que lo forman (parts: las que lo solapan; stencil: las que bordean la isla).
+  Componentes de área < tolerancia² se descartan y se cuentan en `discarded`.
+- **Bridge** `POST /api/v2/geometry/bridge` (Python: `/api/v1/geometry/bridge`): `{ subjects, mode, bridges: [{ island?, anchor?: {x,y}, direction?: {x,y}, width, length? }], suggest, suggestWidth?,
+  tolerance }`. Cada bridge necesita `island` (id del análisis: el servidor sugiere ancla y dirección) y/o `anchor` (punto sobre el borde de una pieza flotante, a lo sumo a `tolerance`);
+  `direction` por defecto es la **normal exterior** del borde; `length` por defecto es lo justo para cruzar el hueco. Un bridge es un **rectángulo real** de ancho `width` que arranca
+  `2·tolerance` dentro de la pieza y termina `2·tolerance` dentro del material vecino (solape real, no una tangencia), así el área realmente quitada (stencil: se **resta** de los cortes) o
+  agregada (parts: se **suma** a la forma dueña de la pieza, o a la del cuerpo al que llega si la dueña está bloqueada) es **exactamente `width × largo del hueco`** (`area`, `length`).
+  La **sugerencia automática** (heurística simple y determinista, no «IA»): el tramo del borde de la pieza más cercano al borde de su padre, en su punto medio y perpendicular. Con
+  `suggest: true` el servidor completa, con una sugerencia de ancho `suggestWidth`, cada pieza flotante que ningún bridge válido cubre (`suggested: true` en el resultado).
+- **Validez por bridge** (`valid`, `reason`): cada uno se valida por separado contra la geometría original y es inválido si `unknown_island`, `anchor_outside`, `width_below_tolerance`
+  (ancho < tolerancia), `invalid_direction`, `no_crossing` (no cruza ningún hueco en esa dirección), `too_short` (`length` explícito < hueco), `locked_subject` (necesitaría modificar una forma
+  con `locked: true`) o `no_connection` (aplicado solo no reduce los flotantes; p. ej. un rectángulo que cae todo dentro del corte crearía una isla nueva). Un inválido **no se aplica**.
+  `reduces` = sumado a los bridges válidos anteriores deja menos flotantes (dos bridges sobre la misma isla: ambos válidos, solo el primero reduce). `affects` = formas que modifica.
+- **Resultado y reanálisis.** Los válidos se aplican **juntos**: por forma `{ subjectIndex, changed, geometries }` (polígonos con anillos cerrados, orden determinista; `changed: false` = igual,
+  **sin** `geometries`: el cliente conserva su objeto con sus curvas; una forma `locked` jamás cambia) y `reanalysis: { floatingBefore, floatingAfter, mainAfter }` calculado sobre la geometría
+  resultante ya finalizada (la misma que recibe el cliente): un análisis independiente del resultado da el mismo `floatingAfter`.
+- **Límites y errores** (los de S04 + `Geometry:MaxBridges` = 200; el ancho y el largo de un bridge se acotan con `Geometry:MaxOffsetDistance`): 400 de ASP.NET Core `unknown_floating_mode`,
+  `invalid_bridge` (sin isla ni ancla, isla negativa, dirección nula), `invalid_bridge_width` (ancho o largo ausente/NaN/≤ 0/fuera de tope; también `suggestWidth`), `too_many_bridges` y los de S04
+  (`invalid_tolerance`, `invalid_coordinates` — NaN/Infinity/null en formas, ancla o dirección —, `invalid_parameters`, `too_many_subjects`, `too_many_vertices`); 413 `payload_too_large`;
+  503/504/502 uniformes. Python responde 422 `invalid_parameters`/`too_many_geometry_*`, 413, 504 y 500 `geometry_result_invalid`. `ASP.NET` y el editor **revalidan** que la respuesta corresponda
+  a LA petición (modo, ids = posiciones, árbol de contención coherente, polígonos cerrados y finitos, recuentos reales; un resultado por bridge pedido con el ancho pedido, motivos conocidos, un
+  válido con isla/ancla/dirección unitaria/rectángulo/largo/área y sin tocar una forma bloqueada, `changed` solo si algún válido modifica la forma, reanálisis sin más flotantes que antes); si no,
+  502 `invalid_response` y el editor no toca nada.
+
+**Piezas flotantes y bridges en el editor (M3-S11), decisiones de UX/dominio** (`lib/editor/floating.ts`, herramienta **Flotantes** del toolbar — el wireframe obligatorio no traía un botón dedicado):
+- **Alcance explícito** (el panel lo dice por escrito): la **selección**, si la hay; si no, los objetos **con relleno** de las capas **visibles** con operación **CUT** («Capas CUT: A, B (12
+  objetos)»). Los objetos de capas **bloqueadas cuentan** para el análisis (solo lectura) pero **no se modifican** (un bridge que necesite modificarlos se rechaza con el motivo `locked_subject`); las
+  capas **ocultas no cuentan** (se informan); las líneas abiertas se omiten contadas. Nada se omite en silencio.
+- **Analizar es explícito** (botón) y el análisis queda **congelado**: si alguno de los objetos analizados cambia (move, undo…) el panel avisa «el documento cambió desde el análisis», oculta el
+  overlay y no deja aplicar; cambiar el modo lo descarta. Cambiar la selección no lo invalida.
+- **Issues**: lista (`role="listbox"`, ↑/↓/Inicio/Fin/Enter) con «Isla 1 · 12,5 mm² · rodeada por «Rojo · objeto 2»». **Seleccionar un issue centra la vista** (`useCanvasTransform.centerOn` →
+  `viewport.focusTransform`: el centro de la caja de la pieza cae en el centro del contenedor; la pieza ocupa el 40 % del lado menor, con zoom entre el mínimo del canvas y 6) y la **resalta** en el
+  overlay (rojo, trazo grueso); todas llevan una insignia numerada.
+- **Bridges**: arrancan como las **sugerencias** del servidor (una por pieza); la primera edición del usuario (quitar, mover, colocar) las adopta como lista explícita (isla, ancla y dirección ya
+  resueltas). **Ancho en mm** (default 0,8; rango validado 0,05–20; sin escala física opera en unidades y avisa). **Colocar**: click sobre el borde de una pieza (se ajusta al punto más cercano del
+  borde a ≤ 10 px de pantalla; lejos no coloca nada y lo explica); **Mover** reubica ese bridge. Varios por isla permitidos. Cambiar el ancho, quitar o mover vuelve a pedir el resultado (debounce 250 ms,
+  `AbortController`, una petición viva); el panel muestra **«N flotantes → M»** y avisa si algún bridge no redujo nada, qué piezas quedan sin bridge, lo bloqueado y lo descartado.
+- **Apply se deshabilita con CUALQUIER bridge pedido inválido** (con el motivo; se quita o se corrige). Una sugerencia que el servidor no pudo resolver no bloquea: se informa («No se pudo sugerir un
+  bridge para Isla 3 (…). Colocalo a mano»). Sin bridges válidos que reduzcan no hay nada que aplicar.
+- **Resultado**: cada objeto modificado se reemplaza por sus piezas (ids nuevos, **misma capa**, mismo `fill`/`stroke`, sin matriz, huecos como subpaths; `strokeWidth` escalado por la matriz horneada) en
+  el lugar del original; el que el servidor declara intacto conserva `d`, matriz e id. **Un comando atómico** por Apply (`atomic`), undo/redo exactos, la selección pasa a las piezas; el análisis, el
+  preview y Cancel no tocan la pila de undo. Un error del servidor o una respuesta incoherente no modifica nada. Un objeto modificado que se queda sin piezas útiles invalida el resultado (nunca se
+  borra un diseño).
+- Fuera de alcance: colocación automática óptima, bridges curvos, optimización global del número de bridges, el Laser Checker integrado (S14 reusa estos issues), persistencia (S13) y capas ENGRAVE.
 
 ### D5. Persistencia de geometría (M3-S13)
 Serialización `EditableDocument → SVG por capa` (mismo formato de origen, `<path data-vid d fill transform>`)

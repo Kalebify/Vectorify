@@ -6,12 +6,12 @@ describe("EditorToolbar — shell completo del wireframe", () => {
   it("muestra los 11 íconos del wireframe + el Eyedropper (M3-S03), todos con nombre accesible", () => {
     render(<EditorToolbar activeTool="select" onSelectTool={vi.fn()} />);
 
-    for (const label of ["Select", "Pan", "Crop", "Move", "Fill", "Color", "Eyedropper", "Draw", "Erase", "Offset", "Cut", "Path"]) {
+    for (const label of ["Select", "Pan", "Crop", "Move", "Fill", "Color", "Eyedropper", "Draw", "Erase", "Offset", "Cut", "Flotantes", "Path"]) {
       expect(screen.getByRole("button", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
     }
   });
 
-  it("Select, Pan, Move (M3-S01), Crop (M3-S02), Fill, Color, Eyedropper (M3-S03), Draw, Erase (M3-S04), Path (M3-S05), Offset (M3-S09) y Cut (M3-S10) están habilitados: ya no queda ninguna herramienta del wireframe deshabilitada", () => {
+  it("Select, Pan, Move (M3-S01), Crop (M3-S02), Fill, Color, Eyedropper (M3-S03), Draw, Erase (M3-S04), Path (M3-S05), Offset (M3-S09), Cut (M3-S10) y Flotantes (M3-S11) están habilitados: ya no queda ninguna herramienta del wireframe deshabilitada", () => {
     render(<EditorToolbar activeTool="select" onSelectTool={vi.fn()} />);
 
     expect(screen.getByRole("button", { name: /^Select/ })).toBeEnabled();
@@ -26,6 +26,7 @@ describe("EditorToolbar — shell completo del wireframe", () => {
     expect(screen.getByRole("button", { name: /^Path/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Offset/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Cut/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Flotantes/ })).toBeEnabled();
 
     for (const button of screen.getAllByRole("button")) {
       expect(button).toBeEnabled();
@@ -134,5 +135,18 @@ describe("EditorToolbar — shell completo del wireframe", () => {
     rerender(<EditorToolbar activeTool="cut" onSelectTool={onSelectTool} />);
     expect(screen.getByRole("button", { name: /^Cut/ })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: /^Cut/ })).toHaveAttribute("title", expect.stringContaining("línea de corte"));
+  });
+
+  it("Flotantes (M3-S11) es un botón visible con nombre accesible: llama a onSelectTool('floating'), se marca activa y su tooltip describe qué hace", () => {
+    const onSelectTool = vi.fn();
+    const { rerender } = render(<EditorToolbar activeTool="select" onSelectTool={onSelectTool} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Flotantes/ }));
+    expect(onSelectTool).toHaveBeenCalledWith("floating");
+
+    rerender(<EditorToolbar activeTool="floating" onSelectTool={onSelectTool} />);
+    expect(screen.getByRole("button", { name: /^Flotantes/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /^Flotantes/ })).toHaveAttribute("title", expect.stringContaining("bridges"));
+    expect(screen.getByRole("button", { name: /^Select/ })).toHaveAttribute("aria-pressed", "false");
   });
 });

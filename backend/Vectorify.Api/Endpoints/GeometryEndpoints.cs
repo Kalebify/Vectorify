@@ -9,7 +9,7 @@ namespace Vectorify.Api.Endpoints;
 
 /// <summary>
 /// Servicio de geometría del editor (M3-S04, ADR D4 de docs/ADR_EDITOR_MVP3.md): operaciones SIN estado (booleanas y, desde M3-S09,
-/// offset y, desde M3-S10, corte) sobre anillos de polígonos / polilíneas en unidades de documento, calculadas con Shapely en el motor Python.
+/// offset y, desde M3-S10, corte y, desde M3-S11, piezas flotantes y bridges) sobre anillos de polígonos / polilíneas en unidades de documento, calculadas con Shapely en el motor Python.
 /// Misma arquitectura proxy que el resto (Endpoint -&gt; <see cref="IGeometryService"/> -&gt; IPythonGeometryClient,
 /// <see cref="ApiErrorResponse"/> uniforme) pero SIN <c>IUserContext</c> ni base de datos: la operación solo recibe
 /// coordenadas y devuelve coordenadas, no hay nada del usuario que proteger ni persistir. Lo reusan S08-S11.
@@ -151,6 +151,91 @@ public static class GeometryEndpoints
             "la deja intacta), `pieces` (válidas, sin NaN, en orden determinista), `pieceCount` y `discarded`. Sin estado: no persiste " +
             "nada. Límites: 500 subjects, 500 000 vértices, 10 000 puntos de corte, ancho de ranura acotado (400 con código claro). " +
             "Python caído => 503 engine_unavailable; timeout => 504.");
+
+        app.MapPost("/api/v2/geometry/floating", async (
+            HttpRequest httpRequest,
+            IGeometryService service,
+            IOptions<GeometryOptions> options,
+            CancellationToken cancellationToken) =>
+        {
+            var (request, failure) = await ReadRequestAsync<GeometryFloatingRequest>(httpRequest, options.Value, cancellationToken);
+            if (failure is not null)
+            {
+                return failure;
+            }
+
+            var result = await service.FloatingAsync(request, cancellationToken);
+            return result switch
+            {
+                GeometryFloatingResult.Ready ready => Results.Ok(ready.Response),
+                GeometryFloatingResult.ValidationFailed failed => Results.BadRequest(new ApiErrorResponse(failed.Code, failed.Message)),
+                GeometryFloatingResult.UpstreamError error => Results.Json(
+                    new ApiErrorResponse(error.Code, error.Message),
+                    statusCode: StatusCodeFor(error.Code)),
+                _ => Results.Json(
+                    new ApiErrorResponse("internal_error", "Ocurrió un error inesperado en el análisis de piezas flotantes."),
+                    statusCode: StatusCodes.Status500InternalServerError),
+            };
+        })
+        .WithName("GeometryFloating")
+        .WithTags("Geometry")
+        .Accepts<GeometryFloatingRequest>("application/json")
+        .Produces<GeometryFloatingResponse>(StatusCodes.Status200OK)
+        .Produces<ApiErrorResponse>(StatusCodes.Status400BadRequest)
+        .Produces<ApiErrorResponse>(StatusCodes.Status413PayloadTooLarge)
+        .Produces(StatusCodes.Status415UnsupportedMediaType)
+        .Produces<ApiErrorResponse>(StatusCodes.Status503ServiceUnavailable)
+        .Produces<ApiErrorResponse>(StatusCodes.Status504GatewayTimeout)
+        .WithSummary("Análisis de piezas flotantes (islas) de un conjunto de formas, en modo plantilla (stencil) o piezas (parts).")
+        .WithDescription(
+            "Analiza la unión de `subjects` (polígonos con regla par-impar; `locked` no cambia el análisis: los bloqueados cuentan). `mode` `stencil` = las " +
+            "formas son CORTES y flotante es cada isla de material rodeada de corte; `parts` = las formas son MATERIAL y flotante es un componente dentro de " +
+            "un hueco de otro. La respuesta trae los `components` (principal/floating, `depth`, `parent`, polígono, área, `bounds` y las formas que lo " +
+            "forman) en orden determinista y los recuentos. Sin estado: no persiste nada. Límites: 500 subjects y 500 000 vértices (400 con código claro). " +
+            "Python caído => 503 engine_unavailable; timeout => 504.");
+
+        app.MapPost("/api/v2/geometry/bridge", async (
+            HttpRequest httpRequest,
+            IGeometryService service,
+            IOptions<GeometryOptions> options,
+            CancellationToken cancellationToken) =>
+        {
+            var (request, failure) = await ReadRequestAsync<GeometryBridgeRequest>(httpRequest, options.Value, cancellationToken);
+            if (failure is not null)
+            {
+                return failure;
+            }
+
+            var result = await service.BridgeAsync(request, cancellationToken);
+            return result switch
+            {
+                GeometryBridgeResult.Ready ready => Results.Ok(ready.Response),
+                GeometryBridgeResult.ValidationFailed failed => Results.BadRequest(new ApiErrorResponse(failed.Code, failed.Message)),
+                GeometryBridgeResult.UpstreamError error => Results.Json(
+                    new ApiErrorResponse(error.Code, error.Message),
+                    statusCode: StatusCodeFor(error.Code)),
+                _ => Results.Json(
+                    new ApiErrorResponse("internal_error", "Ocurrió un error inesperado al calcular los bridges."),
+                    statusCode: StatusCodes.Status500InternalServerError),
+            };
+        })
+        .WithName("GeometryBridge")
+        .WithTags("Geometry")
+        .Accepts<GeometryBridgeRequest>("application/json")
+        .Produces<GeometryBridgeResponse>(StatusCodes.Status200OK)
+        .Produces<ApiErrorResponse>(StatusCodes.Status400BadRequest)
+        .Produces<ApiErrorResponse>(StatusCodes.Status413PayloadTooLarge)
+        .Produces(StatusCodes.Status415UnsupportedMediaType)
+        .Produces<ApiErrorResponse>(StatusCodes.Status503ServiceUnavailable)
+        .Produces<ApiErrorResponse>(StatusCodes.Status504GatewayTimeout)
+        .WithSummary("Bridges que conectan piezas flotantes: geometría resultante y reanálisis.")
+        .WithDescription(
+            "Cada bridge (`island` y/o `anchor`, `direction`, `width`, `length`) es un rectángulo real que cruza el hueco entre una pieza flotante y el material " +
+            "vecino: en `stencil` se RESTA de las formas de corte, en `parts` se SUMA a la forma dueña. Se valida por separado (`valid`/`reason`: ancla fuera, " +
+            "ancho menor que la tolerancia, no cruza, queda corto, necesita modificar una forma bloqueada, no reduce flotantes) y los válidos se aplican juntos. " +
+            "`suggest` completa con una sugerencia cada pieza flotante sin bridge válido. La respuesta trae la geometría resultante por forma (`changed: false` = " +
+            "igual) y el REANÁLISIS `floatingBefore` -> `floatingAfter`. Sin estado: no persiste nada. Límites: 500 subjects, 500 000 vértices, 200 bridges, " +
+            "ancho y largo acotados (400 con código claro). Python caído => 503 engine_unavailable; timeout => 504.");
     }
 
     /// <summary>
