@@ -259,7 +259,7 @@ export type OffsetPlanResult = { ok: true; plan: OffsetPlan } | OffsetRejectionI
 // Número de serie por objeto (las referencias son inmutables: otra referencia = otro contenido): clave de petición barata, sin serializar la geometría.
 const serials = new WeakMap<object, number>();
 let nextSerial = 1;
-function serialOf(object: object): number {
+export function serialOf(object: object): number {
   let serial = serials.get(object);
   if (serial === undefined) {
     serial = nextSerial;

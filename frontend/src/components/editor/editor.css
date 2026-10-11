@@ -250,7 +250,8 @@
 
 /* M3-S04: Draw y Erase usan una superficie propia (cruz); el pincel de Erase se dibuja a su tamaño real. */
 .vector-canvas-2--draw,
-.vector-canvas-2--erase {
+.vector-canvas-2--erase,
+.vector-canvas-2--cut {
   cursor: crosshair;
 }
 
@@ -1467,4 +1468,27 @@
   gap: var(--editor-space-1);
   font-size: 12px;
   color: var(--text-h);
+}
+
+/* ---------- M3-S10: Cut (panel y overlay; reusa las clases .boolean-panel / .boolean-overlay / .offset-panel__warnings) ---------- */
+
+.cut-panel__line {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-1);
+}
+
+.cut-panel__scope {
+  margin: 0;
+}
+
+.cut-panel__warning--intact,
+.cut-panel__warning--untouched {
+  border-left-color: #b26a00;
+}
+
+.cut-panel__warning--locked,
+.cut-panel__warning--hidden,
+.cut-panel__warning--invalid {
+  border-left-color: #d11a2a;
 }

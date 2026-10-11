@@ -10,8 +10,8 @@ using Microsoft.Extensions.Logging;
 namespace Vectorify.Api.Tests.TestSupport;
 
 /// <summary>
-/// Motor Python simulado SOLO para el servicio de geometría (M3-S04, M3-S09): Kestrel en loopback con POST /api/v1/geometry/boolean y
-/// /api/v1/geometry/offset (la misma respuesta para ambas rutas: cada test levanta el suyo y solo llama a una).
+/// Motor Python simulado SOLO para el servicio de geometría (M3-S04, M3-S09, M3-S10): Kestrel en loopback con POST /api/v1/geometry/boolean,
+/// /offset y /split (la misma respuesta para las tres rutas: cada test levanta el suyo y solo llama a una).
 /// No calcula geometría (eso lo prueban services/python-engine/tests con Shapely real): devuelve lo que el test le pida y
 /// registra cuántas veces lo llamaron y con qué cuerpo, para verificar que una petición inválida NUNCA llega a Python.
 /// </summary>
@@ -77,6 +77,7 @@ public sealed class FakePythonGeometryServer : IAsyncDisposable
         };
         app.MapPost("/api/v1/geometry/boolean", handler);
         app.MapPost("/api/v1/geometry/offset", handler);
+        app.MapPost("/api/v1/geometry/split", handler);
 
         try
         {

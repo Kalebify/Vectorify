@@ -13,36 +13,51 @@ const MIN_STEP_PX = 2;
 /** Radio de click (px de PANTALLA) del modo Objeto: constante a cualquier zoom. */
 const HIT_TOLERANCE_PX = 4;
 const MAX_OUTLINES = 300;
+/** Cuánto (px de PANTALLA) hay que arrastrar en Cut para que el gesto sea un segmento recto y no un click. */
+const CUT_DRAG_PX = 4;
 const DRAFT_COLOR = "#3a5cf5";
+const CUT_COLOR = "#c2410c";
 const ERASE_COLOR = "#dc2626";
 const LOCKED_COLOR = "#7a808a";
 const EMPTY_IDS: ReadonlySet<string> = new Set();
+const EMPTY_POINTS: readonly Point[] = [];
+const EMPTY_POOL: readonly EditorObject[] = [];
 
 export interface ToolSurfaceProps {
-  tool: "draw" | "erase";
+  tool: "draw" | "erase" | "cut";
   viewport: ViewportParams;
   /** El canvas está en pan temporal (Espacio) o con una edición pendiente: la superficie no captura el puntero. */
   suspended: boolean;
-  // ---- Draw ----
-  drawMode: DrawMode;
+  // ---- Draw ---- (opcionales: Cut no los usa)
+  drawMode?: DrawMode;
   /** Puntos de la polilínea en curso (documento). */
-  draft: readonly Point[];
+  draft?: readonly Point[];
   /** Ancho de línea en unidades de documento (el preview lo dibuja a escala). */
-  lineWidthUnits: number;
-  onPolylinePoint: (point: Point, nearFirst: boolean) => void;
-  onPolylineFinish: () => void;
-  onFreehandStroke: (points: Point[]) => void;
-  // ---- Erase ----
-  eraseMode: EraseMode;
+  lineWidthUnits?: number;
+  onPolylinePoint?: (point: Point, nearFirst: boolean) => void;
+  onPolylineFinish?: () => void;
+  onFreehandStroke?: (points: Point[]) => void;
+  // ---- Erase ---- (opcionales: Cut no los usa)
+  eraseMode?: EraseMode;
   /** Radio del pincel en unidades de documento: el cursor se dibuja a su tamaño REAL (se agranda con el zoom). */
-  radiusUnits: number;
+  radiusUnits?: number;
   /** Hay un cálculo del servidor en curso: no se aceptan gestos nuevos. */
-  busy: boolean;
+  busy?: boolean;
   /** Objetos visibles (pool de hit-test del modo Objeto). Incluye los de capas bloqueadas: se resaltan en gris y se informan, no se borran. */
-  pool: readonly EditorObject[];
-  lockedLayerIds: ReadonlySet<string>;
-  onEraseObjects: (ids: string[]) => void;
-  onEraseStroke: (points: Point[]) => void;
+  pool?: readonly EditorObject[];
+  lockedLayerIds?: ReadonlySet<string>;
+  onEraseObjects?: (ids: string[]) => void;
+  onEraseStroke?: (points: Point[]) => void;
+  // ---- Cut (M3-S10) ----
+  /** Puntos de la línea de corte en curso (documento). */
+  cutLine?: readonly Point[];
+  /** La línea está terminada: la superficie ya no acepta puntos (Retroceso la reabre). */
+  cutFinished?: boolean;
+  onCutPoint?: (point: Point) => void;
+  /** Doble click: termina la línea. */
+  onCutFinish?: () => void;
+  /** Arrastre = segmento recto: entrega sus dos extremos y el shell lo toma como la línea completa. */
+  onCutSegment?: (from: Point, to: Point) => void;
 }
 
 interface Gesture {
@@ -60,10 +75,26 @@ interface Gesture {
  * - Erase/objeto: click o arrastre marca los objetos bajo el cursor (se resaltan en rojo); al soltar los entrega.
  * - Erase/geometría: arrastre con pincel circular; el cursor mide el radio REAL; al soltar entrega el trazo. Solo se previsualiza la
  *   huella del pincel, el resultado real lo calcula el servidor.
+ * - Cut (M3-S10): click agrega un punto de la línea de corte; doble click la termina; un ARRASTRE traza un segmento recto (entrega sus dos extremos). Una línea
+ *   terminada no acepta más puntos. El preview muestra los puntos, el tramo elástico y el segmento en curso; el resultado del corte lo calcula el servidor.
  * Escape durante un gesto lo descarta sin entregar nada.
  */
 export function ToolSurface(props: ToolSurfaceProps) {
-  const { tool, viewport, suspended, drawMode, draft, lineWidthUnits, eraseMode, radiusUnits, busy, pool, lockedLayerIds } = props;
+  const {
+    tool,
+    viewport,
+    suspended,
+    drawMode = "polyline",
+    draft = EMPTY_POINTS,
+    lineWidthUnits = 0,
+    eraseMode = "geometry",
+    radiusUnits = 0,
+    busy = false,
+    pool = EMPTY_POOL,
+    lockedLayerIds = EMPTY_IDS,
+    cutLine = EMPTY_POINTS,
+    cutFinished = false,
+  } = props;
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const gestureRef = useRef<Gesture | null>(null);
   const [cursor, setCursor] = useState<Point | null>(null);
@@ -114,6 +145,13 @@ export function ToolSurface(props: ToolSurfaceProps) {
     const screen = toScreen(event);
     const point = screenToDocument(screen, viewport);
 
+    if (tool === "cut") {
+      // Una línea terminada ya no acepta puntos; el punto o el segmento se entregan al SOLTAR (así un click y un arrastre se distinguen).
+      if (cutFinished) return;
+      beginGesture(event, point, new Set());
+      return;
+    }
+
     if (tool === "draw") {
       if (busy) return;
       if (drawMode === "freehand") {
@@ -122,7 +160,7 @@ export function ToolSurface(props: ToolSurfaceProps) {
       }
       const first = draft[0];
       const nearFirst = draft.length >= 3 && first !== undefined && Math.hypot(documentToScreen(first, viewport).x - screen.x, documentToScreen(first, viewport).y - screen.y) <= CLOSE_SNAP_PX;
-      props.onPolylinePoint(point, nearFirst);
+      props.onPolylinePoint?.(point, nearFirst);
       return;
     }
 
@@ -137,6 +175,14 @@ export function ToolSurface(props: ToolSurfaceProps) {
     setCursor(screen);
     const gesture = gestureRef.current;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
+    if (tool === "cut") {
+      // Menos de CUT_DRAG_PX desde donde se apretó sigue siendo un click; pasado el umbral es un segmento recto (inicio -> cursor).
+      const start = documentToScreen(gesture.points[0], viewport);
+      if (gesture.points.length === 1 && Math.hypot(screen.x - start.x, screen.y - start.y) < CUT_DRAG_PX) return;
+      gesture.points = [gesture.points[0], screenToDocument(screen, viewport)];
+      setTrail([...gesture.points]);
+      return;
+    }
     const last = gesture.points[gesture.points.length - 1];
     const lastScreen = documentToScreen(last, viewport);
     if (Math.hypot(screen.x - lastScreen.x, screen.y - lastScreen.y) < MIN_STEP_PX) return;
@@ -160,10 +206,13 @@ export function ToolSurface(props: ToolSurfaceProps) {
     }
     dropGesture();
     if (cancelled) return;
-    if (tool === "draw") props.onFreehandStroke(gesture.points);
+    if (tool === "cut") {
+      if (gesture.points.length >= 2) props.onCutSegment?.(gesture.points[0], gesture.points[gesture.points.length - 1]);
+      else props.onCutPoint?.(gesture.points[0]);
+    } else if (tool === "draw") props.onFreehandStroke?.(gesture.points);
     else if (eraseMode === "object") {
-      if (gesture.hits.size > 0) props.onEraseObjects([...gesture.hits]);
-    } else props.onEraseStroke(gesture.points);
+      if (gesture.hits.size > 0) props.onEraseObjects?.([...gesture.hits]);
+    } else props.onEraseStroke?.(gesture.points);
   };
 
   const scale = viewport.scale;
@@ -177,9 +226,15 @@ export function ToolSurface(props: ToolSurfaceProps) {
   const showRubberBand = tool === "draw" && drawMode === "polyline" && lastDraft !== undefined && cursor !== null && !busy;
   const brushPx = Math.max(1, radiusUnits * scale);
   const outlines = tool === "erase" && eraseMode === "object" ? pool.filter((object) => hitIds.has(object.id)).slice(0, MAX_OUTLINES) : [];
+  const cutScreen = screenPoints(cutLine);
+  const lastCut = cutScreen[cutScreen.length - 1];
+  const dragging = tool === "cut" && trail.length > 1;
+  const showCutRubberBand = tool === "cut" && !cutFinished && !dragging && lastCut !== undefined && cursor !== null;
 
   const label =
-    tool === "draw"
+    tool === "cut"
+      ? "Superficie de corte: click agrega un punto de la línea de corte, doble click o Enter termina, Retroceso quita el último punto, arrastrar traza un segmento recto y Escape cancela."
+      : tool === "draw"
       ? drawMode === "polyline"
         ? "Superficie de dibujo, modo Polilínea: click agrega un punto, click en el primer punto cierra, doble click o Enter termina, Retroceso quita el último punto y Escape cancela."
         : "Superficie de dibujo, modo Mano alzada: arrastrá para dibujar; al soltar se simplifica el trazo. Escape cancela."
@@ -201,7 +256,8 @@ export function ToolSurface(props: ToolSurfaceProps) {
       onPointerCancel={(event) => endGesture(event, true)}
       onPointerLeave={() => setCursor(null)}
       onDoubleClick={() => {
-        if (tool === "draw" && drawMode === "polyline" && !busy) props.onPolylineFinish();
+        if (tool === "draw" && drawMode === "polyline" && !busy) props.onPolylineFinish?.();
+        else if (tool === "cut" && !cutFinished) props.onCutFinish?.();
       }}
     >
       <svg className="tool-surface__overlay" width="100%" height="100%" aria-hidden="true" focusable="false">
@@ -213,6 +269,29 @@ export function ToolSurface(props: ToolSurfaceProps) {
               <circle key={index} cx={point.x} cy={point.y} r={index === 0 && draft.length >= 3 ? CLOSE_SNAP_PX / 2 + 1 : 3} fill="#ffffff" stroke={DRAFT_COLOR} strokeWidth={1.5} />
             ))}
           </g>
+        )}
+
+        {tool === "cut" && cutScreen.length > 0 && (
+          <g data-testid="cut-preview">
+            <polyline points={polylineAttr(cutLine)} fill="none" stroke={CUT_COLOR} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+            {showCutRubberBand && <line x1={lastCut.x} y1={lastCut.y} x2={cursor.x} y2={cursor.y} stroke={CUT_COLOR} strokeWidth={1} strokeDasharray="4 3" />}
+            {cutScreen.map((point, index) => (
+              <circle key={index} cx={point.x} cy={point.y} r={3} fill="#ffffff" stroke={CUT_COLOR} strokeWidth={1.5} />
+            ))}
+          </g>
+        )}
+
+        {dragging && (
+          <line
+            data-testid="cut-drag"
+            x1={documentToScreen(trail[0], viewport).x}
+            y1={documentToScreen(trail[0], viewport).y}
+            x2={documentToScreen(trail[trail.length - 1], viewport).x}
+            y2={documentToScreen(trail[trail.length - 1], viewport).y}
+            stroke={CUT_COLOR}
+            strokeWidth={2}
+            strokeDasharray="6 3"
+          />
         )}
 
         {tool === "draw" && drawMode === "freehand" && trail.length > 0 && (

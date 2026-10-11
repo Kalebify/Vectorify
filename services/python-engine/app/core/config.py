@@ -175,6 +175,9 @@ class Settings(BaseSettings):
     # Geometry:MaxOffsetDistance / Geometry:MaxMitreLimit de Vectorify.Api.
     max_geometry_offset_distance: float = 1_000_000.0
     max_geometry_mitre_limit: float = 100.0
+    # Corte (M3-S10): tope de puntos de la línea de corte (el ancho de la ranura se acota con el mismo tope que la distancia del
+    # offset). Se espeja 1:1 en Geometry:MaxCutterPoints de Vectorify.Api.
+    max_geometry_cutter_points: int = 10_000
 
     # Validación raster-vs-vector por capa (M2.1-S03): después de vectorizar
     # la máscara de una capa, se rasteriza el SVG resultante de vuelta (ver

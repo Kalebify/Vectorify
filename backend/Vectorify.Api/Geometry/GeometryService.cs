@@ -6,7 +6,7 @@ namespace Vectorify.Api.Geometry;
 /// <summary>
 /// Implementación de <see cref="IGeometryService"/>: validar -> llamar a Python -> mapear el estado del cliente a un
 /// código de error estable. Mismo patrón que Checking.CheckService, sin la parte de localizar un SVG de origen. Sirve a las
-/// booleanas (M3-S04/S08) y al offset (M3-S09).
+/// booleanas (M3-S04/S08), al offset (M3-S09) y al corte (M3-S10).
 /// </summary>
 public sealed class GeometryService : IGeometryService
 {
@@ -69,6 +69,31 @@ public sealed class GeometryService : IGeometryService
             parameters.Subjects.Count, parameters.Distance, parameters.JoinStyle.ToWireName(), pythonResult.Response!.PieceCount);
 
         return new GeometryOffsetResult.Ready(pythonResult.Response);
+    }
+
+    public async Task<GeometrySplitResult> SplitAsync(GeometrySplitRequest? request, CancellationToken cancellationToken)
+    {
+        var validation = _validator.ValidateSplit(request);
+        if (!validation.IsValid)
+        {
+            return new GeometrySplitResult.ValidationFailed(validation.ErrorCode!, validation.ErrorMessage!);
+        }
+
+        var parameters = validation.SplitParameters!;
+        var pythonResult = await _pythonClient.SplitAsync(parameters, cancellationToken);
+
+        if (pythonResult.State != PythonGeometryState.Success)
+        {
+            return new GeometrySplitResult.UpstreamError(
+                MapErrorCode(pythonResult.State),
+                pythonResult.Message ?? "No se pudo completar el corte de geometría.");
+        }
+
+        _logger.LogInformation(
+            "Corte de geometría completado ({SubjectCount} subjects, modo {Mode}, {CutterPoints} puntos de corte, {PieceCount} piezas)",
+            parameters.Subjects.Count, parameters.Mode.ToWireName(), parameters.CutterPoints.Length, pythonResult.Response!.PieceCount);
+
+        return new GeometrySplitResult.Ready(pythonResult.Response);
     }
 
     private static string MapErrorCode(PythonGeometryState state) => state switch

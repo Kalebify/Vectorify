@@ -12,6 +12,8 @@ from app.models.schemas import (
     GeometryBooleanResponse,
     GeometryOffsetRequest,
     GeometryOffsetResponse,
+    GeometrySplitRequest,
+    GeometrySplitResponse,
 )
 from app.services.geometry_service import GeometryService
 
@@ -95,6 +97,44 @@ async def offset_operation(
 ) -> GeometryOffsetResponse:
     parsed = await _read_request(request, settings, GeometryOffsetRequest)
     return service.process_offset(parsed)
+
+
+@router.post(
+    "/geometry/split",
+    response_model=GeometrySplitResponse,
+    summary="Corte / división de polígonos y polilíneas con una línea de corte (dividir o separar con ranura)",
+    description=(
+        "Corte SIN estado del servicio de geometría (M3-S10, ADR D4). Recibe como cuerpo JSON `subjects` (los mismos polygon/line "
+        "de las booleanas), `cutter` (`points`: polilínea de >= 2 puntos en unidades de documento), `mode` (`split` = dividir, las "
+        "piezas comparten el borde del corte; `slot` = separar con hueco de ancho `slot_width` > 0), `extend` (prolonga el primer y "
+        "el último tramo del corte para que crucen todo) y `tolerance` (> 0). Devuelve por subject `touched`, `changed` (solo es "
+        "verdadero si el corte lo SEPARA en más piezas: un corte que termina dentro de la forma la deja intacta), `pieces` "
+        "(polígonos válidos / polilíneas, sin NaN, en orden determinista), `piece_count` y `discarded`. "
+        "Límites: 500 subjects, 500 000 vértices, 10 000 puntos de corte, ancho de ranura acotado. Solo lo llama Vectorify.Api."
+    ),
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {"application/json": {"schema": GeometrySplitRequest.model_json_schema()}},
+        }
+    },
+    responses={
+        413: {"model": ErrorResponse, "description": "Cuerpo demasiado grande"},
+        422: {
+            "model": ErrorResponse,
+            "description": "Cuerpo inválido (esquema, NaN/Infinity), corte degenerado o con demasiados puntos, ranura de ancho 0 o fuera de tope, demasiados subjects o vértices",
+        },
+        500: {"model": ErrorResponse, "description": "Error inesperado o resultado inválido de la operación"},
+        504: {"model": ErrorResponse, "description": "La operación excedió el tiempo máximo configurado"},
+    },
+)
+async def split_operation(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    service: GeometryService = Depends(get_geometry_service),
+) -> GeometrySplitResponse:
+    parsed = await _read_request(request, settings, GeometrySplitRequest)
+    return service.process_split(parsed)
 
 
 async def _read_request(request: Request, settings: Settings, model: type[ModelT]) -> ModelT:

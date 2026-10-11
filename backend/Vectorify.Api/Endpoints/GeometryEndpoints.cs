@@ -9,7 +9,7 @@ namespace Vectorify.Api.Endpoints;
 
 /// <summary>
 /// Servicio de geometría del editor (M3-S04, ADR D4 de docs/ADR_EDITOR_MVP3.md): operaciones SIN estado (booleanas y, desde M3-S09,
-/// offset) sobre anillos de polígonos / polilíneas en unidades de documento, calculadas con Shapely en el motor Python.
+/// offset y, desde M3-S10, corte) sobre anillos de polígonos / polilíneas en unidades de documento, calculadas con Shapely en el motor Python.
 /// Misma arquitectura proxy que el resto (Endpoint -&gt; <see cref="IGeometryService"/> -&gt; IPythonGeometryClient,
 /// <see cref="ApiErrorResponse"/> uniforme) pero SIN <c>IUserContext</c> ni base de datos: la operación solo recibe
 /// coordenadas y devuelve coordenadas, no hay nada del usuario que proteger ni persistir. Lo reusan S08-S11.
@@ -106,6 +106,50 @@ public static class GeometryEndpoints
             "los polígonos resultantes (válidos, sin NaN, en orden determinista) y lo que pasó: `collapsed`, `splitCount`, " +
             "`lostPieces`, `holesBefore`/`holesAfter` y `maxInwardOffset` (el offset interior máximo antes de colapsar). Sin estado: " +
             "no persiste nada. Límites: 500 subjects, 500 000 vértices, |distance| y mitreLimit acotados (400 con código claro). " +
+            "Python caído => 503 engine_unavailable; timeout => 504.");
+
+        app.MapPost("/api/v2/geometry/split", async (
+            HttpRequest httpRequest,
+            IGeometryService service,
+            IOptions<GeometryOptions> options,
+            CancellationToken cancellationToken) =>
+        {
+            var (request, failure) = await ReadRequestAsync<GeometrySplitRequest>(httpRequest, options.Value, cancellationToken);
+            if (failure is not null)
+            {
+                return failure;
+            }
+
+            var result = await service.SplitAsync(request, cancellationToken);
+            return result switch
+            {
+                GeometrySplitResult.Ready ready => Results.Ok(ready.Response),
+                GeometrySplitResult.ValidationFailed failed => Results.BadRequest(new ApiErrorResponse(failed.Code, failed.Message)),
+                GeometrySplitResult.UpstreamError error => Results.Json(
+                    new ApiErrorResponse(error.Code, error.Message),
+                    statusCode: StatusCodeFor(error.Code)),
+                _ => Results.Json(
+                    new ApiErrorResponse("internal_error", "Ocurrió un error inesperado en el corte de geometría."),
+                    statusCode: StatusCodes.Status500InternalServerError),
+            };
+        })
+        .WithName("GeometrySplit")
+        .WithTags("Geometry")
+        .Accepts<GeometrySplitRequest>("application/json")
+        .Produces<GeometrySplitResponse>(StatusCodes.Status200OK)
+        .Produces<ApiErrorResponse>(StatusCodes.Status400BadRequest)
+        .Produces<ApiErrorResponse>(StatusCodes.Status413PayloadTooLarge)
+        .Produces(StatusCodes.Status415UnsupportedMediaType)
+        .Produces<ApiErrorResponse>(StatusCodes.Status503ServiceUnavailable)
+        .Produces<ApiErrorResponse>(StatusCodes.Status504GatewayTimeout)
+        .WithSummary("Corte / división de polígonos y polilíneas con una línea de corte (dividir o separar con ranura).")
+        .WithDescription(
+            "Parte `subjects` (polygon = anillos con regla par-impar / line) con la polilínea `cutter.points` (>= 2 puntos, unidades de " +
+            "documento). `mode` `split` = dividir (las piezas comparten el borde del corte) o `slot` = separar con hueco de ancho " +
+            "`slotWidth` > 0. `extend` prolonga el primer y el último tramo del corte para que crucen todo. La respuesta trae, por " +
+            "subject, `touched`, `changed` (solo verdadero si el corte lo SEPARA en más piezas: un corte que termina dentro de la forma " +
+            "la deja intacta), `pieces` (válidas, sin NaN, en orden determinista), `pieceCount` y `discarded`. Sin estado: no persiste " +
+            "nada. Límites: 500 subjects, 500 000 vértices, 10 000 puntos de corte, ancho de ranura acotado (400 con código claro). " +
             "Python caído => 503 engine_unavailable; timeout => 504.");
     }
 

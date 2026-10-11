@@ -11,7 +11,7 @@ describe("EditorToolbar — shell completo del wireframe", () => {
     }
   });
 
-  it("Select, Pan, Move (M3-S01), Crop (M3-S02), Fill, Color, Eyedropper (M3-S03), Draw, Erase (M3-S04), Path (M3-S05) y Offset (M3-S09) están habilitados; el resto está deshabilitado pero VISIBLE, con tooltip de MVP3", () => {
+  it("Select, Pan, Move (M3-S01), Crop (M3-S02), Fill, Color, Eyedropper (M3-S03), Draw, Erase (M3-S04), Path (M3-S05), Offset (M3-S09) y Cut (M3-S10) están habilitados: ya no queda ninguna herramienta del wireframe deshabilitada", () => {
     render(<EditorToolbar activeTool="select" onSelectTool={vi.fn()} />);
 
     expect(screen.getByRole("button", { name: /^Select/ })).toBeEnabled();
@@ -25,11 +25,11 @@ describe("EditorToolbar — shell completo del wireframe", () => {
     expect(screen.getByRole("button", { name: /^Erase/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Path/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^Offset/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Cut/ })).toBeEnabled();
 
-    for (const label of ["Cut"]) {
-      const button = screen.getByRole("button", { name: new RegExp(`^${label}`) });
-      expect(button).toBeDisabled();
-      expect(button).toHaveAttribute("title", expect.stringContaining("MVP3"));
+    for (const button of screen.getAllByRole("button")) {
+      expect(button).toBeEnabled();
+      expect(button.getAttribute("title")).not.toContain("MVP3");
     }
   });
 
@@ -124,11 +124,15 @@ describe("EditorToolbar — shell completo del wireframe", () => {
     expect(screen.getByRole("button", { name: /^Offset/ })).toHaveAttribute("title", expect.stringContaining("en mm"));
   });
 
-  it("clickear una herramienta deshabilitada no llama a onSelectTool", () => {
+  it("clickear Cut llama a onSelectTool('cut') y se marca activa; su tooltip describe qué hace", () => {
     const onSelectTool = vi.fn();
-    render(<EditorToolbar activeTool="select" onSelectTool={onSelectTool} />);
+    const { rerender } = render(<EditorToolbar activeTool="select" onSelectTool={onSelectTool} />);
 
     fireEvent.click(screen.getByRole("button", { name: /^Cut/ }));
-    expect(onSelectTool).not.toHaveBeenCalled();
+    expect(onSelectTool).toHaveBeenCalledWith("cut");
+
+    rerender(<EditorToolbar activeTool="cut" onSelectTool={onSelectTool} />);
+    expect(screen.getByRole("button", { name: /^Cut/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /^Cut/ })).toHaveAttribute("title", expect.stringContaining("línea de corte"));
   });
 });
