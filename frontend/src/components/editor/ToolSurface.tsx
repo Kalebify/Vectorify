@@ -17,6 +17,7 @@ const MAX_OUTLINES = 300;
 const CUT_DRAG_PX = 4;
 const DRAFT_COLOR = "#3a5cf5";
 const CUT_COLOR = "#c2410c";
+const FLOATING_COLOR = "#15803d";
 const ERASE_COLOR = "#dc2626";
 const LOCKED_COLOR = "#7a808a";
 const EMPTY_IDS: ReadonlySet<string> = new Set();
@@ -24,7 +25,7 @@ const EMPTY_POINTS: readonly Point[] = [];
 const EMPTY_POOL: readonly EditorObject[] = [];
 
 export interface ToolSurfaceProps {
-  tool: "draw" | "erase" | "cut";
+  tool: "draw" | "erase" | "cut" | "floating";
   viewport: ViewportParams;
   /** El canvas está en pan temporal (Espacio) o con una edición pendiente: la superficie no captura el puntero. */
   suspended: boolean;
@@ -58,6 +59,9 @@ export interface ToolSurfaceProps {
   onCutFinish?: () => void;
   /** Arrastre = segmento recto: entrega sus dos extremos y el shell lo toma como la línea completa. */
   onCutSegment?: (from: Point, to: Point) => void;
+  // ---- Piezas flotantes (M3-S11) ----
+  /** Click en el canvas (documento): el shell lo ajusta al borde de la pieza flotante más cercana y coloca ahí el ancla de un bridge. */
+  onFloatingPoint?: (point: Point) => void;
 }
 
 interface Gesture {
@@ -77,6 +81,7 @@ interface Gesture {
  *   huella del pincel, el resultado real lo calcula el servidor.
  * - Cut (M3-S10): click agrega un punto de la línea de corte; doble click la termina; un ARRASTRE traza un segmento recto (entrega sus dos extremos). Una línea
  *   terminada no acepta más puntos. El preview muestra los puntos, el tramo elástico y el segmento en curso; el resultado del corte lo calcula el servidor.
+ * - Floating (M3-S11): un click entrega el punto del documento (el shell lo ajusta al borde de una pieza flotante y coloca ahí un bridge); el cursor es una mira.
  * Escape durante un gesto lo descarta sin entregar nada.
  */
 export function ToolSurface(props: ToolSurfaceProps) {
@@ -144,6 +149,12 @@ export function ToolSurface(props: ToolSurfaceProps) {
     if (suspended || (event.pointerType === "mouse" && event.button !== 0)) return;
     const screen = toScreen(event);
     const point = screenToDocument(screen, viewport);
+
+    if (tool === "floating") {
+      // Un click coloca el ancla de un bridge; no hay gesto ni arrastre.
+      props.onFloatingPoint?.(point);
+      return;
+    }
 
     if (tool === "cut") {
       // Una línea terminada ya no acepta puntos; el punto o el segmento se entregan al SOLTAR (así un click y un arrastre se distinguen).
@@ -232,7 +243,9 @@ export function ToolSurface(props: ToolSurfaceProps) {
   const showCutRubberBand = tool === "cut" && !cutFinished && !dragging && lastCut !== undefined && cursor !== null;
 
   const label =
-    tool === "cut"
+    tool === "floating"
+      ? "Superficie de bridges: hacé click sobre el borde de una pieza flotante para colocar ahí un bridge. Escape sale del modo de colocación."
+      : tool === "cut"
       ? "Superficie de corte: click agrega un punto de la línea de corte, doble click o Enter termina, Retroceso quita el último punto, arrastrar traza un segmento recto y Escape cancela."
       : tool === "draw"
       ? drawMode === "polyline"
@@ -325,6 +338,14 @@ export function ToolSurface(props: ToolSurfaceProps) {
                 strokeWidth={2 / scale}
               />
             ))}
+          </g>
+        )}
+
+        {tool === "floating" && cursor !== null && (
+          <g data-testid="floating-cursor" pointerEvents="none">
+            <circle cx={cursor.x} cy={cursor.y} r={8} fill="none" stroke={FLOATING_COLOR} strokeWidth={1.5} />
+            <line x1={cursor.x - 12} y1={cursor.y} x2={cursor.x + 12} y2={cursor.y} stroke={FLOATING_COLOR} strokeWidth={1} />
+            <line x1={cursor.x} y1={cursor.y - 12} x2={cursor.x} y2={cursor.y + 12} stroke={FLOATING_COLOR} strokeWidth={1} />
           </g>
         )}
 

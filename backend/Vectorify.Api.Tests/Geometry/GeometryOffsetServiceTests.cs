@@ -15,6 +15,12 @@ public sealed class GeometryOffsetServiceTests
 {
     private sealed class FakePythonGeometryClient : IPythonGeometryClient
     {
+        public Task<PythonGeometryFloatingResult> FloatingAsync(GeometryFloatingParameters parameters, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("Estas pruebas no piden piezas flotantes.");
+
+        public Task<PythonGeometryBridgeResult> BridgeAsync(GeometryBridgeParameters parameters, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("Estas pruebas no piden bridges.");
+
         public int CallCount { get; private set; }
         public GeometryOffsetParameters? LastParameters { get; private set; }
         public Func<PythonGeometryOffsetResult> Respond { get; set; } = () => new PythonGeometryOffsetResult(

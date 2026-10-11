@@ -1,4 +1,6 @@
 import { useCallback, useState } from "react";
+import type { DocumentFrame, Rect } from "../lib/editor/types";
+import { focusTransform } from "../lib/editor/viewport";
 
 /**
  * Transformación puramente presentacional aplicada a un VectorCanvas
@@ -59,6 +61,11 @@ export interface UseCanvasTransformResult {
    * fijar una escala sin sentido antes de tener datos reales.
    */
   fitToScreen: (container: ContainerSize, intrinsic: IntrinsicSize) => void;
+  /**
+   * Centra `target` (rectángulo del DOCUMENTO) en `container` con un zoom razonable (ver `focusTransform`): lo usa el editor al seleccionar una pieza flotante de
+   * la lista de issues. Sin contenedor medido o con un rectángulo no finito no hace nada.
+   */
+  centerOn: (target: Rect, container: ContainerSize, frame: DocumentFrame) => void;
 }
 
 /**
@@ -129,5 +136,13 @@ export function useCanvasTransform(options?: UseCanvasTransformOptions): UseCanv
     [clampScale],
   );
 
-  return { transform, minScale, maxScale, zoomBy, panBy, reset, fitToScreen };
+  const centerOn = useCallback(
+    (target: Rect, container: ContainerSize, frame: DocumentFrame) => {
+      const next = focusTransform(target, { container, frame, minScale, maxScale });
+      if (next) setTransform(next);
+    },
+    [minScale, maxScale],
+  );
+
+  return { transform, minScale, maxScale, zoomBy, panBy, reset, fitToScreen, centerOn };
 }

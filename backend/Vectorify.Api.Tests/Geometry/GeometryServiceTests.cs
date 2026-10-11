@@ -16,6 +16,12 @@ public sealed class GeometryServiceTests
 {
     private sealed class FakePythonGeometryClient : IPythonGeometryClient
     {
+        public Task<PythonGeometryFloatingResult> FloatingAsync(GeometryFloatingParameters parameters, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("Estas pruebas no piden piezas flotantes.");
+
+        public Task<PythonGeometryBridgeResult> BridgeAsync(GeometryBridgeParameters parameters, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException("Estas pruebas no piden bridges.");
+
         public int CallCount { get; private set; }
         public GeometryBooleanParameters? LastParameters { get; private set; }
         public Func<PythonGeometryResult> Respond { get; set; } = () => new PythonGeometryResult(

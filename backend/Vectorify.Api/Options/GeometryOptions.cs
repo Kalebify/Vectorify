@@ -46,4 +46,10 @@ public sealed class GeometryOptions
     /// Espejo de <c>max_geometry_cutter_points</c> del motor. El ancho de la ranura se acota con <see cref="MaxOffsetDistance"/>.
     /// </summary>
     public int MaxCutterPoints { get; set; } = 10_000;
+
+    /// <summary>
+    /// Bridges (M3-S11): máximo de bridges por petición (cada uno re-analiza la geometría para validarse); mayor ⇒ 400 <c>too_many_bridges</c>.
+    /// Espejo de <c>max_geometry_bridges</c> del motor. El ancho y el largo de un bridge se acotan con <see cref="MaxOffsetDistance"/>.
+    /// </summary>
+    public int MaxBridges { get; set; } = 200;
 }

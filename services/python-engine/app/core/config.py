@@ -178,6 +178,9 @@ class Settings(BaseSettings):
     # Corte (M3-S10): tope de puntos de la línea de corte (el ancho de la ranura se acota con el mismo tope que la distancia del
     # offset). Se espeja 1:1 en Geometry:MaxCutterPoints de Vectorify.Api.
     max_geometry_cutter_points: int = 10_000
+    # Bridges (M3-S11): tope de bridges por petición (cada uno re-analiza la geometría para validarse). El ancho/largo de un bridge se acota con el mismo
+    # tope que la distancia del offset. Se espeja 1:1 en Geometry:MaxBridges de Vectorify.Api.
+    max_geometry_bridges: int = 200
 
     # Validación raster-vs-vector por capa (M2.1-S03): después de vectorizar
     # la máscara de una capa, se rasteriza el SVG resultante de vuelta (ver

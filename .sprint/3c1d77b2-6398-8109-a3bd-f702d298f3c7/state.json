@@ -1,0 +1,18 @@
+{
+  "card_id": "3c1d77b2-6398-8109-a3bd-f702d298f3c7",
+  "card_url": "https://app.notion.com/p/3c1d77b263988109a3bdf702d298f3c7",
+  "title": "M3-S11 · Bridges + piezas flotantes",
+  "stack": "Vector, Laser, Frontend, ASP.NET Core, Python -- analisis de piezas flotantes (modos plantilla/piezas por contencion), bridges configurables en mm con sugerencia determinista, reanalisis del resultado, issues que centran y resaltan",
+  "branch": "sprint/3e8d77b2-m3-s11-bridges",
+  "column": "Done",
+  "phase": "review",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "pr_url": "https://github.com/Kalebify/Vectorify/pull/58",
+  "started_at": "2026-10-11T00:00:00Z",
+  "exceptions": [
+    "Corrida autonoma de MVP 3 (S01..S16) confirmada por el usuario: mergea el orquestador; ante un error la tarjeta pasa a Bloqueado y se sigue.",
+    "DECISION DE DOMINIO: 'flotante' tiene dos modos explicitos (plantilla/stencil: huecos de las formas de corte = islas de material; piezas: componentes dentro de un hueco de otro). Alcance explicito: seleccion, o capas CUT visibles.",
+    "DECISION: el bridge se resta (plantilla) o suma (piezas) como rectangulo de ancho en mm; la sugerencia es heuristica determinista (no IA); el servidor reanaliza el resultado."
+  ]
+}

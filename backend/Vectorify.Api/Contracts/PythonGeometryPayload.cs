@@ -228,3 +228,222 @@ public sealed class PythonGeometryCutterPayload
     [JsonPropertyName("points")]
     public double[][] Points { get; set; } = [];
 }
+
+// ---- Piezas flotantes y bridges (M3-S11) ----
+
+/// <summary>Forma cruda (snake_case, tal como la serializa Pydantic) de la respuesta de POST /api/v1/geometry/floating del motor Python (M3-S11).</summary>
+public sealed class PythonGeometryFloatingPayload
+{
+    [JsonPropertyName("mode")]
+    public string? Mode { get; set; }
+
+    [JsonPropertyName("tolerance")]
+    public double Tolerance { get; set; }
+
+    [JsonPropertyName("components")]
+    public List<PythonFloatingComponentPayload>? Components { get; set; }
+
+    [JsonPropertyName("floating_count")]
+    public int FloatingCount { get; set; }
+
+    [JsonPropertyName("main_count")]
+    public int MainCount { get; set; }
+
+    [JsonPropertyName("discarded")]
+    public int Discarded { get; set; }
+}
+
+public sealed class PythonFloatingComponentPayload
+{
+    [JsonPropertyName("id")]
+    public int Id { get; set; }
+
+    [JsonPropertyName("kind")]
+    public string? Kind { get; set; }
+
+    [JsonPropertyName("depth")]
+    public int Depth { get; set; }
+
+    [JsonPropertyName("parent")]
+    public int? Parent { get; set; }
+
+    [JsonPropertyName("polygon")]
+    public PythonGeometryPiecePayload? Polygon { get; set; }
+
+    [JsonPropertyName("area")]
+    public double? Area { get; set; }
+
+    [JsonPropertyName("bounds")]
+    public List<double>? Bounds { get; set; }
+
+    [JsonPropertyName("subjects")]
+    public List<int>? Subjects { get; set; }
+}
+
+/// <summary>Forma polygon con <c>locked</c>: lo que Vectorify.Api le envía a Python (ya validado).</summary>
+public sealed class PythonFloatingSubjectPayload
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "polygon";
+
+    [JsonPropertyName("coordinates")]
+    public double[][][] Coordinates { get; set; } = [];
+
+    [JsonPropertyName("locked")]
+    public bool Locked { get; set; }
+}
+
+/// <summary>Cuerpo JSON del análisis que Vectorify.Api le envía a Python (ya validado): mismos nombres que GeometryFloatingRequest de Pydantic.</summary>
+public sealed class PythonGeometryFloatingRequestPayload
+{
+    [JsonPropertyName("subjects")]
+    public List<PythonFloatingSubjectPayload> Subjects { get; set; } = [];
+
+    [JsonPropertyName("mode")]
+    public string Mode { get; set; } = string.Empty;
+
+    [JsonPropertyName("tolerance")]
+    public double Tolerance { get; set; }
+}
+
+public sealed class PythonBridgePointPayload
+{
+    [JsonPropertyName("x")]
+    public double X { get; set; }
+
+    [JsonPropertyName("y")]
+    public double Y { get; set; }
+}
+
+public sealed class PythonBridgeInputPayload
+{
+    [JsonPropertyName("island")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Island { get; set; }
+
+    [JsonPropertyName("anchor")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PythonBridgePointPayload? Anchor { get; set; }
+
+    [JsonPropertyName("direction")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PythonBridgePointPayload? Direction { get; set; }
+
+    [JsonPropertyName("width")]
+    public double Width { get; set; }
+
+    [JsonPropertyName("length")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? Length { get; set; }
+}
+
+/// <summary>Cuerpo JSON de los bridges que Vectorify.Api le envía a Python (ya validado): mismos nombres que GeometryBridgeRequest de Pydantic.</summary>
+public sealed class PythonGeometryBridgeRequestPayload
+{
+    [JsonPropertyName("subjects")]
+    public List<PythonFloatingSubjectPayload> Subjects { get; set; } = [];
+
+    [JsonPropertyName("mode")]
+    public string Mode { get; set; } = string.Empty;
+
+    [JsonPropertyName("bridges")]
+    public List<PythonBridgeInputPayload> Bridges { get; set; } = [];
+
+    [JsonPropertyName("suggest")]
+    public bool Suggest { get; set; }
+
+    [JsonPropertyName("suggest_width")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? SuggestWidth { get; set; }
+
+    [JsonPropertyName("tolerance")]
+    public double Tolerance { get; set; }
+}
+
+/// <summary>Forma cruda (snake_case) de la respuesta de POST /api/v1/geometry/bridge del motor Python (M3-S11).</summary>
+public sealed class PythonGeometryBridgePayload
+{
+    [JsonPropertyName("mode")]
+    public string? Mode { get; set; }
+
+    [JsonPropertyName("tolerance")]
+    public double Tolerance { get; set; }
+
+    [JsonPropertyName("bridges")]
+    public List<PythonBridgeResultPayload>? Bridges { get; set; }
+
+    [JsonPropertyName("results")]
+    public List<PythonBridgeSubjectResultPayload>? Results { get; set; }
+
+    [JsonPropertyName("reanalysis")]
+    public PythonBridgeReanalysisPayload? Reanalysis { get; set; }
+
+    [JsonPropertyName("piece_count")]
+    public int PieceCount { get; set; }
+}
+
+public sealed class PythonBridgeResultPayload
+{
+    [JsonPropertyName("index")]
+    public int Index { get; set; }
+
+    [JsonPropertyName("suggested")]
+    public bool Suggested { get; set; }
+
+    [JsonPropertyName("valid")]
+    public bool Valid { get; set; }
+
+    [JsonPropertyName("reason")]
+    public string? Reason { get; set; }
+
+    [JsonPropertyName("island")]
+    public int? Island { get; set; }
+
+    [JsonPropertyName("anchor")]
+    public PythonBridgePointPayload? Anchor { get; set; }
+
+    [JsonPropertyName("direction")]
+    public PythonBridgePointPayload? Direction { get; set; }
+
+    [JsonPropertyName("width")]
+    public double Width { get; set; }
+
+    [JsonPropertyName("length")]
+    public double? Length { get; set; }
+
+    [JsonPropertyName("area")]
+    public double? Area { get; set; }
+
+    [JsonPropertyName("reduces")]
+    public bool Reduces { get; set; }
+
+    [JsonPropertyName("affects")]
+    public List<int>? Affects { get; set; }
+
+    [JsonPropertyName("polygon")]
+    public PythonGeometryPiecePayload? Polygon { get; set; }
+}
+
+public sealed class PythonBridgeSubjectResultPayload
+{
+    [JsonPropertyName("subject_index")]
+    public int SubjectIndex { get; set; }
+
+    [JsonPropertyName("changed")]
+    public bool Changed { get; set; }
+
+    [JsonPropertyName("geometries")]
+    public List<PythonGeometryPiecePayload>? Geometries { get; set; }
+}
+
+public sealed class PythonBridgeReanalysisPayload
+{
+    [JsonPropertyName("floating_before")]
+    public int FloatingBefore { get; set; }
+
+    [JsonPropertyName("floating_after")]
+    public int FloatingAfter { get; set; }
+
+    [JsonPropertyName("main_after")]
+    public int MainAfter { get; set; }
+}

@@ -1,10 +1,10 @@
 """Servicio que orquesta las operaciones del servicio de geometría (booleanas
-M3-S04/S08, offset M3-S09 y corte M3-S10, ADR D4): aplica los límites de entrada (cantidad de
+M3-S04/S08, offset M3-S09, corte M3-S10 y piezas flotantes/bridges M3-S11, ADR D4): aplica los límites de entrada (cantidad de
 subjects/operands y de vértices -- Vectorify.Api ya los valida, pero el motor
 Python nunca confía ciegamente en su caller, mismo criterio que
 PhysicalUnionService), corre el núcleo puro (app.core.geometry_ops /
 app.core.geometry_offset /
-app.core.geometry_split) con timeout y devuelve la respuesta tipada. Sin
+app.core.geometry_split / app.core.geometry_floating) con timeout y devuelve la respuesta tipada. Sin
 estado y sin E/S: no lee ni escribe nada, no conoce proyectos, versiones ni
 usuarios.
 """
@@ -20,12 +20,20 @@ from app.core.errors import (
     TooManyGeometrySubjectsError,
     TooManyGeometryVerticesError,
 )
+from app.core.geometry_floating import run_bridges, run_floating
 from app.core.geometry_offset import run_offset
 from app.core.geometry_ops import run_boolean
 from app.core.geometry_split import run_split
 from app.models.schemas import (
+    BridgeResultItem,
+    BridgeSubjectResult,
+    FloatingComponent,
     GeometryBooleanRequest,
     GeometryBooleanResponse,
+    GeometryBridgeRequest,
+    GeometryBridgeResponse,
+    GeometryFloatingRequest,
+    GeometryFloatingResponse,
     GeometryOffsetRequest,
     GeometryOffsetResponse,
     GeometryResultItem,
@@ -38,6 +46,8 @@ from app.models.schemas import (
 BooleanFn = Callable[[str, list[dict], list[dict], float], dict]
 OffsetFn = Callable[[list[dict], float, str, float, str, float], dict]
 SplitFn = Callable[[list[dict], list, str, float, bool, float], dict]
+FloatingFn = Callable[[list[dict], str, float], dict]
+BridgeFn = Callable[[list[dict], str, list[dict], bool, float | None, float], dict]
 
 
 def _vertex_count(geometry: dict) -> int:
@@ -55,13 +65,17 @@ class GeometryService:
         boolean_fn: BooleanFn | None = None,
         offset_fn: OffsetFn | None = None,
         split_fn: SplitFn | None = None,
+        floating_fn: FloatingFn | None = None,
+        bridge_fn: BridgeFn | None = None,
     ) -> None:
         self._settings = settings
-        # `boolean_fn`/`offset_fn`/`split_fn` inyectables -- mismo criterio que `union_fn` de PhysicalUnionService: simulan una
+        # `boolean_fn`/`offset_fn`/`split_fn`/`floating_fn`/`bridge_fn` inyectables -- mismo criterio que `union_fn` de PhysicalUnionService: simulan una
         # operación lenta en los tests de timeout sin depender de una geometría realmente enorme.
         self._boolean_fn = boolean_fn or run_boolean
         self._offset_fn = offset_fn or run_offset
         self._split_fn = split_fn or run_split
+        self._floating_fn = floating_fn or run_floating
+        self._bridge_fn = bridge_fn or run_bridges
 
     def process(self, request: GeometryBooleanRequest) -> GeometryBooleanResponse:
         """Determinista: mismos `request` siempre producen la misma respuesta (o el mismo error)."""
@@ -161,6 +175,60 @@ class GeometryService:
             tolerance=request.tolerance,
             results=results,
             piece_count=sum(item.piece_count for item in results),
+        )
+
+    def _check_subjects(self, request: GeometryFloatingRequest | GeometryBridgeRequest) -> list[dict]:
+        """Topes de subjects y de vértices compartidos por el análisis de piezas flotantes y los bridges; devuelve los subjects como dicts."""
+        if len(request.subjects) > self._settings.max_geometry_subjects:
+            raise TooManyGeometrySubjectsError(
+                f"La petición trae {len(request.subjects)} subjects; el máximo es {self._settings.max_geometry_subjects}."
+            )
+        subjects = [subject.model_dump() for subject in request.subjects]
+        vertices = sum(_vertex_count(geometry) for geometry in subjects)
+        if vertices > self._settings.max_geometry_vertices:
+            raise TooManyGeometryVerticesError(
+                f"La petición trae {vertices} vértices; el máximo es {self._settings.max_geometry_vertices}."
+            )
+        return subjects
+
+    def process_floating(self, request: GeometryFloatingRequest) -> GeometryFloatingResponse:
+        """Análisis de piezas flotantes (M3-S11). Determinista como `process`. Rechaza (422) los topes de subjects/vértices; el resto (forma,
+        NaN/Infinity, modo, tolerancia) lo valida el esquema."""
+        subjects = self._check_subjects(request)
+        outcome = self._run_with_timeout(self._floating_fn, subjects, request.mode, request.tolerance)
+        return GeometryFloatingResponse(
+            mode=request.mode,
+            tolerance=request.tolerance,
+            components=[FloatingComponent(**item) for item in outcome["components"]],
+            floating_count=outcome["floating_count"],
+            main_count=outcome["main_count"],
+            discarded=outcome["discarded"],
+        )
+
+    def process_bridge(self, request: GeometryBridgeRequest) -> GeometryBridgeResponse:
+        """Bridges (M3-S11). Determinista como `process`. Rechaza (422) más bridges que el tope y un ancho o largo fuera de tope, además de los topes de
+        subjects/vértices; el resto lo valida el esquema."""
+        bridge_max = self._settings.max_geometry_bridges
+        if len(request.bridges) > bridge_max:
+            raise InvalidParametersError(f"La petición trae {len(request.bridges)} bridges; el máximo es {bridge_max}.")
+        limit = self._settings.max_geometry_offset_distance
+        widths = [bridge.width for bridge in request.bridges] + ([request.suggest_width] if request.suggest_width is not None else [])
+        lengths = [bridge.length for bridge in request.bridges if bridge.length is not None]
+        if any(value > limit for value in [*widths, *lengths]):
+            raise InvalidParametersError(f"El ancho y el largo de un bridge no pueden superar {limit} (unidades de documento).")
+        subjects = self._check_subjects(request)
+        bridges = [bridge.model_dump() for bridge in request.bridges]
+        outcome = self._run_with_timeout(
+            self._bridge_fn, subjects, request.mode, bridges, request.suggest, request.suggest_width, request.tolerance
+        )
+        results = [BridgeSubjectResult(**item) for item in outcome["results"]]
+        return GeometryBridgeResponse(
+            mode=request.mode,
+            tolerance=request.tolerance,
+            bridges=[BridgeResultItem(**item) for item in outcome["bridges"]],
+            results=results,
+            reanalysis=outcome["reanalysis"],
+            piece_count=sum(len(item.geometries) for item in results),
         )
 
     def _run_with_timeout(self, operation_fn: Callable[..., dict], *arguments) -> dict:

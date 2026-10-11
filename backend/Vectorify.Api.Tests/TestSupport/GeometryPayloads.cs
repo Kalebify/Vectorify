@@ -5,7 +5,7 @@ using Vectorify.Api.Contracts;
 namespace Vectorify.Api.Tests.TestSupport;
 
 /// <summary>
-/// Cuerpos JSON del servicio de geometría (M3-S04, M3-S09, M3-S10): peticiones del cliente (camelCase, como las manda el editor) y
+/// Cuerpos JSON del servicio de geometría (M3-S04, M3-S09, M3-S10, M3-S11): peticiones del cliente (camelCase, como las manda el editor) y
 /// respuestas crudas de Python (snake_case, como las serializa Pydantic) para simular al motor en los tests.
 /// </summary>
 internal static class GeometryPayloads
@@ -156,4 +156,106 @@ internal static class GeometryPayloads
     /// <summary>Respuesta cruda de Python para el corte por defecto: el cuadrado de 40 partido en dos mitades de 20 x 40.</summary>
     public static string HalvesSplitResponse() =>
         SplitResponse(SplitResult(0, $"[{LeftHalf},{RightHalf}]"), pieceCount: 2);
+
+    // ---- Piezas flotantes y bridges (M3-S11) ----
+
+    /// <summary>Anillo cuadrado de 20 con hueco de 10 centrado (espesor 5): como corte (stencil) su isla es el cuadrado 5..15.</summary>
+    public const string RingPolygon = """{"type":"polygon","coordinates":[[[0,0],[20,0],[20,20],[0,20]],[[5,5],[15,5],[15,15],[5,15]]]}""";
+
+    public const string DotPolygon = """{"type":"polygon","coordinates":[[[8,8],[12,8],[12,12],[8,12]]]}""";
+
+    /// <summary>Petición de análisis válida por defecto: el anillo como plantilla (1 isla).</summary>
+    public static string FloatingRequest(string subjects = RingPolygon, string mode = "stencil", string tolerance = "0.01") =>
+        $$"""{"subjects":[{{subjects}}],"mode":"{{mode}}","tolerance":{{tolerance}}}""";
+
+    public static GeometryFloatingRequest ParseFloating(string json) =>
+        JsonSerializer.Deserialize<GeometryFloatingRequest>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+
+    public const string DefaultBridge = """{"island":1,"width":0.8}""";
+
+    /// <summary>Petición de bridges válida por defecto: un bridge de 0,8 sobre la isla 1 del anillo.</summary>
+    public static string BridgeRequest(
+        string subjects = RingPolygon,
+        string mode = "stencil",
+        string bridges = DefaultBridge,
+        string suggest = "false",
+        string suggestWidth = "null",
+        string tolerance = "0.01") =>
+        $$"""{"subjects":[{{subjects}}],"mode":"{{mode}}","bridges":[{{bridges}}],"suggest":{{suggest}},"suggestWidth":{{suggestWidth}},"tolerance":{{tolerance}}}""";
+
+    public static GeometryBridgeRequest ParseBridge(string json) =>
+        JsonSerializer.Deserialize<GeometryBridgeRequest>(json, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+
+    public const string SheetComponent = """{"id":0,"kind":"principal","depth":0,"parent":null,"polygon":null,"area":null,"bounds":[0,0,20,20],"subjects":[]}""";
+
+    public const string IslandComponent =
+        """{"id":1,"kind":"floating","depth":1,"parent":0,"polygon":{"type":"polygon","coordinates":[[[5,5],[15,5],[15,15],[5,15],[5,5]]]},"area":100,"bounds":[5,5,15,15],"subjects":[0]}""";
+
+    /// <summary>Respuesta cruda de Python del análisis en modo `parts` sin flotantes: un solo cuerpo principal, que sí trae polígono.</summary>
+    public static string PartsResponse() =>
+        FloatingResponse(
+            """{"id":0,"kind":"principal","depth":0,"parent":null,"polygon":{"type":"polygon","coordinates":[[[0,0],[10,0],[10,10],[0,0]]]},"area":50,"bounds":[0,0,10,10],"subjects":[0]}""",
+            floatingCount: 0,
+            mainCount: 1,
+            mode: "parts");
+
+    /// <summary>Respuesta cruda de Python (snake_case) del análisis: por defecto la hoja y la isla del anillo.</summary>
+    public static string FloatingResponse(
+        string componentsJson = SheetComponent + "," + IslandComponent,
+        int floatingCount = 1,
+        int mainCount = 1,
+        int discarded = 0,
+        string mode = "stencil",
+        double tolerance = 0.01) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $$"""{"mode":"{{mode}}","tolerance":{{tolerance}},"components":[{{componentsJson}}],"floating_count":{{floatingCount}},"main_count":{{mainCount}},"discarded":{{discarded}}}""");
+
+    /// <summary>El rectángulo de un bridge de 0,8 de ancho que cruza el espesor de 5 del anillo, con 0,02 de solape a cada lado.</summary>
+    public const string BridgeRectangle = """{"type":"polygon","coordinates":[[[14.98,9.6],[20.02,9.6],[20.02,10.4],[14.98,10.4],[14.98,9.6]]]}""";
+
+    /// <summary>El anillo con el puente abierto (una "C"): lo que queda del corte tras restar el bridge.</summary>
+    public const string OpenedRing =
+        """{"type":"polygon","coordinates":[[[0,0],[20,0],[20,9.6],[15,9.6],[15,5],[5,5],[5,15],[15,15],[15,10.4],[20,10.4],[20,20],[0,20],[0,0]]]}""";
+
+    /// <summary>Un resultado de bridge de Python (snake_case); por defecto uno válido, perpendicular al borde derecho de la isla, que cruza 5 y quita 0,8 x 5 = 4.</summary>
+    public static string BridgeItem(
+        int index = 0,
+        bool suggested = false,
+        bool valid = true,
+        string? reason = null,
+        string island = "1",
+        string anchor = """{"x":15,"y":10}""",
+        string direction = """{"x":1,"y":0}""",
+        double width = 0.8,
+        string length = "5",
+        string area = "4",
+        bool reduces = true,
+        string affects = "[0]",
+        string polygon = BridgeRectangle)
+    {
+        var reasonJson = reason is null ? "null" : $"\"{reason}\"";
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $$"""{"index":{{index}},"suggested":{{suggested.ToString().ToLowerInvariant()}},"valid":{{valid.ToString().ToLowerInvariant()}},"reason":{{reasonJson}},"island":{{island}},"anchor":{{anchor}},"direction":{{direction}},"width":{{width}},"length":{{length}},"area":{{area}},"reduces":{{reduces.ToString().ToLowerInvariant()}},"affects":{{affects}},"polygon":{{polygon}}}""");
+    }
+
+    public static string BridgeSubjectResult(int subjectIndex, bool changed, string geometriesJson) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $$"""{"subject_index":{{subjectIndex}},"changed":{{changed.ToString().ToLowerInvariant()}},"geometries":{{geometriesJson}}}""");
+
+    /// <summary>Respuesta cruda de Python (snake_case) de los bridges: por defecto un bridge válido, el anillo abierto y el reanálisis 1 -> 0.</summary>
+    public static string BridgeResponse(
+        string? bridgesJson = null,
+        string? resultsJson = null,
+        int floatingBefore = 1,
+        int floatingAfter = 0,
+        int mainAfter = 1,
+        int pieceCount = 1,
+        string mode = "stencil",
+        double tolerance = 0.01) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $$"""{"mode":"{{mode}}","tolerance":{{tolerance}},"bridges":[{{bridgesJson ?? BridgeItem()}}],"results":[{{resultsJson ?? BridgeSubjectResult(0, true, $"[{OpenedRing}]")}}],"reanalysis":{"floating_before":{{floatingBefore}},"floating_after":{{floatingAfter}},"main_after":{{mainAfter}}},"piece_count":{{pieceCount}}}""");
 }

@@ -1,4 +1,4 @@
-export type EditorTool = "select" | "pan" | "move" | "crop" | "fill" | "color" | "eyedropper" | "draw" | "erase" | "offset" | "cut" | "path";
+export type EditorTool = "select" | "pan" | "move" | "crop" | "fill" | "color" | "eyedropper" | "draw" | "erase" | "offset" | "cut" | "floating" | "path";
 
 interface ToolDefinition {
   id: EditorTool | string;
@@ -20,7 +20,8 @@ interface ToolDefinition {
  * mano alzada, en la capa activa) y Erase (borrar objetos o restar geometría con un pincel, calculado en el servidor). M3-S05 habilita
  * Path (editar nodos, handles y Bézier del path seleccionado; también con doble click sobre un objeto con Select). M3-S09 habilita Offset
  * (desplazar el contorno de la selección en mm, hacia afuera o hacia adentro, con preview y Apply/Cancel). M3-S10 habilita Cut (dividir o separar con
- * hueco los objetos con una línea de corte dibujada en el canvas, con preview de las piezas y Apply/Cancel). Una herramienta sin habilitar queda
+ * hueco los objetos con una línea de corte dibujada en el canvas, con preview de las piezas y Apply/Cancel). M3-S11 AGREGA Flotantes (el wireframe obligatorio original
+ * no traía un botón dedicado): detecta las piezas flotantes que se caen al cortar, las resalta y navega a ellas, y conecta con bridges en mm con preview. Una herramienta sin habilitar queda
  * deshabilitada con `disabled` + `title`/`aria-describedby` indicando que llega en MVP3 (cada una en su tarjeta); hoy no queda ninguna.
  *
  * **Move (M3-S01)** = "mover sin handles": mismo arrastre, Shift+click y flechas
@@ -39,6 +40,7 @@ const TOOLS: ToolDefinition[] = [
   { id: "erase", icon: "⌫", label: "Erase", enabled: true, shortcut: "borrar objetos o restar geometría con un pincel" },
   { id: "offset", icon: "⤢", label: "Offset", enabled: true, shortcut: "desplazar el contorno de la selección en mm, hacia afuera o hacia adentro" },
   { id: "cut", icon: "✂", label: "Cut", enabled: true, shortcut: "dividir o separar con hueco los objetos con una línea de corte" },
+  { id: "floating", icon: "◌", label: "Flotantes", enabled: true, shortcut: "analizar las piezas flotantes (islas que se caen al cortar), navegar a ellas y conectarlas con bridges en mm" },
   { id: "path", icon: "⌁", label: "Path", enabled: true, shortcut: "editar los nodos y handles del path seleccionado; doble click sobre un objeto con Select" },
 ];
 

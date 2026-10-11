@@ -441,3 +441,52 @@ describe("ToolSurface — accesibilidad", () => {
     expect(container.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
   });
 });
+
+describe("ToolSurface — Floating (M3-S11)", () => {
+  function setupFloating(overrides: Partial<ToolSurfaceProps> = {}) {
+    const onFloatingPoint = vi.fn();
+    const utils = render(<ToolSurface tool="floating" viewport={VIEWPORT} suspended={false} onFloatingPoint={onFloatingPoint} {...overrides} />);
+    return { ...utils, onFloatingPoint, surface: screen.getByTestId("floating-surface") };
+  }
+
+  it("un click entrega el punto en coordenadas de DOCUMENTO (sin gesto ni arrastre)", () => {
+    const { surface, onFloatingPoint } = setupFloating();
+
+    fireEvent.pointerDown(surface, { pointerId: 1, button: 0, ...at(31, 20) });
+
+    expect(onFloatingPoint).toHaveBeenCalledTimes(1);
+    expect(onFloatingPoint).toHaveBeenCalledWith({ x: 31, y: 20 });
+  });
+
+  it("convierte con el pan y el zoom vigentes (escala 2 y pan 20 px)", () => {
+    const { surface, onFloatingPoint } = setupFloating({ viewport: { ...VIEWPORT, scale: 2, panX: 20, panY: -10 } });
+
+    fireEvent.pointerDown(surface, { pointerId: 1, button: 0, clientX: 520, clientY: 290 });
+
+    expect(onFloatingPoint).toHaveBeenCalledWith({ x: 210, y: 120 });
+  });
+
+  it("mover y soltar no entregan nada más (un solo click = un punto); un botón que no es el principal del mouse se ignora", () => {
+    const { surface, onFloatingPoint } = setupFloating();
+
+    fireEvent.pointerDown(surface, { pointerId: 1, button: 2, pointerType: "mouse", ...at(10, 10) });
+    fireEvent.pointerDown(surface, { pointerId: 1, button: 0, pointerType: "mouse", ...at(10, 10) });
+    fireEvent.pointerMove(surface, { pointerId: 1, ...at(50, 50) });
+    fireEvent.pointerUp(surface, { pointerId: 1, ...at(50, 50) });
+
+    expect(onFloatingPoint).toHaveBeenCalledTimes(1);
+  });
+
+  it("suspendida (pan temporal) no captura el puntero; el cursor es una mira y la superficie tiene nombre accesible", () => {
+    const { surface, rerender } = setupFloating();
+    fireEvent.pointerMove(surface, { pointerId: 1, ...at(30, 30) });
+
+    expect(screen.getByTestId("floating-cursor")).toBeInTheDocument();
+    expect(surface).toHaveAccessibleName(/hacé click sobre el borde de una pieza flotante para colocar ahí un bridge/);
+    expect(surface).toHaveClass("tool-surface--floating");
+
+    const onFloatingPoint = vi.fn();
+    rerender(<ToolSurface tool="floating" viewport={VIEWPORT} suspended onFloatingPoint={onFloatingPoint} />);
+    expect(screen.getByTestId("floating-surface")).toHaveStyle({ pointerEvents: "none" });
+  });
+});
