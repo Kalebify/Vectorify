@@ -132,7 +132,7 @@ public sealed class VectorDocumentRepository : IVectorDocumentRepository
 
         await transaction.CommitAsync(cancellationToken);
 
-        return new VectorDocumentSaveOutcome(project.Id, version.VersionNumber, project.UpdatedAt);
+        return new VectorDocumentSaveOutcome(project.Id, version.VersionNumber, project.UpdatedAt, version.Id);
     }
 
     public async Task<VectorDocumentSaveOutcome?> FindByIdempotencyKeyAsync(
@@ -147,6 +147,7 @@ public sealed class VectorDocumentRepository : IVectorDocumentRepository
             .Where(v => v.IdempotencyKey == idempotencyKey)
             .Select(v => new
             {
+                v.Id,
                 v.VersionNumber,
                 v.CreatedAt,
                 ProjectId = v.VectorDocument!.ProjectId,
@@ -159,7 +160,7 @@ public sealed class VectorDocumentRepository : IVectorDocumentRepository
             return null;
         }
 
-        return new VectorDocumentSaveOutcome(match.ProjectId, match.VersionNumber, match.CreatedAt);
+        return new VectorDocumentSaveOutcome(match.ProjectId, match.VersionNumber, match.CreatedAt, match.Id);
     }
 
     public async Task<(VectorDocument Document, DocumentVersion Version)?> FindCurrentDocumentAsync(
@@ -341,7 +342,7 @@ public sealed class VectorDocumentRepository : IVectorDocumentRepository
 
         await transaction.CommitAsync(cancellationToken);
 
-        return new VectorDocumentSaveOutcome(project.Id, newVersion.VersionNumber, project.UpdatedAt);
+        return new VectorDocumentSaveOutcome(project.Id, newVersion.VersionNumber, project.UpdatedAt, newVersion.Id);
     }
 
     public async Task<Layer?> UpdateLayerAsync(

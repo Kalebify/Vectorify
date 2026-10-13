@@ -69,6 +69,55 @@ export interface UpdateLayerRequestBody {
   manufacturingOperation?: string | null;
 }
 
+// ---- M3-S13: editor-save + version history ----
+
+/** Una capa en el body de POST /api/v2/projects/{projectId}/document/editor-save. */
+export interface EditorSaveLayerRequestBody {
+  groupId: string;
+  svgContent: string;
+  name: string;
+  order: number;
+  visible: boolean;
+  locked: boolean;
+  manufacturingOperation: string | null;
+  isNew: boolean;
+  /** Color de la capa -- requerido; el servidor lo usa para reconstruir PaletteColor. */
+  colorHex: string;
+  colorCoverage: number;
+  colorIsBackground: boolean;
+}
+
+/** Body de POST /api/v2/projects/{projectId}/document/editor-save (M3-S13). */
+export interface EditorSaveRequestBody {
+  origin: 'MANUAL_EDIT' | 'AUTOSAVE';
+  idempotencyKey: string;
+  viewBox: string;
+  widthMm: number;
+  heightMm: number;
+  schemaVersion: number;
+  layers: EditorSaveLayerRequestBody[];
+  removedLayerGroupIds?: string[];
+}
+
+/** Respuesta de POST /api/v2/projects/{projectId}/document/editor-save. */
+export interface EditorSaveResponse {
+  projectId: string;
+  versionNumber: number;
+  versionId: string;
+  createdAt: string;
+}
+
+/** Una entrada de GET /api/v2/projects/{projectId}/versions (M2.2-S06). */
+export interface VectorDocumentVersionSummaryResponse {
+  versionNumber: number;
+  origin: string;
+  createdAt: string;
+  widthMm: number;
+  heightMm: number;
+  viewBox: string;
+  schemaVersion: number;
+}
+
 /** Code estable de error devuelto por estos tres endpoints -- se mapea a copy en React sin parsear message. */
 export type VectorDocumentErrorCode =
   | "invalid_request"

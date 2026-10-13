@@ -31,4 +31,14 @@ public interface IVectorDocumentService
 
     Task<VectorDocumentResult> UpdateLayerAsync(
         Guid projectId, Guid layerId, UpdateLayerRequest request, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Persiste el estado completo de geometría del editor como una nueva DocumentVersion
+    /// (M3-S13: <c>POST /api/v2/projects/{projectId}/document/editor-save</c>). El cliente
+    /// manda el SVG serializado de TODAS las capas; el servidor lo sube como Assets y crea
+    /// la versión. Soporta idempotencia (misma key = mismo resultado), ownership (solo el
+    /// dueño del proyecto), y concurrencia optimista (xmin → 409).
+    /// </summary>
+    Task<VectorDocumentResult> EditorSaveAsync(
+        Guid projectId, EditorSaveRequest request, CancellationToken cancellationToken);
 }

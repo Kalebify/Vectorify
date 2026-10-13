@@ -1,10 +1,13 @@
 import { httpClient } from "./httpClient";
 import type {
+  EditorSaveRequestBody,
+  EditorSaveResponse,
   UpdateLayerRequestBody,
   VectorDocumentLayerResponse,
   VectorDocumentResponse,
   VectorDocumentSaveRequestBody,
   VectorDocumentSaveResponse,
+  VectorDocumentVersionSummaryResponse,
 } from "../types/vectorDocument";
 
 /**
@@ -27,6 +30,52 @@ export function saveWorkspace(
  */
 export function getVectorDocument(projectId: string, signal?: AbortSignal): Promise<VectorDocumentResponse> {
   return httpClient.get<VectorDocumentResponse>(`/api/v2/projects/${projectId}/document`, { signal });
+}
+
+/**
+ * Persiste el estado de geometría del editor como una nueva DocumentVersion (M3-S13).
+ * El cliente manda el SVG serializado de TODAS las capas; el servidor las sube como Assets
+ * y crea la versión. Soporta idempotencia (misma key = mismo resultado).
+ */
+export function editorSave(
+  projectId: string,
+  body: EditorSaveRequestBody,
+  signal?: AbortSignal,
+): Promise<EditorSaveResponse> {
+  return httpClient.postJson<EditorSaveResponse>(
+    `/api/v2/projects/${projectId}/document/editor-save`,
+    body,
+    { signal },
+  );
+}
+
+/**
+ * Lista todas las versiones del documento de un proyecto (M2.2-S06, M3-S13): metadata, sin layers.
+ */
+export function listVersions(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<VectorDocumentVersionSummaryResponse[]> {
+  return httpClient.get<VectorDocumentVersionSummaryResponse[]>(
+    `/api/v2/projects/${projectId}/versions`,
+    { signal },
+  );
+}
+
+/**
+ * Restaura una versión histórica del documento como una nueva DocumentVersion (M2.2-S06, M3-S13).
+ * El servidor crea una copia de la versión indicada con Origin: RESTORE.
+ */
+export function restoreVersion(
+  projectId: string,
+  versionNumber: number,
+  signal?: AbortSignal,
+): Promise<VectorDocumentSaveResponse> {
+  return httpClient.postJson<VectorDocumentSaveResponse>(
+    `/api/v2/projects/${projectId}/versions/${versionNumber}/restore`,
+    {},
+    { signal },
+  );
 }
 
 /**

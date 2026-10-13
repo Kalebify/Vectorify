@@ -12,6 +12,7 @@ import { useLaserWarnings } from "../../hooks/useLaserWarnings";
 import { useManufacturingOperations } from "../../hooks/useManufacturingOperations";
 import { useVectorDocument, type LayerWriteStatus, type VectorDocumentLayer } from "../../hooks/useVectorDocument";
 import { useWorkspaceSave } from "../../hooks/useWorkspaceSave";
+import { useGeometrySave } from "../../hooks/useGeometrySave";
 import {
   ARRANGE_SHORTCUTS,
   arrangeAvailability,
@@ -153,6 +154,7 @@ import { OffsetPanel, ORIGIN_LAYER_VALUE } from "./OffsetPanel";
 import { CutPanel } from "./CutPanel";
 import { FloatingPanel } from "./FloatingPanel";
 import { HistoryPanel } from "./HistoryPanel";
+import { VersionHistoryPanel } from "./VersionHistoryPanel";
 import { PathPanel } from "./PathPanel";
 import { PreviewNavigator } from "./PreviewNavigator";
 import { VectorCanvas } from "./VectorCanvas";
@@ -528,6 +530,11 @@ export function EditorShell({
     setHistoryOpen(false);
     globalThis.document?.getElementById("editor-history-toggle")?.focus();
   }, []);
+  const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
+  const closeVersionHistory = useCallback(() => {
+    setVersionHistoryOpen(false);
+    globalThis.document?.getElementById("editor-version-history-toggle")?.focus();
+  }, []);
 
   const selectableObjects = useMemo(
     () => selectableObjectsOf(editable.objectsByLayer, documentLayers, visibility),
@@ -559,6 +566,21 @@ export function EditorShell({
 
   // mm por unidad de documento: el tamaño físico del documento guardado manda; si no, el de las dimensiones del flujo clásico.
   const mmFactor = mmPerUnitOf(document?.widthMm ?? dimensionWidthMm, document?.sourceWidthPx);
+
+  // Guardado de geometría (M3-S13): autosave con debounce de 3 s + save manual.
+  // El projectId efectivo prioriza el savedProjectId del workspaceSave (puede haberse creado recién),
+  // luego el prop savedProjectId, o null si todavía no hay proyecto v2.
+  const effectiveSavedProjectId = workspaceSave.savedProjectId ?? savedProjectId ?? null;
+  const geometrySave = useGeometrySave({
+    projectId: effectiveSavedProjectId,
+    editable,
+    layers: committedLayers,
+    mmFactor,
+    onSaved: (_versionNumber) => {
+      // El guardado de geometría NO resetea el historial de undo: la geometría sigue siendo editable.
+      // El geometryDirty se limpia en el backend al confirmar el save; el hook marca "saved" solo.
+    },
+  });
 
   const handleSelectObjects = useCallback(
     (ids: string[], activeLayerId: string | null) => {
@@ -1846,12 +1868,20 @@ export function EditorShell({
         saveState={workspaceSave.state}
         saveErrorMessage={workspaceSave.errorMessage}
         canSave={status === "ready" && Boolean(document)}
-        onSave={workspaceSave.save}
-        // TODO(M3-S13): persistir la geometría, el marco del documento Y la estructura de capas (serializeEditableLayer + serializeFrame ->
-        // DocumentVersion nueva con viewBox/mm; las capas `isNew` creadas por Fill se crean en el servidor con su color de paleta y los
-        // colores recoloreados se guardan sobre el mismo groupId) y limpiar `geometryDirty` al confirmar el guardado. Hasta entonces el indicador debe seguir diciendo
-        // "Cambios de geometría sin guardar" (un crop o un giro del documento también lo activan).
+        onSave={() => {
+          // Si hay geometría sucia, el guardado manual dispara el editor-save (M3-S13).
+          // El workspace-save clásico sigue disponible para los cambios de paleta/estructura.
+          if (geometryDirty && effectiveSavedProjectId) {
+            geometrySave.save();
+          } else {
+            workspaceSave.save();
+          }
+        }}
         geometryDirty={geometryDirty}
+        geometrySaveState={geometrySave.state}
+        geometrySaveErrorMessage={geometrySave.errorMessage}
+        versionHistoryOpen={versionHistoryOpen}
+        onToggleVersionHistory={effectiveSavedProjectId ? () => setVersionHistoryOpen((open) => !open) : undefined}
         canUndo={editable.canUndo}
         canRedo={editable.canRedo}
         undoLabel={editable.undoLabel}
@@ -1877,6 +1907,14 @@ export function EditorShell({
           onDismissError={editable.dismissHistoryError}
           onDismissNotice={editable.dismissHistoryNotice}
           onClose={closeHistory}
+        />
+      )}
+      {versionHistoryOpen && effectiveSavedProjectId && (
+        <VersionHistoryPanel
+          projectId={effectiveSavedProjectId}
+          currentVersionNumber={document?.version ?? null}
+          geometryDirty={geometryDirty}
+          onClose={closeVersionHistory}
         />
       )}
 

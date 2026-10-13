@@ -71,5 +71,12 @@ public sealed record LayerPatch(
     bool TouchOperation,
     ManufacturingOperationKind? Operation);
 
-/// <summary>Resultado de un Save exitoso contra la base (ver <see cref="Persistence.IVectorDocumentRepository.SaveAsync"/>).</summary>
-public sealed record VectorDocumentSaveOutcome(Guid ProjectId, int VersionNumber, DateTimeOffset SavedAt);
+/// <summary>
+/// Resultado de un Save exitoso contra la base (ver <see cref="Persistence.IVectorDocumentRepository.SaveAsync"/>).
+/// <see cref="VersionId"/> (M3-S13): el <see cref="Vectorify.Api.Data.DocumentVersion.Id"/> de la versión
+/// recién persistida -- expuesto en <see cref="VectorDocumentResult.EditorSaved"/> para que el frontend
+/// pueda referenciar la versión exacta creada. El <see cref="VectorDocumentResult.Saved"/> existente
+/// no lo expone (su respuesta <see cref="Contracts.VectorDocumentSaveResponse"/> no tiene ese campo) --
+/// el campo viaja igual por el outcome para no crear un tipo paralelo solo por eso.
+/// </summary>
+public sealed record VectorDocumentSaveOutcome(Guid ProjectId, int VersionNumber, DateTimeOffset SavedAt, Guid VersionId);
