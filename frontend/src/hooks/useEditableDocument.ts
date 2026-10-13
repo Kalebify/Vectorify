@@ -204,8 +204,15 @@ export interface EditableDocumentApi {
   cancelGesture: () => void;
   gestureActive: boolean;
 
-  /** Hay ediciones de geometría sin persistir (ADR D2: hasta M3-S13 la persistencia no existe, así que significa "alguna capa o el marco difieren de lo cargado"). */
+  /**
+   * Hay ediciones de geometría sin persistir (ADR D2): alguna capa, el marco o la estructura de capas difieren de lo último que el
+   * servidor confirmó (`markSaved`) o, si nunca se guardó en esta sesión, de lo cargado.
+   */
   geometryDirty: boolean;
+  /** Foto del estado confirmado RENDERIZADO ahora (consistente con `committedObjectsByLayer`/`committedFrame`/`committedLayers`): lo que se serializa al guardar. */
+  saveMark: GeometrySaveMark;
+  /** Declara persistido lo que describe `mark` (M3-S13). No toca el historial; lo editado después de `mark` sigue contando como sin guardar. Ignora marcas de un documento ya reiniciado. */
+  markSaved: (mark: GeometrySaveMark) => void;
   /** Área de trabajo EN VIVO (M3-S02): incluye la previsualización de un gesto en curso (p. ej. rotar el documento). */
   frame: DocumentFrame;
   /** Área de trabajo CONFIRMADA (sin previsualización): base de miniatura, mm y zoom de ajuste. */
@@ -281,6 +288,23 @@ interface CommittedState {
   localLayers: Record<string, LocalLayerPatch>;
   past: HistoryEntry[];
   future: HistoryEntry[];
+  /** Se incrementa cada vez que el documento se reinicia (otro documento / regenerado): invalida marcas de guardado anteriores. */
+  epoch: number;
+  /** Lo último que el servidor confirmó haber persistido (M3-S13). Ausente = nada guardado todavía: se compara contra lo cargado. */
+  saved?: GeometrySaveMark;
+}
+
+/**
+ * Foto del estado confirmado en el instante de serializar para un guardado (M3-S13). Se entrega a `markSaved` al confirmarse el
+ * guardado: lo editado ENTRE el envío y la confirmación sigue contando como sin guardar.
+ */
+export interface GeometrySaveMark {
+  epoch: number;
+  objectsByLayer: Record<string, EditorObject[]>;
+  /** Marco confirmado, o `null` = el original del documento. */
+  frame: DocumentFrame | null;
+  /** Huella estable de la estructura de capas (overrides + metadata local). */
+  structureKey: string;
 }
 
 interface LoadResult {
@@ -305,7 +329,13 @@ interface GestureState {
   skippedHiddenObjects: number;
 }
 
-const EMPTY_STATE: CommittedState = { objectsByLayer: {}, baseline: {}, frame: null, layerOverrides: {}, localLayers: {}, past: [], future: [] };
+const EMPTY_STATE: CommittedState = { objectsByLayer: {}, baseline: {}, frame: null, layerOverrides: {}, localLayers: {}, past: [], future: [], epoch: 0 };
+
+/** Huella estable (claves ordenadas) de la estructura de capas: dos estados con la misma estructura dan la misma huella. */
+function structureKeyOf(layerOverrides: Record<string, EditableLayerMeta>, localLayers: Record<string, LocalLayerPatch>): string {
+  const sorted = (record: Record<string, unknown>) => Object.keys(record).sort().map((key) => [key, record[key]]);
+  return JSON.stringify([sorted(layerOverrides), sorted(localLayers)]);
+}
 
 /** Visibilidad EFECTIVA de una capa: Isolate manda sobre todas (también las creadas en el cliente); si no, `visibility` del servidor o su propio `visible`. */
 function effectiveVisible(layer: { groupId: string; visible: boolean }, visibility: Record<string, boolean> | undefined, isolatedGroupId: string | null | undefined): boolean {
@@ -543,7 +573,7 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
     documentKeyRef.current = documentKey;
     loadedUrlsRef.current.clear();
     noteReset("document", committedRef.current);
-    commit(EMPTY_STATE);
+    commit({ ...EMPTY_STATE, epoch: committedRef.current.epoch + 1 });
     setResults({});
     setTruncatedCount(0);
     setHistoryError(null);
@@ -575,7 +605,7 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
         if (previousUrl !== undefined) {
           noteReset("regenerated", current);
           setTruncatedCount(0);
-          commit({ objectsByLayer: loaded.baseline, baseline: loaded.baseline, frame: null, layerOverrides: {}, localLayers: {}, past: [], future: [] });
+          commit({ objectsByLayer: loaded.baseline, baseline: loaded.baseline, frame: null, layerOverrides: {}, localLayers: {}, past: [], future: [], epoch: current.epoch + 1 });
         } else {
           commit({ ...current, ...loaded });
         }
@@ -1049,9 +1079,29 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
     [commit],
   );
 
+  const markSaved = useCallback(
+    (mark: GeometrySaveMark) => {
+      const state = committedRef.current;
+      if (mark.epoch !== state.epoch) return;
+      commit({ ...state, saved: mark });
+    },
+    [commit],
+  );
+
   const objectsByLayer = gestureView ?? committed.objectsByLayer;
   const committedFrame = committed.frame ?? sourceFrame;
-  const frameDirty = !framesEqual(committedFrame, sourceFrame);
+  const saved = committed.saved;
+  const frameDirty = !framesEqual(committedFrame, saved ? (saved.frame ?? sourceFrame) : sourceFrame);
+  const structureKey = useMemo(() => structureKeyOf(committed.layerOverrides, committed.localLayers), [committed.layerOverrides, committed.localLayers]);
+  const saveMark = useMemo<GeometrySaveMark>(
+    () => ({ epoch: committed.epoch, objectsByLayer: committed.objectsByLayer, frame: committed.frame, structureKey }),
+    [committed.epoch, committed.objectsByLayer, committed.frame, structureKey],
+  );
+  const structureDirty = saved ? structureKey !== saved.structureKey : Object.keys(committed.layerOverrides).length > 0;
+  const layersDirty = useMemo(
+    () => Object.entries(committed.objectsByLayer).some(([groupId, objects]) => (saved?.objectsByLayer[groupId] ?? committed.baseline[groupId]) !== objects),
+    [committed.objectsByLayer, committed.baseline, saved],
+  );
 
   // Lista efectiva de capas (servidor + overrides + capas nuevas). `pathCount` solo se pisa en las capas EDITADAS. Se memoiza por el
   // VALOR de los conteos (no por el array de objetos), así un drag no recrea la lista de capas en cada frame.
@@ -1132,8 +1182,10 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
     commitGesture,
     cancelGesture,
     gestureActive,
-    // La estructura de capas también cuenta (crear/recolorear una capa): hasta M3-S13 vive solo en memoria.
-    geometryDirty: editedLayerIds.size > 0 || frameDirty || Object.keys(committed.layerOverrides).length > 0,
+    // La estructura de capas también cuenta (crear/recolorear una capa).
+    geometryDirty: layersDirty || frameDirty || structureDirty,
+    saveMark,
+    markSaved,
     frame: gestureFrame ?? committedFrame,
     committedFrame,
     getSnapshot,

@@ -5,7 +5,7 @@
   "stack": "Frontend, ASP.NET Core -- persistencia de geometría editada (nuevo endpoint editor-save), autosave con debounce + retry + conflicto, Version History panel con restore",
   "branch": "sprint/3e8d77b2-m3-s13-autosave-version-history",
   "column": "Doing",
-  "phase": "implementation",
+  "phase": "verification",
   "fix_rounds": 0,
   "preview_url": null,
   "pr_url": null,
@@ -16,6 +16,6 @@
     "DECISION: autosave debounce 3s tras commitGesture; estado saving/saved/error en header; retry x3 backoff exponencial.",
     "DECISION: historial de undo/redo (S12) se reinicia al restaurar una version (mismo mecanismo reset de S12).",
     "DECISION: Version History panel es distinto del HistoryPanel de S12; GET/POST /versions ya existen desde M2.2-S06.",
-    "PAUSA 2026-10-14: agente web-implementer lanzado (agentId a1cd8a2d3b9c30857), trabajo en curso en el arbol. El agente ya escribio EditorSaveLayerRequest y EditorSaveRequest en VectorDocumentRequests.cs. Al retomar: verificar si el agente termino o si hay que retomarlo con SendMessage."
+    "DECISION (implementacion): geometryDirty = difiere de lo ultimo confirmado (saveMark/markSaved), el undo no se reinicia al guardar; con proyecto guardado SAVE es siempre editor-save (el save clasico pisaria la geometria). Detalle en IMPL.md."
   ]
 }

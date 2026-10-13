@@ -9,24 +9,26 @@ import { serializeFrame } from "../lib/editor/frame";
 
 /**
  * Estado de guardado de geometría (M3-S13).
- * - `idle`: no hay geometryDirty pendiente ni guardado en curso.
+ * - `idle`: no hay guardado en curso ni resultado reciente que mostrar.
  * - `saving`: petición en vuelo.
- * - `saved`: último save confirmado por el backend. Se limpia a `idle` tras 4 s.
- * - `error`: el intento falló (red, 4xx, ≥3 fallos). Persiste hasta el próximo intento exitoso.
+ * - `saved`: último guardado confirmado por el backend. Vuelve a `idle` tras 4 s.
+ * - `error`: el intento falló (red tras reintentos, 4xx, conflicto). Persiste hasta el próximo intento exitoso.
  */
 export type GeometrySaveState = "idle" | "saving" | "saved" | "error";
 
-/** Debounce tras `geometryDirty: true` antes de disparar el autosave (ms). */
+/** Debounce tras la ÚLTIMA edición antes de disparar el autosave (ms). */
 export const GEOMETRY_AUTOSAVE_DEBOUNCE_MS = 3000;
 
 /** Tiempo que el estado `saved` se muestra antes de volver a `idle` (ms). */
-const SAVED_CLEAR_MS = 4000;
+export const GEOMETRY_SAVED_CLEAR_MS = 4000;
 
-/** Reintentos máximos de red antes de pasar a `error` persistente. */
-const MAX_RETRIES = 3;
+/** Intentos máximos ante errores de red / 5xx antes de pasar a `error` (backoff 1 s → 2 s). */
+export const GEOMETRY_MAX_ATTEMPTS = 3;
 
 /** Versión de esquema del formato de serialización. Debe coincidir con SCHEMA_VERSION de objects.ts. */
 const SCHEMA_VERSION = 1;
+
+const UNLOADED_LAYERS_MESSAGE = "Hay capas que todavía no terminaron de cargar: esperá a que carguen para guardar.";
 
 export interface UseGeometrySaveParams {
   /** Project.Id v2 del proyecto cargado. Null si todavía no hay proyecto guardado (sin autosave). */
@@ -37,7 +39,7 @@ export interface UseGeometrySaveParams {
   layers: VectorDocumentLayer[];
   /** mm por unidad de documento (de `mmPerUnit(...)`). Null si no hay escala física. */
   mmFactor: number | null;
-  /** Callback llamado cuando el save se confirma (200/201). Recibe el número de versión creada. */
+  /** Llamado cuando el backend confirma el guardado (después de `editable.markSaved`). Recibe el número de versión creada. */
   onSaved?: (versionNumber: number) => void;
 }
 
@@ -46,25 +48,19 @@ export interface UseGeometrySaveState {
   errorMessage: string | null;
   /** true si el último error fue un 409 (conflicto de concurrencia). */
   conflictDetected: boolean;
-  /**
-   * Dispara el guardado manual de geometría inmediatamente (cancela el debounce pendiente).
-   * No-op si `projectId` es null.
-   */
+  /** Guardado manual inmediato (cancela el debounce pendiente). Re-habilita el autosave si un error lo había pausado. No-op sin `projectId`. */
   save: () => void;
+  /** Cancela el debounce, aborta lo que esté en vuelo y pausa el autosave hasta el próximo `save()` manual (p. ej. antes de restaurar una versión). */
+  suspendAutosave: () => void;
 }
 
-export function useGeometrySave({
-  projectId,
-  editable,
-  layers,
-  mmFactor,
-  onSaved,
-}: UseGeometrySaveParams): UseGeometrySaveState {
+export function useGeometrySave({ projectId, editable, layers, mmFactor, onSaved }: UseGeometrySaveParams): UseGeometrySaveState {
   const [state, setState] = useState<GeometrySaveState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [conflictDetected, setConflictDetected] = useState(false);
+  // Se incrementa al terminar un guardado: re-arma el autosave si hubo ediciones mientras estaba en vuelo.
+  const [settledCount, setSettledCount] = useState(0);
 
-  // Ref a los últimos valores para closures estables.
   const latestRef = useRef({ projectId, editable, layers, mmFactor, onSaved });
   useEffect(() => {
     latestRef.current = { projectId, editable, layers, mmFactor, onSaved };
@@ -74,20 +70,14 @@ export function useGeometrySave({
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isSavingRef = useRef(false);
-  const retryCountRef = useRef(0);
+  // Identifica la petición vigente: la respuesta de una abortada/reemplazada se ignora (no puede pisar el estado de la nueva).
+  const requestSeqRef = useRef(0);
+  const attemptsRef = useRef(0);
   const idempotencyKeyRef = useRef<string | null>(null);
-
-  // Limpia el timer de "saved" al desmontar.
-  useEffect(() => {
-    return () => {
-      abortControllerRef.current?.abort();
-      if (debounceTimerRef.current !== null) clearTimeout(debounceTimerRef.current);
-      if (savedClearTimerRef.current !== null) clearTimeout(savedClearTimerRef.current);
-    };
-  }, []);
-
-  // Función de perform save (ref para poder invocarla de forma mutuamente recursiva).
-  const performSaveRef = useRef<(trigger: "auto" | "manual") => void>(() => {});
+  // Hubo ediciones mientras el intento en curso estaba en vuelo: su idempotencyKey ya no describe el payload actual.
+  const editsDuringSaveRef = useRef(false);
+  // Tras un 4xx/409 o `suspendAutosave` el autosave espera a un guardado manual (si no, cada edición re-golpearía el mismo error).
+  const autosaveBlockedRef = useRef(false);
 
   const clearDebounce = useCallback(() => {
     if (debounceTimerRef.current !== null) {
@@ -103,27 +93,72 @@ export function useGeometrySave({
     }
   }, []);
 
-  /** Serializa el estado editable completo a los layers del request. */
-  function buildLayers(
-    currentLayers: VectorDocumentLayer[],
-    currentEditable: EditableDocumentApi,
-    _currentMmFactor: number | null,
-  ): EditorSaveLayerRequestBody[] {
-    const frame = currentEditable.committedFrame;
-    const meta = {
-      width: frame.width,
-      height: frame.height,
-      x: frame.x,
-      y: frame.y,
+  useEffect(() => {
+    return () => {
+      requestSeqRef.current += 1;
+      abortControllerRef.current?.abort();
+      if (debounceTimerRef.current !== null) clearTimeout(debounceTimerRef.current);
+      if (savedClearTimerRef.current !== null) clearTimeout(savedClearTimerRef.current);
     };
+  }, []);
 
-    return currentLayers.map((layer) => {
-      const objects = currentEditable.committedObjectsByLayer[layer.groupId] ?? [];
-      const svgContent = serializeEditableLayer(objects, meta);
+  const performSaveRef = useRef<(trigger: "auto" | "manual") => void>(() => {});
 
-      return {
+  const performSave = useCallback(
+    (trigger: "auto" | "manual") => {
+      const { projectId: pid, editable: ed, layers: ls, mmFactor: mf } = latestRef.current;
+      if (!pid) return;
+
+      clearDebounce();
+
+      if (trigger === "manual") {
+        autosaveBlockedRef.current = false;
+        if (isSavingRef.current) {
+          // El click manual reemplaza al intento en vuelo y NUNCA reusa su key: si el servidor ya lo persistió, devolvería ese resultado viejo.
+          abortControllerRef.current?.abort();
+          idempotencyKeyRef.current = null;
+        }
+      } else if (isSavingRef.current || autosaveBlockedRef.current) {
+        return;
+      }
+
+      // Nunca se serializa una capa que no terminó de cargar: se guardaría vacía y se perdería su geometría en el servidor.
+      if (ls.some((layer) => ed.layerStatus[layer.groupId] !== "ready")) {
+        if (trigger === "manual") {
+          setState("error");
+          setErrorMessage(UNLOADED_LAYERS_MESSAGE);
+          setConflictDetected(false);
+        }
+        return;
+      }
+
+      clearSavedTimer();
+
+      if (idempotencyKeyRef.current === null) {
+        idempotencyKeyRef.current = crypto.randomUUID();
+        attemptsRef.current = 0;
+      }
+      const idempotencyKey = idempotencyKeyRef.current;
+      editsDuringSaveRef.current = false;
+
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+      const requestId = ++requestSeqRef.current;
+      isSavingRef.current = true;
+      attemptsRef.current += 1;
+
+      setState("saving");
+      setErrorMessage(null);
+      setConflictDetected(false);
+
+      // Todo sale del MISMO render: la geometría, el marco, las capas y la marca que se declarará guardada.
+      const frame = ed.committedFrame;
+      const serializedFrame = serializeFrame(frame, mf);
+      const mark = ed.saveMark;
+      const meta = { width: frame.width, height: frame.height, x: frame.x, y: frame.y };
+      const requestLayers: EditorSaveLayerRequestBody[] = ls.map((layer) => ({
         groupId: layer.groupId,
-        svgContent,
+        svgContent: serializeEditableLayer(ed.committedObjectsByLayer[layer.groupId] ?? [], meta),
         name: layer.name,
         order: layer.order,
         visible: layer.visible,
@@ -133,51 +168,7 @@ export function useGeometrySave({
         colorHex: layer.colorHex,
         colorCoverage: layer.areaPercent ?? 0,
         colorIsBackground: layer.isExcluded ?? false,
-      };
-    });
-  }
-
-  const performSave = useCallback(
-    (trigger: "auto" | "manual") => {
-      const { projectId: pid, editable: ed, layers: ls, mmFactor: mf, onSaved: cb } = latestRef.current;
-      if (!pid) return;
-
-      clearDebounce();
-      clearSavedTimer();
-
-      if (trigger === "manual") {
-        // El click manual aborta el request en vuelo y usa una key nueva.
-        if (isSavingRef.current) {
-          abortControllerRef.current?.abort();
-          idempotencyKeyRef.current = null;
-        }
-      } else if (isSavingRef.current) {
-        // El autosave nunca lanza un segundo POST concurrente.
-        return;
-      }
-
-      // Generar una idempotency key nueva si no hay una activa.
-      if (idempotencyKeyRef.current === null) {
-        idempotencyKeyRef.current = crypto.randomUUID();
-        retryCountRef.current = 0;
-      }
-
-      const idempotencyKey = idempotencyKeyRef.current;
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-      isSavingRef.current = true;
-
-      setState("saving");
-      setErrorMessage(null);
-      setConflictDetected(false);
-
-      // Serializar el estado actual del editor.
-      const frame = ed.committedFrame;
-      const serializedFrame = serializeFrame(frame, mf);
-
-      const requestLayers = buildLayers(ls, ed, mf);
-      const widthMm = serializedFrame.widthMm ?? ed.committedFrame.width;
-      const heightMm = serializedFrame.heightMm ?? ed.committedFrame.height;
+      }));
 
       editorSave(
         pid,
@@ -185,8 +176,8 @@ export function useGeometrySave({
           origin: trigger === "manual" ? "MANUAL_EDIT" : "AUTOSAVE",
           idempotencyKey,
           viewBox: serializedFrame.viewBox,
-          widthMm,
-          heightMm,
+          widthMm: serializedFrame.widthMm ?? frame.width,
+          heightMm: serializedFrame.heightMm ?? frame.height,
           schemaVersion: SCHEMA_VERSION,
           layers: requestLayers,
           removedLayerGroupIds: [],
@@ -194,63 +185,60 @@ export function useGeometrySave({
         controller.signal,
       )
         .then((response) => {
+          if (requestId !== requestSeqRef.current) return;
           isSavingRef.current = false;
           idempotencyKeyRef.current = null;
-          retryCountRef.current = 0;
+          attemptsRef.current = 0;
+          autosaveBlockedRef.current = false;
 
-          // Limpiar el geometryDirty: el historial de undo se resetea via onSaved (EditorShell lo maneja).
-          // onSaved notifica al EditorShell para que llame a clearHistory si corresponde.
+          // Lo editado entre el envío y esta confirmación NO queda marcado como guardado (la marca es la del envío).
+          latestRef.current.editable.markSaved(mark);
           setState("saved");
-          cb?.(response.versionNumber);
+          latestRef.current.onSaved?.(response.versionNumber);
+          setSettledCount((count) => count + 1);
 
-          // "saved" se limpia automáticamente a "idle" tras SAVED_CLEAR_MS.
           savedClearTimerRef.current = setTimeout(() => {
             savedClearTimerRef.current = null;
             setState((current) => (current === "saved" ? "idle" : current));
-          }, SAVED_CLEAR_MS);
+          }, GEOMETRY_SAVED_CLEAR_MS);
         })
         .catch((error: unknown) => {
+          if (requestId !== requestSeqRef.current) return;
           isSavingRef.current = false;
+          if (error instanceof ApiClientError && error.isAborted) return;
 
-          if (error instanceof ApiClientError && error.isAborted) {
-            return;
-          }
+          const fail = (message: string, conflict = false, block = true) => {
+            idempotencyKeyRef.current = null;
+            attemptsRef.current = 0;
+            if (block) autosaveBlockedRef.current = true;
+            setState("error");
+            setErrorMessage(message);
+            setConflictDetected(conflict);
+          };
 
-          // Conflicto 409.
           if (error instanceof ApiClientError && error.status === 409) {
-            idempotencyKeyRef.current = null;
-            retryCountRef.current = 0;
-            setState("error");
-            setConflictDetected(true);
-            setErrorMessage("Conflicto: el documento fue modificado por otro guardado concurrente. Recargá o intentá de nuevo.");
+            fail("Conflicto: el documento fue modificado por otro guardado concurrente. Recargá el documento o reintentá (puede sobrescribir esa otra versión).", true);
             return;
           }
 
-          // Error 4xx (no de red, no 409): no reintenta.
+          // 4xx (no de red): reintentar no lo arregla.
           if (error instanceof ApiClientError && !error.isNetworkError && error.status !== undefined && error.status < 500) {
-            idempotencyKeyRef.current = null;
-            retryCountRef.current = 0;
-            setState("error");
             const body = error.body as { message?: string } | undefined;
-            setErrorMessage(body?.message ?? "No se pudo guardar la geometría. Intentá de nuevo.");
+            fail(body?.message ?? "No se pudo guardar la geometría. Intentá de nuevo.");
             return;
           }
 
-          // Error de red o 5xx: reintento con backoff exponencial (1s → 2s → 4s).
-          retryCountRef.current += 1;
-          if (retryCountRef.current < MAX_RETRIES) {
-            const delay = 1000 * Math.pow(2, retryCountRef.current - 1);
+          // Red / 5xx: reintento con backoff exponencial (1 s, 2 s) con la MISMA key, salvo que haya habido ediciones nuevas (payload distinto).
+          if (editsDuringSaveRef.current) idempotencyKeyRef.current = null;
+          if (attemptsRef.current < GEOMETRY_MAX_ATTEMPTS) {
+            const delay = 1000 * 2 ** (attemptsRef.current - 1);
+            setState("saving");
             debounceTimerRef.current = setTimeout(() => {
               debounceTimerRef.current = null;
-              if (!isSavingRef.current) {
-                performSaveRef.current("auto");
-              }
+              performSaveRef.current("auto");
             }, delay);
           } else {
-            idempotencyKeyRef.current = null;
-            retryCountRef.current = 0;
-            setState("error");
-            setErrorMessage("No se pudo guardar la geometría después de varios intentos. Verificá tu conexión e intentá de nuevo.");
+            fail("No se pudo guardar la geometría después de varios intentos. Verificá tu conexión e intentá de nuevo.", false, false);
           }
         });
     },
@@ -261,29 +249,36 @@ export function useGeometrySave({
     performSaveRef.current = performSave;
   }, [performSave]);
 
-  // Autosave: cuando geometryDirty pasa a true, inicia debounce de 3 s.
-  const { geometryDirty } = editable;
+  // Autosave: cada edición (cambia `saveMark`) reinicia la ventana de 3 s; un solo POST tras N cambios rápidos.
+  const { geometryDirty, saveMark } = editable;
   useEffect(() => {
-    if (!geometryDirty || !projectId) return;
-
-    // Si ya está guardando, no dispara el debounce (el hook espera a que termine).
-    if (isSavingRef.current) return;
-
+    if (!geometryDirty || !projectId || autosaveBlockedRef.current) return;
+    if (isSavingRef.current) {
+      editsDuringSaveRef.current = true;
+      return;
+    }
+    // Hay una edición nueva: es un intento lógico nuevo (la key del intento anterior describe otro payload).
+    idempotencyKeyRef.current = null;
+    attemptsRef.current = 0;
     clearDebounce();
     debounceTimerRef.current = setTimeout(() => {
       debounceTimerRef.current = null;
       performSaveRef.current("auto");
     }, GEOMETRY_AUTOSAVE_DEBOUNCE_MS);
+  }, [geometryDirty, projectId, saveMark, settledCount, clearDebounce]);
 
-    return () => {
-      // El efecto se limpia cuando geometryDirty cambia (ej. se hizo undo hasta el origen).
-      // No cancela un save en vuelo -- solo el timer de debounce.
-    };
-  }, [geometryDirty, projectId, clearDebounce]);
+  const save = useCallback(() => performSaveRef.current("manual"), []);
 
-  const save = useCallback(() => {
-    performSaveRef.current("manual");
-  }, []);
+  const suspendAutosave = useCallback(() => {
+    clearDebounce();
+    requestSeqRef.current += 1;
+    abortControllerRef.current?.abort();
+    isSavingRef.current = false;
+    idempotencyKeyRef.current = null;
+    attemptsRef.current = 0;
+    autosaveBlockedRef.current = true;
+    setState((current) => (current === "saving" ? "idle" : current));
+  }, [clearDebounce]);
 
-  return { state, errorMessage, conflictDetected, save };
+  return { state, errorMessage, conflictDetected, save, suspendAutosave };
 }

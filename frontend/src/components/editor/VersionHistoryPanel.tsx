@@ -30,6 +30,12 @@ function formatDate(iso: string): string {
   }
 }
 
+/** Resumen básico de la versión: el endpoint de listado (M2.2-S06) no expone el nº de capas, así que se muestra el tamaño físico. */
+function formatSize(widthMm: number, heightMm: number): string {
+  const format = (value: number) => (Number.isInteger(value) ? String(value) : value.toFixed(1));
+  return `${format(widthMm)} × ${format(heightMm)} mm`;
+}
+
 export interface VersionHistoryPanelProps {
   projectId: string;
   currentVersionNumber: number | null;
@@ -37,8 +43,10 @@ export interface VersionHistoryPanelProps {
   geometryDirty: boolean;
   /** Callback para cerrar el panel. */
   onClose: () => void;
-  /** Callback llamado cuando se confirma una restauración (antes de recargar). */
+  /** Llamado tras la confirmación del usuario y ANTES de pedir la restauración (p. ej. para pausar el autosave: no puede pisar la versión restaurada). */
   onBeforeRestore?: () => void;
+  /** Llamado cuando el servidor confirmó la restauración, justo antes de recargar el documento. */
+  onRestored?: () => void;
 }
 
 export function VersionHistoryPanel({
@@ -47,6 +55,7 @@ export function VersionHistoryPanel({
   geometryDirty,
   onClose,
   onBeforeRestore,
+  onRestored,
 }: VersionHistoryPanelProps) {
   const [versions, setVersions] = useState<VectorDocumentVersionSummaryResponse[]>([]);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
@@ -58,7 +67,6 @@ export function VersionHistoryPanel({
   useEffect(() => {
     const controller = new AbortController();
     abortRef.current = controller;
-    setLoadState("loading");
 
     listVersions(projectId, controller.signal)
       .then((data) => {
@@ -85,6 +93,7 @@ export function VersionHistoryPanel({
 
       setRestoring(versionNumber);
       setRestoreError(null);
+      onBeforeRestore?.();
 
       try {
         const controller = new AbortController();
@@ -92,8 +101,8 @@ export function VersionHistoryPanel({
 
         await restoreVersion(projectId, versionNumber, controller.signal);
 
-        onBeforeRestore?.();
-        // Recargar el documento completo para reflejar la versión restaurada.
+        onRestored?.();
+        // Recargar el documento completo para reflejar la versión restaurada (el historial de undo se reinicia con él).
         window.location.reload();
       } catch (error: unknown) {
         setRestoring(null);
@@ -102,7 +111,7 @@ export function VersionHistoryPanel({
         setRestoreError(body?.message ?? "No se pudo restaurar la versión. Intentá de nuevo.");
       }
     },
-    [projectId, geometryDirty, onBeforeRestore],
+    [projectId, geometryDirty, onBeforeRestore, onRestored],
   );
 
   // Cierre con Escape.
@@ -186,6 +195,9 @@ export function VersionHistoryPanel({
                   </span>
                   <span className="editor-version-history-panel__item-date">
                     {formatDate(version.createdAt)}
+                  </span>
+                  <span className="editor-version-history-panel__item-size">
+                    {formatSize(version.widthMm, version.heightMm)}
                   </span>
                 </div>
 

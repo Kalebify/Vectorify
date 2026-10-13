@@ -327,6 +327,27 @@ y un endpoint que recibe las capas modificadas y crea **una `DocumentVersion` nu
 `AUTOSAVE`, SVG nuevo por capa tocada; versiones inmutables, idempotencia, ownership, como en M2.2). Invariante
 de round-trip: `parse(serialize(doc))` ≡ `doc` (ids, d, fill, matriz) — se prueba desde S01.
 
+**Implementado en S13**
+- `POST /api/v2/projects/{id}/document/editor-save`: el cliente manda el SVG serializado de **todas** las capas (más nombre, orden,
+  visibilidad, bloqueo, operación, color y el marco `viewBox`/mm). El servidor sube cada SVG como Asset `layer-svg` y crea una
+  `DocumentVersion` (Origin `MANUAL_EDIT`/`AUTOSAVE`; `RESTORE`/`VECTORIZE`/`AI_EDIT` los decide solo el servidor). `Layer.GroupId` se
+  conserva entre versiones, así que una capa creada en el cliente (`isNew`) simplemente pasa a existir con su groupId. Idempotencia por
+  `idempotencyKey` (replay = 200 con el resultado original), ownership (404) y concurrencia optimista por `xmin` (409). No hay `baseVersion`:
+  dos pestañas guardando una tras otra no chocan, solo dos escrituras realmente simultáneas.
+- **`geometryDirty` = "difiere de lo último que el servidor confirmó"** (antes: "difiere de lo cargado"). `useEditableDocument` guarda una
+  *marca de guardado* (`saveMark`: objetos por capa, marco y huella de la estructura de capas) que el guardado captura **al serializar** y
+  declara persistida con `markSaved(marca)` al confirmarse. Lo editado mientras el POST estaba en vuelo sigue contando como sin guardar;
+  deshacer más allá del punto guardado vuelve a ensuciar y rehacer hasta él lo limpia. **El historial de undo NO se reinicia al guardar**
+  (solo al restaurar una versión, que recarga el documento). `editedLayerIds` conserva su significado ("difiere de lo cargado") porque la
+  miniatura y el `pathCount` dependen de él.
+- Autosave (`useGeometrySave`): 3 s después de la **última** edición (cada edición reinicia la ventana); un solo POST en vuelo; red/5xx ⇒
+  reintentos con backoff 1 s → 2 s (3 intentos) con la misma key, que se descarta si el payload cambió; 4xx/409 ⇒ `error` y el autosave
+  espera a un guardado manual (no re-golpea el mismo error). **Nunca guarda con una capa sin cargar** (se serializaría vacía y se perdería
+  su geometría). Con un proyecto ya guardado, SAVE es siempre un checkpoint del editor: el save clásico regeneraría las capas desde el
+  pipeline y pisaría lo editado; el clásico queda para el primer guardado (staging).
+- Historial de versiones (`VersionHistoryPanel`): lista las `DocumentVersion` (origen, fecha, tamaño mm) y restaura creando una versión
+  nueva (`RESTORE`); el historial no se borra. Antes de restaurar se suspende el autosave para que no pise la versión restaurada.
+
 ### D6. Reglas transversales
 - Sin dependencias nuevas salvo necesidad demostrada y documentada (Shapely ya existe).
 - Cada tarjeta: tests de lógica pura en `lib/editor/*` (sin DOM) + tests de componentes + (si hay backend)
@@ -338,7 +359,8 @@ de round-trip: `parse(serialize(doc))` ≡ `doc` (ids, d, fill, matriz) — se p
 ## Consecuencias
 - Un solo mecanismo de comandos hace S06/S12 (copy/paste, undo/redo, historial) una extensión, no una reescritura.
 - Hornear matrices solo cuando hace falta evita degradar geometría con transforms triviales.
-- El riesgo asumido: edición en memoria hasta S13 (mitigado con `geometryDirty` + aviso).
+- El riesgo asumido: edición en memoria hasta S13 (mitigado con `geometryDirty` + aviso). Desde S13 la geometría se persiste (autosave +
+  checkpoints); el undo/redo sigue siendo de sesión.
 
 ## Mapa de tarjetas
 S01 base (modelo, comandos, selección, move/scale/rotate) · S02 crop/rotate/flip · S03 fill/recolor/eyedropper ·

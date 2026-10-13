@@ -571,16 +571,22 @@ export function EditorShell({
   // El projectId efectivo prioriza el savedProjectId del workspaceSave (puede haberse creado recién),
   // luego el prop savedProjectId, o null si todavía no hay proyecto v2.
   const effectiveSavedProjectId = workspaceSave.savedProjectId ?? savedProjectId ?? null;
+  // Última versión que ESTA sesión persistió: el documento cargado no se refresca tras un guardado, así que su `version` queda vieja.
+  const [lastSavedVersion, setLastSavedVersion] = useState<number | null>(null);
+  // El guardado confirma el baseline (`editable.markSaved`, dentro del hook) sin tocar el historial de undo: la geometría sigue editable.
   const geometrySave = useGeometrySave({
     projectId: effectiveSavedProjectId,
     editable,
     layers: committedLayers,
     mmFactor,
-    onSaved: (_versionNumber) => {
-      // El guardado de geometría NO resetea el historial de undo: la geometría sigue siendo editable.
-      // El geometryDirty se limpia en el backend al confirmar el save; el hook marca "saved" solo.
-    },
+    onSaved: setLastSavedVersion,
   });
+  const { suspendAutosave } = geometrySave;
+  // Restaurar recarga la página: el aviso de "cambios sin guardar" ya se confirmó en el panel y no debe repetirse.
+  const restoringRef = useRef(false);
+  const handleRestored = useCallback(() => {
+    restoringRef.current = true;
+  }, []);
 
   const handleSelectObjects = useCallback(
     (ids: string[], activeLayerId: string | null) => {
@@ -634,10 +640,11 @@ export function EditorShell({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [undoWithView, redoWithView]);
 
-  // Aviso al salir con geometría sin persistir (ADR D2): hasta M3-S13 las ediciones solo viven en memoria.
+  // Aviso al salir con geometría sin persistir (ADR D2): `geometryDirty` se limpia cuando el servidor confirma el guardado (M3-S13).
   useEffect(() => {
     if (!geometryDirty) return;
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (restoringRef.current) return;
       event.preventDefault();
       event.returnValue = "";
     };
@@ -1869,9 +1876,9 @@ export function EditorShell({
         saveErrorMessage={workspaceSave.errorMessage}
         canSave={status === "ready" && Boolean(document)}
         onSave={() => {
-          // Si hay geometría sucia, el guardado manual dispara el editor-save (M3-S13).
-          // El workspace-save clásico sigue disponible para los cambios de paleta/estructura.
-          if (geometryDirty && effectiveSavedProjectId) {
+          // Con un proyecto ya guardado SAVE es un checkpoint manual del editor (M3-S13): el save clásico regeneraría las capas desde el
+          // pipeline y pisaría la geometría editada. El clásico queda para el PRIMER guardado (staging, sin proyecto todavía).
+          if (effectiveSavedProjectId) {
             geometrySave.save();
           } else {
             workspaceSave.save();
@@ -1911,11 +1918,25 @@ export function EditorShell({
       )}
       {versionHistoryOpen && effectiveSavedProjectId && (
         <VersionHistoryPanel
+          key={effectiveSavedProjectId}
           projectId={effectiveSavedProjectId}
-          currentVersionNumber={document?.version ?? null}
+          currentVersionNumber={lastSavedVersion ?? document?.version ?? null}
           geometryDirty={geometryDirty}
           onClose={closeVersionHistory}
+          onBeforeRestore={suspendAutosave}
+          onRestored={handleRestored}
         />
+      )}
+      {geometrySave.conflictDetected && (
+        <div className="editor-shell__save-conflict" role="alert">
+          <span>{geometrySave.errorMessage}</span>
+          <button type="button" onClick={() => window.confirm("Se perderán los cambios no guardados. ¿Recargar el documento?") && window.location.reload()}>
+            Recargar documento
+          </button>
+          <button type="button" onClick={() => window.confirm("Reintentar puede sobrescribir los cambios de la otra versión. ¿Continuar?") && geometrySave.save()}>
+            Reintentar
+          </button>
+        </div>
       )}
 
       <div className="editor-shell__body">

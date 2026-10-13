@@ -19,27 +19,28 @@ S01–S12 mergeados en `main`:
 | S11 | Bridges + piezas flotantes | #58 |
 | S12 | EditorCommand v1 + HistoryPanel + ejecutor IA | #59 |
 
-2911 tests frontend verdes. Backend y Python sin regresiones.
+S13 (Autosave + Version History) implementada en la rama `sprint/3e8d77b2-m3-s13-autosave-version-history`; ver abajo.
 
 ## Decisiones clave
 
 - **Geometría pesada en Python/Shapely** (S04): el frontend manda anillos de polígonos, no paths SVG.
 - **EditorCommand v1** (S12): descripción declarativa sin SVG; el parche `EditorEdit` sigue siendo la fuente de reversión. Ejecutor preparado para MVP 4 (IA).
-- **Persistencia diferida a S13**: hasta S13, la geometría vive solo en memoria. `geometryDirty` avisa al cerrar.
-- **dotnet build falla por lock de OneDrive/MSBuild** (pre-existente, no de código). S12 y posteriores son frontend-only o se documentan si afecta al backend.
+- **Persistencia de geometría** (S13): `POST /api/v2/projects/{id}/document/editor-save` crea una `DocumentVersion` por guardado. `geometryDirty` ahora
+  significa "difiere de lo último que el servidor confirmó" (`saveMark`/`markSaved`); el undo no se reinicia al guardar, solo al restaurar una versión.
+  Con un proyecto ya guardado, SAVE es siempre un checkpoint del editor (el save clásico pisaría la geometría). Detalle en `docs/ADR_EDITOR_MVP3.md` (D5).
 
 ## Problemas abiertos
 
-- `dotnet build` falla intermitentemente por lock de OneDrive (`CoreGenerateAssemblyInfo`). No bloquea el sprint; se documenta en cada IMPL.md.
-- Docker Desktop puede no arrancar (WSL1 incompatible): `dotnet test` con Testcontainers falla en ese caso.
+- **Docker Desktop no arranca** (WSL1 incompatible, 2026-10-14): `dotnet test` con Testcontainers no corre. Los 26 casos E2E nuevos de `editor-save`
+  (en `VectorDocumentEndpointsTests`) compilan pero **no se han ejecutado**. Correrlos cuando vuelva Docker.
+- `dotnet build` falló intermitentemente por lock de OneDrive (`CoreGenerateAssemblyInfo`) en sesiones anteriores; hoy compiló bien.
+- El contrato de `editor-save` no lleva `baseVersion`: solo detecta escrituras simultáneas (409 por `xmin`), no "otra pestaña guardó antes".
+- El listado de versiones no expone el nº de capas (el endpoint es de M2.2-S06 y el spec de S13 prohíbe tocarlo): el panel muestra el tamaño en mm.
 
 ## En curso
 
-**S13 · Autosave + Version History** — rama `sprint/3e8d77b2-m3-s13-autosave-version-history`
-- Spec congelado, Notion en "Doing".
-- Agente implementador activo; ya escribió los contratos del endpoint `editor-save` en el backend.
-- Falta: servicio, endpoint, `useGeometrySave`, `VersionHistoryPanel`, tests, verificación final.
+**S13 · Autosave + Version History**: implementación y verificación local completas (frontend 2962 tests, build, lint, `dotnet build`). Falta PR → merge → Notion Done.
 
 ## Siguiente paso
 
-Retomar S13: verificar árbol (`git status`), correr `npm test`, completar implementación si el agente no terminó, luego verificar → commit → PR → merge → Notion Done → S14 (Laser Checker).
+Cerrar S13 (commit → PR → merge → Notion Done) y seguir con S14 (Laser Checker integrado, reusa el análisis de flotantes de S11).

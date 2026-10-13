@@ -68,12 +68,16 @@ function createServer(mode: "staging" | "saved") {
     { groupId: GROUP_B_ID, name: "Azul", colorHex: "#0000ff", vectorId: VECTOR_B_ID, order: 1, visible: true, locked: false, operation: "unassigned" },
   ];
   const calls: Call[] = [];
+  // Guardados de geometría (M3-S13): el autosave del editor es independiente de las escrituras de metadata que afirman estos tests.
+  const editorSaves: Array<Record<string, unknown>> = [];
   const control = {
     /** La próxima escritura que cumpla el predicado responde 500. */
     failWhen: null as null | ((call: Call) => boolean),
     /** La próxima escritura que cumpla el predicado queda en vuelo hasta `release()`. */
     holdWhen: null as null | ((call: Call) => boolean),
     release: null as null | (() => void),
+    /** El próximo editor-save responde 409 (sin registrarse como guardado). */
+    conflictOnNextEditorSave: false,
   };
 
   const sorted = () => [...layers].sort((a, b) => a.order - b.order);
@@ -116,6 +120,14 @@ function createServer(mode: "staging" | "saved") {
 
   const fetchMock = abortAwareFetch(async (url, init) => {
     const method = init?.method ?? "GET";
+    if (method === "POST" && url.endsWith("/document/editor-save")) {
+      if (control.conflictOnNextEditorSave) {
+        control.conflictOnNextEditorSave = false;
+        return jsonResponse({ code: "concurrency_conflict", message: "Conflicto de concurrencia." }, 409);
+      }
+      editorSaves.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return jsonResponse({ projectId: SAVED_PROJECT_ID, versionNumber: 1 + editorSaves.length, versionId: "55555555-5555-5555-5555-555555555555", createdAt: "2026-01-01T00:00:00Z" });
+    }
     if (method !== "GET") {
       const call: Call = { method, url, body: init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined };
       calls.push(call);
@@ -160,6 +172,12 @@ function createServer(mode: "staging" | "saved") {
       return jsonResponse({ code: "not_found", message: "No existe." }, 404);
     }
 
+    if (mode === "saved" && url.endsWith(`/api/v2/projects/${SAVED_PROJECT_ID}/versions`)) {
+      // La versión 1 es la cargada; cada editor-save agrega una (la más nueva primero, como el endpoint real).
+      const versions = [{ versionNumber: 1, origin: "VECTORIZE", createdAt: "2026-01-01T09:00:00Z", widthMm: 160, heightMm: 120, viewBox: "0 0 320 240", schemaVersion: 1 }];
+      editorSaves.forEach((body, index) => versions.unshift({ versionNumber: index + 2, origin: String(body.origin), createdAt: "2026-01-01T10:00:00Z", widthMm: 160, heightMm: 120, viewBox: "0 0 320 240", schemaVersion: 1 }));
+      return jsonResponse(versions);
+    }
     if (mode === "saved" && url.includes(`/api/v2/projects/${SAVED_PROJECT_ID}/document`)) {
       return jsonResponse({ projectId: SAVED_PROJECT_ID, schemaVersion: 1, widthMm: 160, heightMm: 120, viewBox: "0 0 320 240", versionNumber: 1, createdAt: "2026-01-01T00:00:00Z", layers: sorted().map(savedLayer) });
     }
@@ -228,7 +246,7 @@ function createServer(mode: "staging" | "saved") {
     return jsonResponse({ code: "not_found", message: "No existe." }, 404);
   });
   vi.stubGlobal("fetch", fetchMock);
-  return { fetchMock, calls, layers, control, find };
+  return { fetchMock, calls, editorSaves, layers, control, find };
 }
 
 type Server = ReturnType<typeof createServer>;
@@ -1083,5 +1101,135 @@ describe("EditorShell — el tipo de comando que deja cada ruta real de la UI (M
     fireEvent.drop(rows[0], { dataTransfer });
     await waitFor(() => expectLastCommand("layer.reorder"));
     await settle();
+  });
+});
+
+describe("EditorShell — guardado de geometría (M3-S13)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("ResizeObserver", ImmediateResizeObserver);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Una edición de geometría real: selecciona b1 y lo borra (un comando del historial). */
+  async function deleteObject(shell: Awaited<ReturnType<typeof renderShell>>) {
+    click(shell.canvas, 120, 120);
+    await screen.findByRole("heading", { name: "Objeto" });
+    press(shell.canvas, "Delete");
+    await waitFor(() => expect(historyTypes()).toHaveLength(1));
+    expect(screen.getByText(GEOMETRY_DIRTY)).toBeInTheDocument();
+  }
+  const saveButton = () => screen.getByRole("button", { name: /^Guardar$/ });
+  const beforeUnloadPrevented = () => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  };
+
+  it("SAVE con un proyecto guardado manda el editor-save (MANUAL_EDIT) con TODAS las capas; luego el indicador deja de decir 'sin guardar', se puede salir sin aviso y el historial sigue intacto", async () => {
+    const shell = await renderShell({ mode: "saved" });
+    await deleteObject(shell);
+    expect(beforeUnloadPrevented()).toBe(true);
+
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(shell.server.editorSaves).toHaveLength(1));
+    const [body] = shell.server.editorSaves;
+    expect(body).toMatchObject({ origin: "MANUAL_EDIT", schemaVersion: 1, viewBox: "0 0 320 240" });
+    expect((body.layers as Array<{ groupId: string }>).map((entry) => entry.groupId)).toEqual([GROUP_A_ID, GROUP_B_ID]);
+    expect(await screen.findByText("Geometría guardada")).toBeInTheDocument();
+    expect(screen.queryByText(GEOMETRY_DIRTY)).not.toBeInTheDocument();
+    expect(beforeUnloadPrevented()).toBe(false);
+    expect(undoButton()).toBeEnabled();
+    expect(historyEntries()).toHaveLength(1);
+    expect(shell.server.calls).toHaveLength(0); // ni PATCH ni save clásico
+  });
+
+  it("el autosave guarda SOLO tras 3 s sin editar (AUTOSAVE), sin tocar el botón", async () => {
+    const shell = await renderShell({ mode: "saved" });
+    await deleteObject(shell);
+    expect(shell.server.editorSaves).toHaveLength(0);
+
+    await waitFor(() => expect(shell.server.editorSaves).toHaveLength(1), { timeout: 6000 });
+
+    expect(shell.server.editorSaves[0].origin).toBe("AUTOSAVE");
+    await waitFor(() => expect(screen.queryByText(GEOMETRY_DIRTY)).not.toBeInTheDocument());
+  });
+
+  it("deshacer después de guardar vuelve a ensuciar (el servidor ya tiene el borrado) y el siguiente guardado manda la geometría restaurada", async () => {
+    const shell = await renderShell({ mode: "saved" });
+    await deleteObject(shell);
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(shell.server.editorSaves).toHaveLength(1));
+    await screen.findByText("Geometría guardada");
+
+    fireEvent.click(undoButton());
+
+    await waitFor(() => expect(screen.getByText(GEOMETRY_DIRTY)).toBeInTheDocument());
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(shell.server.editorSaves).toHaveLength(2));
+    const svgOf = (index: number) => (shell.server.editorSaves[index].layers as Array<{ groupId: string; svgContent: string }>).find((entry) => entry.groupId === GROUP_B_ID)!.svgContent;
+    expect(svgOf(1).length).toBeGreaterThan(svgOf(0).length); // el objeto borrado volvió a la capa B
+  });
+
+  it("SAVE sin cambios en un proyecto guardado es un checkpoint manual del editor, NUNCA el save clásico (que regeneraría las capas)", async () => {
+    const shell = await renderShell({ mode: "saved" });
+
+    fireEvent.click(saveButton());
+
+    await waitFor(() => expect(shell.server.editorSaves).toHaveLength(1));
+    expect(shell.server.editorSaves[0].origin).toBe("MANUAL_EDIT");
+    expect(shell.server.calls).toHaveLength(0);
+  });
+
+  it("en staging (sin proyecto todavía) SAVE usa el save clásico: no hay editor-save ni autosave de geometría ni botón Versiones", async () => {
+    const shell = await renderShell({ mode: "staging" });
+    expect(screen.queryByRole("button", { name: /Versiones/ })).not.toBeInTheDocument();
+    await deleteObject(shell);
+
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(shell.server.calls.some((call) => call.url.endsWith("/workspaces/save"))).toBe(true));
+
+    expect(shell.server.editorSaves).toHaveLength(0);
+  });
+
+  it("Versiones: abre el historial con la versión cargada como actual; tras guardar, la nueva versión pasa a ser la actual", async () => {
+    const shell = await renderShell({ mode: "saved" });
+    await deleteObject(shell);
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(shell.server.editorSaves).toHaveLength(1));
+
+    fireEvent.click(screen.getByRole("button", { name: /Versiones/ }));
+
+    const list = await screen.findByRole("list", { name: "Lista de versiones" });
+    const items = within(list).getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent("v2");
+    expect(items[0]).toHaveTextContent("(actual)"); // la que acaba de guardar ESTA sesión, no la cargada
+    expect(items[0]).toHaveTextContent("Guardado manual");
+    expect(items[1]).toHaveTextContent("v1");
+    expect(within(items[1]).getByRole("button", { name: /Restaurar versión 1/ })).toBeEnabled();
+  });
+
+  it("un guardado con conflicto (409) muestra el aviso con 'Recargar documento' y 'Reintentar', y no pierde la geometría", async () => {
+    const shell = await renderShell({ mode: "saved" });
+    await deleteObject(shell);
+    shell.server.control.conflictOnNextEditorSave = true;
+
+    fireEvent.click(saveButton());
+
+    const mentions = await screen.findAllByText(/Conflicto/); // el header y el aviso
+    expect(mentions.some((element) => element.closest('[role="alert"]') !== null)).toBe(true);
+    expect(screen.getByRole("button", { name: "Recargar documento" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reintentar" })).toBeInTheDocument();
+    expect(shell.server.editorSaves).toHaveLength(0); // nada se dio por guardado
+    expect(beforeUnloadPrevented()).toBe(true); // la geometría sigue sin guardar
+
+    // Reintentar (con la confirmación de que puede sobrescribir) guarda y cierra el aviso.
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "Reintentar" }));
+    await waitFor(() => expect(shell.server.editorSaves).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Recargar documento" })).not.toBeInTheDocument());
+    expect(beforeUnloadPrevented()).toBe(false);
+    confirm.mockRestore();
   });
 });

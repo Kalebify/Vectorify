@@ -1780,3 +1780,149 @@
   font-size: 12px;
   text-decoration: underline;
 }
+
+/* ---------- Historial de versiones y conflicto de guardado (M3-S13) ---------- */
+
+.editor-version-history-panel {
+  position: absolute;
+  top: 52px;
+  right: var(--editor-space-4);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-2);
+  width: min(400px, calc(100vw - 2 * var(--editor-space-4)));
+  max-height: min(70vh, 560px);
+  padding: var(--editor-space-3);
+  background: var(--editor-panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.editor-version-history-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.editor-version-history-panel__title {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-h);
+}
+
+.editor-version-history-panel__close {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: var(--editor-space-1);
+  font-size: 14px;
+}
+
+.editor-version-history-panel__loading,
+.editor-version-history-panel__empty,
+.editor-version-history-panel__error,
+.editor-version-history-panel__restore-error {
+  margin: 0;
+}
+
+.editor-version-history-panel__error,
+.editor-version-history-panel__restore-error {
+  color: var(--error);
+}
+
+.editor-version-history-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.editor-version-history-panel__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--editor-space-2);
+  padding: var(--editor-space-1) var(--editor-space-2);
+  background: var(--bg);
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+
+.editor-version-history-panel__item--current {
+  border-color: var(--accent);
+}
+
+.editor-version-history-panel__item-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--editor-space-1) var(--editor-space-2);
+}
+
+.editor-version-history-panel__item-number {
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.editor-version-history-panel__item-origin,
+.editor-version-history-panel__item-size,
+.editor-version-history-panel__item-date {
+  font-size: 11px;
+}
+
+.editor-version-history-panel__restore-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--accent);
+  cursor: pointer;
+  padding: var(--editor-space-1) var(--editor-space-2);
+  font-size: 12px;
+}
+
+.editor-version-history-panel__restore-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.editor-version-history-panel__restore-btn:focus-visible,
+.editor-version-history-panel__close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.editor-shell__save-conflict {
+  position: absolute;
+  left: var(--editor-space-2);
+  bottom: var(--editor-space-2);
+  z-index: 40;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--editor-space-2);
+  max-width: 60%;
+  padding: var(--editor-space-1) var(--editor-space-2);
+  border: 1px solid var(--error);
+  border-radius: 4px;
+  background: var(--editor-panel-bg);
+  color: var(--error);
+  font-size: 12px;
+}
+
+.editor-shell__save-conflict button {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+  text-decoration: underline;
+}

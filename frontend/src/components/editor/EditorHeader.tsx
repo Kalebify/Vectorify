@@ -106,13 +106,10 @@ export function EditorHeader({
 }: EditorHeaderProps) {
   const isSaving = saveState === "saving" || geometrySaveState === "saving";
 
-  // Prioridad de estados a mostrar:
-  // 1. Guardado de geometría en curso/error (M3-S13 activo) si hay geometryDirty o geometrySaveState activo
-  // 2. Error de workspaceSave clásico
-  // 3. Estado de geometría sin guardar
-  // 4. Estado clásico de workspaceSave
-  const hasActiveGeometrySave = geometrySaveState && geometrySaveState !== "idle";
-  const showGeometrySaveState = hasActiveGeometrySave && geometrySaveState !== undefined;
+  // Prioridad del indicador: 1) guardado de geometría en curso / con error / confirmado, 2) error del save clásico, 3) geometría sin guardar,
+  // 4) estado del save clásico. "Geometría guardada" solo si no quedaron ediciones posteriores al envío: nunca dice "guardado" con geometría pendiente.
+  const showGeometrySaveState =
+    geometrySaveState === "saving" || geometrySaveState === "error" || (geometrySaveState === "saved" && !geometryDirty);
   const showGeometryDirty = geometryDirty && !showGeometrySaveState && saveState !== "error" && saveState !== "saving";
 
   let dirtyStateText: string;
