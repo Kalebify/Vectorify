@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectLastCommand } from "../../test/history";
 import {
   GEOMETRY_DIRTY,
   installResizeObserver,
@@ -352,6 +353,7 @@ describe("EditorShell — Offset (M3-S09)", () => {
       expect(screen.getByText(GEOMETRY_DIRTY)).toBeInTheDocument();
       expect(screen.getByText(/Offset exterior de 1 mm aplicado: 1 objeto → 1 pieza en «Rojo»\. Los originales se conservaron\./)).toBeInTheDocument();
       expect(offsetCalls(fetchMock)).toHaveLength(1); // Apply usó el resultado ya calculado
+      expectLastCommand("geometry.offset"); // M3-S12
 
       fireEvent.click(undoButton());
       expect(pathData()).toEqual(before); // un único comando: un solo Deshacer devuelve todo, en el mismo orden

@@ -18,6 +18,14 @@ interface EditorHeaderProps {
   redoLabel?: string | null;
   onUndo?: () => void;
   onRedo?: () => void;
+  /** Por qué Deshacer / Rehacer están deshabilitados (M3-S12): va al tooltip y al nombre accesible, para no dejar un botón apagado sin explicación. */
+  undoDisabledReason?: string | null;
+  redoDisabledReason?: string | null;
+  /** Panel de Historial (M3-S12): botón de apertura, cuántas acciones hay y si hay un aviso/error pendiente de leer. Sin `onToggleHistory` el botón no se muestra. */
+  historyOpen?: boolean;
+  historyCount?: number;
+  historyAttention?: boolean;
+  onToggleHistory?: () => void;
 }
 
 const DIRTY_STATE_COPY: Record<WorkspaceSaveState, string> = {
@@ -71,6 +79,12 @@ export function EditorHeader({
   redoLabel = null,
   onUndo,
   onRedo,
+  undoDisabledReason = null,
+  redoDisabledReason = null,
+  historyOpen = false,
+  historyCount = 0,
+  historyAttention = false,
+  onToggleHistory,
 }: EditorHeaderProps) {
   const isSaving = saveState === "saving";
   // Un error de guardado y un guardado en curso siguen siendo lo más urgente de mostrar; en el resto de
@@ -95,26 +109,51 @@ export function EditorHeader({
       </div>
 
       <div className="editor-header__actions">
+        {onToggleHistory && (
+          <button
+            type="button"
+            id="editor-history-toggle"
+            className={`editor-header__button${historyAttention ? " editor-header__button--attention" : ""}`}
+            aria-expanded={historyOpen}
+            aria-controls="editor-history-panel"
+            onClick={onToggleHistory}
+            title={`Historial de acciones de esta sesión${historyAttention ? " (hay un aviso)" : ""}`}
+          >
+            Historial ({historyCount}){historyAttention ? " ⚠" : ""}
+          </button>
+        )}
         <button
           type="button"
           className="editor-header__button"
           disabled={!canUndo}
           onClick={onUndo}
           aria-label={undoLabel ? `Deshacer: ${undoLabel}` : "Deshacer"}
-          title={undoLabel ? `Deshacer: ${undoLabel} (Ctrl+Z)` : "Deshacer (Ctrl+Z)"}
+          aria-describedby={!canUndo && undoDisabledReason ? "editor-undo-reason" : undefined}
+          title={canUndo ? (undoLabel ? `Deshacer: ${undoLabel} (Ctrl+Z)` : "Deshacer (Ctrl+Z)") : undoDisabledReason ? `Deshacer no disponible: ${undoDisabledReason}` : "Deshacer (Ctrl+Z)"}
         >
           ↶
         </button>
+        {!canUndo && undoDisabledReason && (
+          <span id="editor-undo-reason" className="editor-sr-only">
+            Deshacer no disponible: {undoDisabledReason}
+          </span>
+        )}
         <button
           type="button"
           className="editor-header__button"
           disabled={!canRedo}
           onClick={onRedo}
           aria-label={redoLabel ? `Rehacer: ${redoLabel}` : "Rehacer"}
-          title={redoLabel ? `Rehacer: ${redoLabel} (Ctrl+Shift+Z)` : "Rehacer (Ctrl+Shift+Z)"}
+          aria-describedby={!canRedo && redoDisabledReason ? "editor-redo-reason" : undefined}
+          title={canRedo ? (redoLabel ? `Rehacer: ${redoLabel} (Ctrl+Shift+Z)` : "Rehacer (Ctrl+Shift+Z)") : redoDisabledReason ? `Rehacer no disponible: ${redoDisabledReason}` : "Rehacer (Ctrl+Shift+Z)"}
         >
           ↷
         </button>
+        {!canRedo && redoDisabledReason && (
+          <span id="editor-redo-reason" className="editor-sr-only">
+            Rehacer no disponible: {redoDisabledReason}
+          </span>
+        )}
         <button
           type="button"
           className="editor-header__button editor-header__button--primary"

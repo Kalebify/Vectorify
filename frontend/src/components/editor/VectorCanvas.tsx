@@ -11,8 +11,8 @@ import { dimRects, sourceFrameOf } from "../../lib/editor/frame";
 import type { OrientationStep } from "../../lib/editor/orientation";
 import { describeSkipped, planDelete } from "../../lib/editor/clipboard";
 import { cycleHit, replaceObjects, resolveSelection, splitByLock, toggleId } from "../../lib/editor/selection";
-import { translate } from "../../lib/editor/transform";
-import type { DocumentFrame, EditableDocument, EditorObject, Point, Rect } from "../../lib/editor/types";
+import { moveProduction } from "../../lib/editor/operations";
+import type { DocumentFrame, EditorObject, Point, Rect } from "../../lib/editor/types";
 import { screenToleranceToDocument } from "../../lib/editor/units";
 import { screenToDocument, type ViewportParams } from "../../lib/editor/viewport";
 import { IDENTITY_MATRIX, type AffineMatrix } from "../../lib/svgTransform";
@@ -118,6 +118,8 @@ type Interaction =
       wasSelected: boolean;
       dragIds: string[];
       gestureStarted: boolean;
+      /** Desplazamiento total del último frame del arrastre (unidades de documento): es el parámetro del comando `object.move`. */
+      delta: Point;
     }
   | {
       kind: "marquee";
@@ -152,13 +154,6 @@ function lockNotice(result: ApplyEditResult): string | null {
 function nodeMatrix(node: Konva.Node): AffineMatrix {
   const [a, b, c, d, e, f] = node.getTransform().getMatrix();
   return { a, b, c, d, e, f };
-}
-
-function moveProduction(state: EditableDocument, ids: ReadonlySet<string>, dx: number, dy: number) {
-  const targets = Object.values(state.objectsByLayer)
-    .flat()
-    .filter((object) => ids.has(object.id));
-  return replaceObjects(state, targets, (found) => translate(found, dx, dy));
 }
 
 /**
@@ -468,6 +463,7 @@ export function VectorCanvas({
         wasSelected,
         // Click sobre un objeto ya seleccionado arrastra TODA la selección; sobre uno no seleccionado, solo ese.
         dragIds: wasSelected ? [...selectedObjectIds] : [hit.id],
+        delta: { x: 0, y: 0 },
         gestureStarted: false,
       };
       return;
@@ -534,7 +530,9 @@ export function VectorCanvas({
       const docPoint = screenToDocument(screenPoint, viewport);
       // Cada frame se recompone desde el estado ANTES del gesto + el delta total (sin acumular error).
       const ids = new Set(interaction.dragIds);
-      const result = previewEdit((state) => moveProduction(state, ids, docPoint.x - interaction.startDoc.x, docPoint.y - interaction.startDoc.y));
+      interaction.delta = { x: docPoint.x - interaction.startDoc.x, y: docPoint.y - interaction.startDoc.y };
+      const { x: dx, y: dy } = interaction.delta;
+      const result = previewEdit((state) => moveProduction(state, ids, dx, dy));
       if (!result.applied && result.reason === "blocked") setNotice(lockNotice(result));
       return;
     }
@@ -557,7 +555,13 @@ export function VectorCanvas({
           return;
         }
         const count = interaction.dragIds.length;
-        reportEditResult(commitGesture(`Mover ${plural(count, "objeto", "objetos")}`));
+        reportEditResult(
+          commitGesture({
+            type: "object.move",
+            label: `Mover ${plural(count, "objeto", "objetos")}`,
+            parameters: { dx: interaction.delta.x, dy: interaction.delta.y },
+          }),
+        );
         return;
       }
       // Click simple sobre un objeto de una multi-selección: la selección se reduce a ese objeto.
@@ -622,6 +626,8 @@ export function VectorCanvas({
     // del objeto: el error de descomposición de Konva se cancela y la matriz se recompone desde el estado "antes".
     const updates = new Map<string, AffineMatrix>();
     let valid = true;
+    // La matriz de gesto del primer objeto describe el handle (todos los nodos del Transformer comparten el mismo gesto): de ella salen los parámetros del comando.
+    let firstGesture: AffineMatrix | null = null;
     for (const object of session.objects) {
       const node = nodesRef.current.get(object.id);
       const start = session.startMatrices.get(object.id);
@@ -629,6 +635,7 @@ export function VectorCanvas({
       const end = nodeMatrix(node);
       const inverse = invertMatrix(start);
       const gesture = inverse ? composeMatrices(end, inverse) : null;
+      firstGesture ??= gesture;
       const next = gesture ? composeMatrices(gesture, object.matrix) : end;
       if (!isFiniteMatrix(next)) {
         valid = false;
@@ -639,8 +646,13 @@ export function VectorCanvas({
 
     const rotating = session.anchor === "rotater";
     const label = `${rotating ? "Rotar" : "Escalar"} ${plural(session.objects.length, "objeto", "objetos")}`;
+    // Los parámetros DESCRIBEN el gesto (no son su fuente: el parche guarda la matriz exacta). Rotar: el giro en grados; escalar: los factores sobre cada eje.
+    const gestureMatrix: AffineMatrix = firstGesture ?? IDENTITY_MATRIX;
+    const parameters = rotating
+      ? { degrees: (Math.atan2(gestureMatrix.b, gestureMatrix.a) * 180) / Math.PI }
+      : { sx: Math.hypot(gestureMatrix.a, gestureMatrix.b) * Math.sign(gestureMatrix.a || 1), sy: Math.hypot(gestureMatrix.c, gestureMatrix.d) * Math.sign(gestureMatrix.d || 1) };
     const result = valid
-      ? applyEdit(label, (state) => {
+      ? applyEdit({ type: rotating ? "object.rotate" : "object.scale", label, parameters }, (state) => {
           const ids = new Set(updates.keys());
           const targets = Object.values(state.objectsByLayer)
             .flat()
@@ -700,7 +712,7 @@ export function VectorCanvas({
     const first = selectedObjects[0].id;
     const last = selectedObjects[selectedObjects.length - 1].id;
     reportEditResult(
-      applyEdit(`Mover ${plural(ids.size, "objeto", "objetos")}`, (state) => moveProduction(state, ids, dx, dy), {
+      applyEdit({ type: "object.nudge", label: `Mover ${plural(ids.size, "objeto", "objetos")}`, parameters: { dx, dy } }, (state) => moveProduction(state, ids, dx, dy), {
         // Una ráfaga de flechas sobre la MISMA selección es un solo comando de undo.
         coalesceKey: `nudge:${ids.size}:${first}:${last}`,
       }),
@@ -720,7 +732,7 @@ export function VectorCanvas({
       setNotice(plan.error);
       return;
     }
-    const result = applyEdit(plan.label, () => production);
+    const result = applyEdit({ type: "object.delete", label: plan.label }, () => production);
     if (!result.applied) {
       reportEditResult(result);
       return;

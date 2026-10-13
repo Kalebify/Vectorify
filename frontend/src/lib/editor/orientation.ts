@@ -102,6 +102,29 @@ export function orientationLabel(orientation: Orientation): string {
   return `Reflejar horizontalmente y rotar ${TURN_LABEL[turns]}`;
 }
 
+/**
+ * Descripción declarativa de una orientación para el historial de comandos (M3-S12): giro puro (`rotate`, 1..3 cuartos de vuelta horarios)
+ * o reflejo (`flip`: reflejar sobre `axis` y DESPUÉS girar `quarterTurns` cuartos de vuelta horarios). Es la misma regla que `orientationLabel`:
+ * `O = R · F_h` (primero se refleja, después se gira), con el reflejo vertical puro (`R180 · F_h`) nombrado como tal. `null` = identidad.
+ */
+export type OrientationCommand = { kind: "rotate"; quarterTurns: number } | { kind: "flip"; axis: "horizontal" | "vertical"; quarterTurns: number };
+
+export function orientationCommand(orientation: Orientation): OrientationCommand | null {
+  if (isIdentityOrientation(orientation)) return null;
+  if (!isReflection(orientation)) return { kind: "rotate", quarterTurns: clockwiseTurns(orientation) };
+  const turns = clockwiseTurns(multiplyOrientations(orientation, STEP_ORIENTATION["flip-horizontal"]));
+  if (turns === 2) return { kind: "flip", axis: "vertical", quarterTurns: 0 };
+  return { kind: "flip", axis: "horizontal", quarterTurns: turns };
+}
+
+/** Inversa de `orientationCommand`: la orientación que describe un comando `rotate`/`flip` (para el ejecutor declarativo). */
+export function orientationFromCommand(command: OrientationCommand): Orientation {
+  let result = IDENTITY_ORIENTATION;
+  if (command.kind === "flip") result = composeOrientation(result, command.axis === "horizontal" ? "flip-horizontal" : "flip-vertical");
+  for (let turn = 0; turn < command.quarterTurns; turn += 1) result = composeOrientation(result, "rotate-cw");
+  return result;
+}
+
 /** Verbo (futuro) para frases como "Se rotará la selección": rotación pura, reflejo puro o combinación. */
 export function orientationVerb(orientation: Orientation): "rotará" | "reflejará" | "transformará" {
   if (!isReflection(orientation)) return "rotará";

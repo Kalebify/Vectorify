@@ -80,6 +80,7 @@ export function isTextEntry(target: EventTarget | null): boolean {
 export function describeEditFailure(result: ApplyEditResult): string {
   if (result.reason === "blocked") return "La capa está bloqueada u oculta: no se puede modificar. Desbloqueala o mostrala en el panel de Capas. No se hizo ningún cambio.";
   if (result.reason === "gesture_active") return "Hay una transformación pendiente: aplicala (Apply) o cancelala (Cancel) antes de editar.";
+  if (result.reason === "history_busy") return "Se está guardando un cambio de capa (deshacer o rehacer): esperá un momento y volvé a intentar. No se hizo ningún cambio.";
   return "No hubo cambios para aplicar.";
 }
 
@@ -173,7 +174,21 @@ export function useDrawEraseTools({ activeTool, editable, layers, activeGroupId,
       }
 
       const finalObjects = objects;
-      const result = applyEdit(label, (current) => buildDrawProduction(current, finalObjects, target));
+      // Parámetros DESCRIPTIVOS: nunca los puntos del trazo (geometría cruda), solo su cantidad.
+      const result = applyEdit(
+        {
+          type: "object.draw",
+          label,
+          parameters: {
+            closed: plan.closed,
+            pointCount: plan.points.length,
+            lineWidthMm: Number.isFinite(state.lineWidthMm) ? state.lineWidthMm : undefined,
+            normalized: plan.needsNormalize,
+            pieceCount: finalObjects.length,
+          },
+        },
+        (current) => buildDrawProduction(current, finalObjects, target),
+      );
       if (!result.applied) {
         setDrawMessage(describeEditFailure(result));
         return false;
@@ -258,7 +273,7 @@ export function useDrawEraseTools({ activeTool, editable, layers, activeGroupId,
         return;
       }
       const removableIds = new Set(hit.filter((object) => !locked.has(object.layerGroupId)).map((object) => object.id));
-      const result = applyEdit(`Borrar ${plural(plan.removed, "objeto", "objetos")}`, (state) => removeObjects(state, removableIds));
+      const result = applyEdit({ type: "object.erase.objects", label: `Borrar ${plural(plan.removed, "objeto", "objetos")}` }, (state) => removeObjects(state, removableIds));
       if (!result.applied) {
         setEraseMessage(describeEditFailure(result));
         return;
@@ -310,7 +325,14 @@ export function useDrawEraseTools({ activeTool, editable, layers, activeGroupId,
         onNotice(eraseNotice(applied.summary, plan));
         return;
       }
-      const result = applyEdit(eraseLabel(applied.summary), (current) => (current.objectsByLayer === fresh.objectsByLayer ? production : null));
+      const result = applyEdit(
+        {
+          type: "object.erase.subtract",
+          label: eraseLabel(applied.summary),
+          parameters: { radiusMm: Number.isFinite(state.radiusMm) ? state.radiusMm : undefined, scope: state.scope, strokePointCount: points.length, pieceCount: applied.summary.created },
+        },
+        (current) => (current.objectsByLayer === fresh.objectsByLayer ? production : null),
+      );
       if (!result.applied) {
         setEraseMessage(describeEditFailure(result));
         return;

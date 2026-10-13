@@ -4,8 +4,8 @@
   "title": "M3-S12 · Undo / Redo + Command History",
   "stack": "Frontend, Vector (ASP.NET Core sin cambios) -- EditorCommand v1 versionado y tipado para TODAS las operaciones mutantes, historial de sesion con jumpTo y panel, metadata de capa dentro del historial (PATCH inverso), ejecutor declarativo para IA (MVP 4)",
   "branch": "sprint/3e8d77b2-m3-s12-undo-history",
-  "column": "Doing",
-  "phase": "implementation",
+  "column": "Done",
+  "phase": "done",
   "fix_rounds": 0,
   "preview_url": null,
   "pr_url": null,
@@ -14,6 +14,7 @@
     "Corrida autonoma de MVP 3 (S01..S16) confirmada por el usuario: mergea el orquestador; ante un error la tarjeta pasa a Bloqueado y se sigue.",
     "DECISION: el motor de snapshots before/after (S01) se conserva; EditorCommand v1 es la descripcion declarativa y serializable (sin SVG) que cuelga de cada entrada del historial.",
     "DECISION: historial de sesion en memoria (se pierde al recargar); la persistencia entre sesiones es M3-S13. ASP.NET Core sin cambios: la validacion de comandos de IA en servidor es de MVP 4.",
-    "DECISION: la metadata de capa entra al historial; undo/redo re-persisten con el mismo PATCH y un PATCH inverso que falla no mueve el puntero ni corrompe el estado."
+    "DECISION: la metadata de capa entra al historial; undo/redo re-persisten con el mismo PATCH y un PATCH inverso que falla no mueve el puntero ni corrompe el estado.",
+    "ENV: dotnet build falla por lock de OneDrive/MSBuild (CoreGenerateAssemblyInfo) -- problema de sistema pre-existente, no de codigo. S12 es frontend-only (0 cambios en backend/)."
   ]
 }

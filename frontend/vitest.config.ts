@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  // M3-S12: `commandCoverage.test.ts` lee `docs/*.md` (fuera del root del frontend) con `?raw` para verificar que la documentación de comandos cubre el registro.
+  server: { fs: { allow: ['..'] } },
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],

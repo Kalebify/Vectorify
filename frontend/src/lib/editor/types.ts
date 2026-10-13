@@ -115,12 +115,30 @@ export interface EditorLayerChange {
 }
 
 /**
- * Comando de edición (ADR D2): determinista y serializable -- `undo`
- * restaura `before`, `redo` restaura `after` de cada capa tocada.
+ * Cambio de metadata de UNA capa (M3-S12): nombre, visibilidad, bloqueo, operación de fabricación u orden del panel de capas. Entra al historial
+ * como un `EditorEdit` sin objetos (`touched: {}`) con este cambio colgando de `meta`. Deshacer/rehacer lo vuelven a PERSISTIR con el mismo PATCH
+ * que lo originó (capas del servidor) o lo aplican en local (capas `isNew`, que no existen en el servidor). `layerName` es el nombre vigente de la
+ * capa al hacer el cambio (solo para etiquetas legibles; la identidad es `groupId`). `order` lista TODAS las capas efectivas (servidor + `isNew`).
+ */
+export type LayerMetaChange =
+  | { kind: "rename"; groupId: string; layerName: string; before: string; after: string }
+  | { kind: "visible"; groupId: string; layerName: string; before: boolean; after: boolean }
+  | { kind: "locked"; groupId: string; layerName: string; before: boolean; after: boolean }
+  | { kind: "operation"; groupId: string; layerName: string; before: ManufacturingOperationValue; after: ManufacturingOperationValue }
+  | { kind: "order"; before: string[]; after: string[] };
+
+/**
+ * Parche de deshacer de un comando (ADR D2): determinista y serializable -- `undo`
+ * restaura `before`, `redo` restaura `after` de cada capa tocada. Desde M3-S12 cada
+ * entrada del historial es `{ command, patch }` (ver `commands.ts`): el `command`
+ * (`EditorCommand` v1) DESCRIBE la operación sin geometría cruda y este `patch`
+ * sigue siendo la fuente de la reversión exacta (snapshots).
  */
 export interface EditorEdit {
   label: string;
   touched: Record<string, EditorLayerChange>;
+  /** Cambio de metadata de capa (M3-S12): comando sin objetos, cuya reversión re-persiste el valor anterior/siguiente. */
+  meta?: LayerMetaChange;
   /** Cambio de marco (M3-S02), opcional: los comandos de S01 no lo traen y se comportan igual. Atómico con `touched`: un solo undo/redo. */
   frame?: { before: DocumentFrame; after: DocumentFrame };
   /**

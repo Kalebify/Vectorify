@@ -2,6 +2,7 @@ import Konva from "konva";
 import { StrictMode } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectLastCommand } from "../../test/history";
 import { abortAwareFetch, svgResponse } from "../../test/abortableFetch";
 import { EditorShell } from "./EditorShell";
 
@@ -754,6 +755,7 @@ describe("EditorShell — Color / Recolor con alcance (M3-S03)", () => {
     fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Confirmar" }));
 
     expect(screen.getByRole("button", { name: "Deshacer: Fusionar «Azul» con «Rojo 2»" })).toBeEnabled();
+    expectLastCommand("object.merge"); // M3-S12
     expect(layerNames()).toEqual(["Rojo", "Azul", "Rojo 2"]); // «Azul» NO se eliminó
     expect(screen.getByText(/«Azul» quedó vacía \(no se eliminó\)\./)).toBeInTheDocument();
     expect(pathByData(B1).fill()).toBe("#ff0000");

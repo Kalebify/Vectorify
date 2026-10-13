@@ -5,6 +5,8 @@ import {
   IDENTITY_ORIENTATION,
   isIdentityOrientation,
   orientationAboutMatrix,
+  orientationCommand,
+  orientationFromCommand,
   orientationLabel,
   orientationVerb,
   orientObjects,
@@ -212,5 +214,60 @@ describe("orientSelectionProduction", () => {
     expect(orientSelectionProduction(state, new Set(["a"]), IDENTITY_ORIENTATION)).toBeNull();
     expect(orientSelectionProduction(state, new Set(["nope"]), CW)).toBeNull();
     expect(orientSelectionProduction(state, new Set(), CW)).toBeNull();
+  });
+});
+
+describe("orientationCommand / orientationFromCommand (M3-S12: la orientación como comando declarativo)", () => {
+  const STEPS: OrientationStep[] = ["rotate-cw", "rotate-ccw", "flip-horizontal", "flip-vertical"];
+
+  /** Las 8 simetrías del cuadrado, alcanzadas por todas las secuencias de hasta 4 pasos. */
+  function allOrientations(): Orientation[] {
+    const found = new Map<string, Orientation>();
+    let frontier: Orientation[] = [IDENTITY_ORIENTATION];
+    found.set(JSON.stringify(IDENTITY_ORIENTATION), IDENTITY_ORIENTATION);
+    for (let depth = 0; depth < 4; depth += 1) {
+      const next: Orientation[] = [];
+      for (const orientation of frontier) {
+        for (const step of STEPS) {
+          const composed = composeOrientation(orientation, step);
+          const key = JSON.stringify(composed);
+          if (!found.has(key)) {
+            found.set(key, composed);
+            next.push(composed);
+          }
+        }
+      }
+      frontier = next;
+    }
+    return [...found.values()];
+  }
+
+  it("hay 8 simetrías y TODAS hacen ida y vuelta exacta (la identidad es null)", () => {
+    const all = allOrientations();
+    expect(all).toHaveLength(8);
+    for (const orientation of all) {
+      const command = orientationCommand(orientation);
+      if (isIdentityOrientation(orientation)) {
+        expect(command).toBeNull();
+        continue;
+      }
+      expect(orientationFromCommand(command!), JSON.stringify(command)).toEqual(orientation);
+    }
+  });
+
+  it("los giros puros son rotate con 1..3 cuartos de vuelta horarios y los reflejos puros se nombran por su eje", () => {
+    expect(orientationCommand(run("rotate-cw"))).toEqual({ kind: "rotate", quarterTurns: 1 });
+    expect(orientationCommand(run("rotate-cw", "rotate-cw"))).toEqual({ kind: "rotate", quarterTurns: 2 });
+    expect(orientationCommand(run("rotate-ccw"))).toEqual({ kind: "rotate", quarterTurns: 3 });
+    expect(orientationCommand(run("flip-horizontal"))).toEqual({ kind: "flip", axis: "horizontal", quarterTurns: 0 });
+    expect(orientationCommand(run("flip-vertical"))).toEqual({ kind: "flip", axis: "vertical", quarterTurns: 0 });
+    // Reflejo + giro: se refleja primero y se gira después (la misma regla que orientationLabel).
+    expect(orientationCommand(run("flip-horizontal", "rotate-cw"))).toEqual({ kind: "flip", axis: "horizontal", quarterTurns: 1 });
+  });
+
+  it("orientationFromCommand es exacta (sin -0 ni residuos de punto flotante)", () => {
+    expect(orientationFromCommand({ kind: "rotate", quarterTurns: 4 })).toEqual(IDENTITY_ORIENTATION);
+    expect(Object.is(orientationFromCommand({ kind: "flip", axis: "horizontal", quarterTurns: 0 }).b, 0)).toBe(true);
+    expect(orientationFromCommand({ kind: "flip", axis: "vertical", quarterTurns: 0 })).toEqual({ a: 1, b: 0, c: 0, d: -1 });
   });
 });

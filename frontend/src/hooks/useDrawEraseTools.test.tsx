@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { IDENTITY_MATRIX } from "../lib/svgTransform";
 import { abortAwareFetch } from "../test/abortableFetch";
 import type { EditableDocument, EditableLayerMeta, EditorObject, EditProduction } from "../lib/editor/types";
+import type { CommandDraft } from "../lib/editor/commands";
 import type { ApplyEditResult } from "./useEditableDocument";
 import { useDrawEraseTools } from "./useDrawEraseTools";
 
@@ -23,10 +24,10 @@ const SQUARE: EditorObject = { id: "sq", layerGroupId: "A", d: "M0 0 H40 V40 H0 
 function setup(options: { layers?: EditableLayerMeta[]; activeGroupId?: string | null; objects?: Record<string, EditorObject[]>; activeTool?: string } = {}) {
   const layers = options.layers ?? [layer("A")];
   const state: EditableDocument = { objectsByLayer: options.objects ?? { A: [SQUARE] }, layers };
-  const commands: Array<{ label: string; production: EditProduction | null }> = [];
-  const applyEdit = vi.fn((label: string, producer: (current: EditableDocument) => EditProduction | null): ApplyEditResult => {
+  const commands: Array<{ label: string; draft: CommandDraft; production: EditProduction | null }> = [];
+  const applyEdit = vi.fn((draft: CommandDraft, producer: (current: EditableDocument) => EditProduction | null): ApplyEditResult => {
     const production = producer(state);
-    commands.push({ label, production });
+    commands.push({ label: draft.label ?? "", draft, production });
     return production ? { applied: true, skippedLockedObjects: 0, skippedHiddenObjects: 0 } : { applied: false, reason: "no_change", skippedLockedObjects: 0, skippedHiddenObjects: 0 };
   });
   const selectGroup = vi.fn();

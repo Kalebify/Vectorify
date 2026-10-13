@@ -122,4 +122,52 @@ describe("EditorHeader", () => {
     fireEvent.click(retryButton);
     expect(onSave).toHaveBeenCalled();
   });
+
+  describe("historial (M3-S12)", () => {
+    it("sin onToggleHistory no hay botón de Historial", () => {
+      renderHeader();
+      expect(screen.queryByRole("button", { name: /^Historial/ })).not.toBeInTheDocument();
+    });
+
+    it("el botón Historial muestra cuántas acciones hay, expone aria-expanded/aria-controls y avisa (⚠) cuando hay algo sin leer", () => {
+      const onToggleHistory = vi.fn();
+      const { rerender } = render(
+        <EditorHeader projectName="p.svg" onClose={vi.fn()} saveState="idle" saveErrorMessage={null} canSave onSave={vi.fn()} onToggleHistory={onToggleHistory} historyCount={3} historyOpen={false} />,
+      );
+      const button = screen.getByRole("button", { name: "Historial (3)" });
+      expect(button).toHaveAttribute("aria-expanded", "false");
+      expect(button).toHaveAttribute("aria-controls", "editor-history-panel");
+      expect(button).toHaveAttribute("id", "editor-history-toggle");
+      expect(button.className).not.toContain("attention");
+      fireEvent.click(button);
+      expect(onToggleHistory).toHaveBeenCalledTimes(1);
+
+      rerender(
+        <EditorHeader projectName="p.svg" onClose={vi.fn()} saveState="idle" saveErrorMessage={null} canSave onSave={vi.fn()} onToggleHistory={onToggleHistory} historyCount={3} historyOpen historyAttention />,
+      );
+      const open = screen.getByRole("button", { name: /^Historial/ });
+      expect(open).toHaveAttribute("aria-expanded", "true");
+      expect(open).toHaveTextContent("⚠");
+      expect(open).toHaveAttribute("title", "Historial de acciones de esta sesión (hay un aviso)");
+      expect(open.className).toContain("editor-header__button--attention");
+    });
+
+    it("Deshacer / Rehacer deshabilitados explican POR QUÉ (title y descripción accesible) sin cambiar su nombre accesible", () => {
+      renderHeader({ undoDisabledReason: "no hay nada que deshacer", redoDisabledReason: "hay un cambio de capa guardándose" });
+      const undo = screen.getByRole("button", { name: "Deshacer" });
+      const redo = screen.getByRole("button", { name: "Rehacer" });
+      expect(undo).toBeDisabled();
+      expect(undo).toHaveAttribute("title", "Deshacer no disponible: no hay nada que deshacer");
+      expect(undo).toHaveAccessibleDescription("Deshacer no disponible: no hay nada que deshacer");
+      expect(redo).toHaveAttribute("title", "Rehacer no disponible: hay un cambio de capa guardándose");
+      expect(redo).toHaveAccessibleDescription("Rehacer no disponible: hay un cambio de capa guardándose");
+    });
+
+    it("habilitados NO muestran el motivo aunque se lo pasen (solo la siguiente acción)", () => {
+      renderHeader({ canUndo: true, canRedo: true, undoLabel: "Mover 2 objetos", redoLabel: "Rotar 1 objeto", undoDisabledReason: "x", redoDisabledReason: "y" });
+      expect(screen.getByRole("button", { name: "Deshacer: Mover 2 objetos" })).toHaveAttribute("title", "Deshacer: Mover 2 objetos (Ctrl+Z)");
+      expect(screen.getByRole("button", { name: "Rehacer: Rotar 1 objeto" })).toHaveAttribute("title", "Rehacer: Rotar 1 objeto (Ctrl+Shift+Z)");
+      expect(screen.getByRole("button", { name: "Deshacer: Mover 2 objetos" })).not.toHaveAttribute("aria-describedby");
+    });
+  });
 });

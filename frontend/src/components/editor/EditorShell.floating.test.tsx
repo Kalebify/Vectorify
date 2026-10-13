@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectLastCommand } from "../../test/history";
 import {
   clickAt,
   GEOMETRY_DIRTY,
@@ -612,6 +613,7 @@ describe("EditorShell — piezas flotantes y bridges (M3-S11)", () => {
       expect(screen.getByText(GEOMETRY_DIRTY)).toBeInTheDocument();
       expect(screen.getByText(/Se aplicaron 2 bridges de 0.8 mm: 2 flotantes → 0\./)).toBeInTheDocument();
       expect(toolButton()).toHaveAttribute("aria-pressed", "false");
+      expectLastCommand("geometry.bridge"); // M3-S12
 
       fireEvent.click(undoButton());
       expect(pathData()).toEqual(before); // UN solo undo vuelve todo

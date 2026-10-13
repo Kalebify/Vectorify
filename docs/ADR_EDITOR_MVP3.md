@@ -34,19 +34,41 @@ Coordenadas: **espacio de documento** = unidades del `viewBox` del VectorDocumen
 documento × `mmPerUnit`, con `mmPerUnit = widthMm / viewBoxWidth` (helper único `lib/editor/units.ts`; el
 Inspector muestra y acepta mm). Ninguna operación guarda coordenadas de pantalla.
 
-### D2. Estado editable y comandos (undo/redo desde S01)
+### D2. Estado editable y comandos (undo/redo desde S01; historial de comandos en M3-S12)
 - `EditableDocument` (en memoria, `lib/editor/`) = `{ objectsByLayer: Record<layerGroupId, EditorObject[]> }`
-  derivado de los SVG de las capas. La metadata de capas sigue en `useVectorDocument` (PATCH, M2.2).
-- Toda mutación geométrica pasa por **un único punto**: `applyEdit(label, producer)` del hook
-  `useEditableDocument`. `producer(state)` devuelve `{ layers: { [layerGroupId]: EditorObject[] } }` con las
-  capas **tocadas**; el comando guarda `before`/`after` de esas capas (snapshots inmutables). `undo` restaura
-  `before`, `redo` restaura `after`. Es determinista y serializable (`{label, touched layers, before, after}`),
-  apto para historial de sesión (S12) y para IA futura.
-- Gestos continuos (drag/scale/rotate) generan **un** comando al soltar (no uno por frame); durante el gesto la
-  vista usa un estado transitorio.
+  derivado de los SVG de las capas. La metadata de capas del servidor sigue en `useVectorDocument` (PATCH, M2.2).
+- Toda mutación geométrica pasa por **un único punto**: `applyEdit(draft, producer)` del hook
+  `useEditableDocument` (o `commitGesture(draft)` para un gesto). `producer(state)` devuelve `{ layers: { [layerGroupId]: EditorObject[] } }`
+  con las capas **tocadas**; el **parche** (`EditorEdit`) guarda `before`/`after` de esas capas (snapshots inmutables). `undo` restaura
+  `before`, `redo` restaura `after`. Es determinista y la fuente de la reversión **exacta**.
+- **Comandos versionados (M3-S12).** Cada entrada del historial es `HistoryEntry = { command, patch }`. El `patch` es el `EditorEdit` de arriba (el motor de
+  snapshots **no se reescribió**). El `command` es un **`EditorCommand` v1** (`lib/editor/commands.ts`), JSON puro:
+  `{ version: 1, id, sequence, type, label, targets: { layerIds, objectIds }, parameters, origin: "user" | "ai" | "system", timestamp }`. `type` sale de un
+  **registro cerrado** de 44 tipos (`COMMAND_TYPES`/`COMMAND_REGISTRY`: `object.*`, `path.*`, `document.*`, `selection.*`, `arrange.*`, `geometry.*`, `layer.*`) que cubre
+  TODAS las operaciones mutantes de MVP 3, incluida la metadata de capa; un tipo desconocido es un error de programación (lanza antes de tocar el documento). Los
+  `targets` se derivan de lo que el parche realmente cambió; los `parameters` son números, enums, ids y textos cortos validados contra el esquema del tipo y
+  **jamás** `d`, SVG, puntos ni matrices (así el historial se exporta y se revisa sin exponer la geometría y una IA puede emitir los mismos comandos sin tocar el SVG).
+  Cada call-site de `applyEdit`/`commitGesture` aporta un `CommandDraft` (`type` + `parameters` + `origin`; `label` opcional): el compilador, `checkDraft` en ejecución y
+  `commandCoverage.test.ts` impiden un `applyEdit` sin tipo o un tipo que ninguna ruta emita. Referencia completa, con parámetros por tipo y ejemplos:
+  **`docs/EDITOR_COMMANDS.md`**.
+- **Historial de sesión** (en `useEditableDocument`): lista lineal con puntero, `undo`/`redo`/`jumpTo(entryId)` (varios pasos de una vez), `canUndo`/`canRedo`,
+  `undoCommand`/`redoCommand`, `historyEntries`, `clearHistory()`, `exportHistory()` (solo comandos, sin parches ni SVG) y límite configurable (200 por defecto: al desbordar se
+  descarta el más viejo y el panel **avisa una vez**). Una acción nueva tras un undo descarta la rama de rehacer. Gestos continuos (drag/scale/rotate/nodos) generan **un** comando
+  al soltar (no uno por frame; durante el gesto la vista usa un estado transitorio) y una ráfaga con la misma `coalesceKey` (flechas) se funde en un comando con los parámetros
+  acumulados. **Alcance del reload:** el historial vive **en memoria**, solo en la sesión: recargar o cerrar lo pierde (persistir versiones es M3-S13) y se reinicia, con aviso
+  visible, cuando el documento se regenera por debajo (cambia el `svgUrl` de una capa cargada) o se abre otro documento.
+- **Metadata de capa dentro del historial (M3-S12).** Renombrar, bloquear, mostrar/ocultar, cambiar la operación de fabricación y reordenar son comandos sin objetos
+  (`EditorEdit.meta`). Se registran **solo cuando el servidor confirma**; deshacer/rehacer **re-persisten el valor anterior/siguiente con el mismo PATCH** (PATCH v2 con proyecto
+  guardado, sidecars clásicos sin guardar), sin escritura optimista; si el PATCH inverso **falla** no cambia nada (ni el estado local ni el puntero), queda un error visible y
+  se puede reintentar; mientras hay una escritura de metadata en vuelo, undo/redo quedan deshabilitados. Las capas `isNew` se editan solo en local (cero red). `Isolate` y otros
+  estados puramente de vista no son comandos.
+- **Ejecutor declarativo para IA (MVP 4):** `lib/editor/commandExecutor.ts` — `executeCommand(host, { type, targets, parameters, origin })` valida (tipo, esquema, ids, locks,
+  rangos), **nunca acepta ni devuelve `d`/SVG crudos** y ejecuta por el MISMO camino que la UI (mismos planificadores puros y `applyEdit`), con el mismo estado resultante
+  (test de equivalencia por tipo). Ejecuta los tipos deterministas y sin servidor; los que necesitan servidor (`geometry.*`), un gesto (`object.draw`, `path.*`...), el portapapeles
+  o un PATCH se declaran `executable: false` con el motivo. La validación de comandos de IA en el servidor y el historial persistente quedan para MVP 4 / M3-S13.
 - Respeta `locked`: ninguna herramienta modifica objetos de una capa bloqueada (la selección sí puede incluirlos
-  para inspeccionar, pero los comandos los filtran y lo informan). Capas ocultas no se seleccionan.
-- Pila de undo en memoria, límite razonable (p. ej. 200 comandos) con descarte del más viejo.
+  para inspeccionar, pero los comandos los filtran y lo informan; el ejecutor, en cambio, rechaza el comando entero). Capas ocultas no se seleccionan.
+- Undo/redo restauran snapshots **sin** pasar por el filtro de bloqueo (son la historia del usuario).
 - `geometryDirty`: indica ediciones de geometría sin persistir. **Limitación intermedia**: hasta M3-S13 las
   ediciones viven solo en memoria; mientras `geometryDirty`, el editor avisa (`beforeunload`) y el indicador
   de guardado lo refleja con honestidad (nunca "Guardado" si hay geometría sin persistir).
@@ -322,5 +344,5 @@ de round-trip: `parse(serialize(doc))` ≡ `doc` (ids, d, fill, matriz) — se p
 S01 base (modelo, comandos, selección, move/scale/rotate) · S02 crop/rotate/flip · S03 fill/recolor/eyedropper ·
 S04 draw/erase · S05 nodos/Bézier · S06 copy/paste/duplicate/delete · S07 align/distribute/z-order ·
 S08 booleanas (servidor) · S09 offset (servidor) · S10 corte (servidor) · S11 puentes/piezas flotantes (servidor) ·
-S12 historial unificado (incluye metadata de capas) · S13 autosave de geometría + historial de versiones ·
+S12 historial de comandos unificado (incluye metadata de capas; `docs/EDITOR_COMMANDS.md`) · S13 autosave de geometría + historial de versiones ·
 S14 Laser Checker integrado · S15 export avanzado · S16 E2E + release candidate.

@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IDENTITY_MATRIX } from "../lib/svgTransform";
+import type { CommandDraft } from "../lib/editor/commands";
 import type { EditableDocument, EditableLayerMeta, EditorEdit, EditorObject, EditProduction } from "../lib/editor/types";
 import { abortAwareFetch } from "../test/abortableFetch";
 import type { SplitResponse } from "../types/geometry";
@@ -45,7 +46,7 @@ const APPLIED: ApplyEditResult = { applied: true, skippedLockedObjects: 0, skipp
 function setup(overrides: Partial<UseCutToolParams> = {}, respond: (body: { tolerance: number }) => Response | Promise<Response> = (body) => json(halves(body))) {
   const fetchMock = abortAwareFetch((_url, init) => respond(JSON.parse(String(init?.body))));
   vi.stubGlobal("fetch", fetchMock);
-  const applyEdit = vi.fn<(label: string, producer: EditProducer) => ApplyEditResult>(() => APPLIED);
+  const applyEdit = vi.fn<(draft: CommandDraft, producer: EditProducer) => ApplyEditResult>(() => APPLIED);
   const onApplied = vi.fn();
   const onClose = vi.fn();
   let counter = 0;
@@ -172,7 +173,7 @@ describe("useCutTool — Apply", () => {
     await act(async () => context.result.current.panel.onApply());
 
     expect(context.applyEdit).toHaveBeenCalledTimes(1);
-    expect(context.applyEdit.mock.calls[0][0]).toBe("Cortar: dividir (1 objeto → 2 piezas)");
+    expect(context.applyEdit.mock.calls[0][0]).toMatchObject({ type: "geometry.split", label: "Cortar: dividir (1 objeto → 2 piezas)", parameters: { mode: "split", extend: false, cutPointCount: 2, pieceCount: 2 } });
     expect(context.fetchMock).toHaveBeenCalledTimes(1); // Apply usó el resultado ya calculado
     expect(context.onApplied).toHaveBeenCalledTimes(1);
     const [applied, edit] = context.onApplied.mock.calls[0];
@@ -253,7 +254,7 @@ describe("useCutTool — Apply", () => {
     await waitFor(() => expect(context.result.current.panel.preview.status).toBe("ready"));
     await act(async () => context.result.current.panel.onApply());
 
-    expect(context.applyEdit.mock.calls[0][0]).toBe("Cortar: ranura de 0.2 mm (1 objeto → 2 piezas)");
+    expect(context.applyEdit.mock.calls[0][0]).toMatchObject({ type: "geometry.split", label: "Cortar: ranura de 0.2 mm (1 objeto → 2 piezas)", parameters: { mode: "slot", slotWidth: 0.2, unit: "mm" } });
   });
 });
 

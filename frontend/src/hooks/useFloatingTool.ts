@@ -264,7 +264,15 @@ export function useFloatingTool({ active, editable, state, selectedObjects, mmFa
         return;
       }
       const production = applied.production;
-      const result = applyEdit(bridgeLabel(applied.summary), (snapshot) => (snapshot.objectsByLayer === fresh.objectsByLayer ? production : null));
+      const summary = applied.summary;
+      const result = applyEdit(
+        {
+          type: "geometry.bridge",
+          label: bridgeLabel(summary),
+          parameters: { mode: summary.mode, bridgeCount: summary.bridgeCount, widthMm: summary.widthMm, unit: summary.unit.label, floatingBefore: summary.floatingBefore, floatingAfter: summary.floatingAfter },
+        },
+        (snapshot) => (snapshot.objectsByLayer === fresh.objectsByLayer ? production : null),
+      );
       if (!result.applied) {
         update({ message: result.reason === "blocked" ? "Alguna capa está bloqueada u oculta: no se puede modificar. No se hizo ningún cambio." : describeEditFailure(result) });
         return;

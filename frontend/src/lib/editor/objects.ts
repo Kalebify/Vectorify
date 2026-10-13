@@ -230,6 +230,23 @@ export function objectPolylines(object: EditorObject): Polyline[] {
   return polylines;
 }
 
+/** Mismo contenido (geometría, relleno, trazo, capa y matriz) aunque sean otras referencias. Lo usan la fusión de comandos (undo) y el cálculo de objetos afectados (M3-S12). */
+export function sameObjectContent(left: EditorObject, right: EditorObject): boolean {
+  return (
+    left.d === right.d &&
+    left.fill === right.fill &&
+    left.stroke === right.stroke &&
+    left.strokeWidth === right.strokeWidth &&
+    left.layerGroupId === right.layerGroupId &&
+    left.matrix.a === right.matrix.a &&
+    left.matrix.b === right.matrix.b &&
+    left.matrix.c === right.matrix.c &&
+    left.matrix.d === right.matrix.d &&
+    left.matrix.e === right.matrix.e &&
+    left.matrix.f === right.matrix.f
+  );
+}
+
 /** ¿El objeto NO tiene relleno (`fill: "none"`/`"transparent"`)? Es el caso de las líneas abiertas de Draw (M3-S04): solo existen por su trazo. */
 export function isUnfilled(fill: string): boolean {
   const normalized = fill.trim().toLowerCase();

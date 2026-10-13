@@ -1,5 +1,6 @@
 import { StrictMode, useEffect } from "react";
 import { act, render, renderHook, waitFor } from "@testing-library/react";
+import { cmd } from "../test/commands";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cropProduction, orientDocumentProduction } from "../lib/editor/frame";
 import { bounds } from "../lib/editor/objects";
@@ -174,7 +175,7 @@ describe("useEditableDocument — carga", () => {
   it("si una capa ya cargada cambia de svgUrl se recarga y el historial se reinicia (los comandos viejos ya no son coherentes)", async () => {
     installFetch({ "/svg/A2": () => svgResponse(SVG_B) });
     const { result, rerender } = await renderLoaded();
-    act(() => void result.current.applyEdit("Mover", moveIds(["a1"], 5)));
+    act(() => void result.current.applyEdit(cmd("Mover"), moveIds(["a1"], 5)));
     expect(result.current.canUndo).toBe(true);
 
     rerender({ layers: [layer({ svgUrl: "/svg/A2" }), LAYERS[1]], options: {} });
@@ -196,7 +197,7 @@ describe("useEditableDocument — applyEdit / undo / redo", () => {
 
     let outcome = { applied: false } as ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("Mover 1 objeto", moveIds(["a1"], 5, 7));
+      outcome = result.current.applyEdit(cmd("Mover 1 objeto"), moveIds(["a1"], 5, 7));
     });
     expect(outcome.applied).toBe(true);
     expect(layerBounds(result, "A", "a1")).toEqual({ x: 5, y: 7, width: 10, height: 10 });
@@ -217,12 +218,12 @@ describe("useEditableDocument — applyEdit / undo / redo", () => {
 
   it("un edit nuevo descarta la rama redo", async () => {
     const { result } = await renderLoaded();
-    act(() => void result.current.applyEdit("uno", moveIds(["a1"], 1)));
-    act(() => void result.current.applyEdit("dos", moveIds(["a1"], 1)));
+    act(() => void result.current.applyEdit(cmd("uno"), moveIds(["a1"], 1)));
+    act(() => void result.current.applyEdit(cmd("dos"), moveIds(["a1"], 1)));
     act(() => void result.current.undo());
     expect(result.current.canRedo).toBe(true);
 
-    act(() => void result.current.applyEdit("tres", moveIds(["a2"], 3)));
+    act(() => void result.current.applyEdit(cmd("tres"), moveIds(["a2"], 3)));
     expect(result.current.canRedo).toBe(false);
     expect(result.current.undoDepth).toBe(2);
     expect(result.current.undoLabel).toBe("tres");
@@ -230,7 +231,7 @@ describe("useEditableDocument — applyEdit / undo / redo", () => {
 
   it("un comando que toca dos capas se deshace/rehace atómicamente", async () => {
     const { result } = await renderLoaded();
-    act(() => void result.current.applyEdit("Mover 2", moveIds(["a1", "b1"], 4)));
+    act(() => void result.current.applyEdit(cmd("Mover 2"), moveIds(["a1", "b1"], 4)));
     expect(layerBounds(result, "B", "b1")).toEqual({ x: 4, y: 20, width: 10, height: 10 });
     act(() => void result.current.undo());
     expect(layerBounds(result, "A", "a1")).toEqual({ x: 0, y: 0, width: 10, height: 10 });
@@ -242,8 +243,8 @@ describe("useEditableDocument — applyEdit / undo / redo", () => {
     let first = { applied: true } as ReturnType<typeof result.current.applyEdit>;
     let second = { applied: true } as ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      first = result.current.applyEdit("nada", () => null);
-      second = result.current.applyEdit("cero", moveIds(["a1"], 0, 0));
+      first = result.current.applyEdit(cmd("nada"), () => null);
+      second = result.current.applyEdit(cmd("cero"), moveIds(["a1"], 0, 0));
     });
     expect(first).toMatchObject({ applied: false, reason: "no_change" });
     expect(second).toMatchObject({ applied: false, reason: "no_change" });
@@ -256,8 +257,8 @@ describe("useEditableDocument — applyEdit / undo / redo", () => {
     let applied = { applied: false } as ReturnType<typeof result.current.applyEdit>;
     let rejected = { applied: true } as ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      applied = result.current.applyEdit("Mover", moveIds(["a1"], 5));
-      rejected = result.current.applyEdit("nada", () => null);
+      applied = result.current.applyEdit(cmd("Mover"), moveIds(["a1"], 5));
+      rejected = result.current.applyEdit(cmd("nada"), () => null);
     });
     expect(applied.edit).toBeDefined();
     expect(applied.edit!.label).toBe("Mover");
@@ -290,7 +291,7 @@ describe("useEditableDocument — applyEdit / undo / redo", () => {
   it("límite de la pila: al excederlo se descarta el más viejo (y sigue 'sin guardar')", async () => {
     const { result } = await renderLoaded(LAYERS, { limit: 3 });
     for (let step = 1; step <= 5; step += 1) {
-      act(() => void result.current.applyEdit(`paso ${step}`, moveIds(["a1"], 1)));
+      act(() => void result.current.applyEdit(cmd(`paso ${step}`), moveIds(["a1"], 1)));
     }
     expect(result.current.undoDepth).toBe(3);
     expect(result.current.undoLabel).toBe("paso 5");
@@ -309,7 +310,7 @@ describe("useEditableDocument — applyEdit / undo / redo", () => {
   it("geometryDirty: false al cargar, true tras editar, false al deshacer todo, true al rehacer", async () => {
     const { result } = await renderLoaded();
     expect(result.current.geometryDirty).toBe(false);
-    act(() => void result.current.applyEdit("x", moveIds(["a1"], 1)));
+    act(() => void result.current.applyEdit(cmd("x"), moveIds(["a1"], 1)));
     expect(result.current.geometryDirty).toBe(true);
     act(() => void result.current.undo());
     expect(result.current.geometryDirty).toBe(false);
@@ -320,7 +321,7 @@ describe("useEditableDocument — applyEdit / undo / redo", () => {
   it("getSnapshot devuelve el estado confirmado de forma síncrona (para handlers de teclado)", async () => {
     const { result } = await renderLoaded();
     act(() => {
-      result.current.applyEdit("x", moveIds(["a1"], 9));
+      result.current.applyEdit(cmd("x"), moveIds(["a1"], 9));
       const snapshot = result.current.getSnapshot();
       expect(bounds([snapshot.objectsByLayer.A[0]])).toEqual({ x: 9, y: 0, width: 10, height: 10 });
     });
@@ -337,10 +338,10 @@ describe("useEditableDocument — capas editadas (base de la miniatura del Previ
     const { result } = await renderLoaded();
     expect([...result.current.editedLayerIds]).toEqual([]);
 
-    act(() => void result.current.applyEdit("Mover", moveIds(["a1"], 5)));
+    act(() => void result.current.applyEdit(cmd("Mover"), moveIds(["a1"], 5)));
     expect([...result.current.editedLayerIds]).toEqual(["A"]);
 
-    act(() => void result.current.applyEdit("Mover", moveIds(["b1"], 5)));
+    act(() => void result.current.applyEdit(cmd("Mover"), moveIds(["b1"], 5)));
     expect([...result.current.editedLayerIds].sort()).toEqual(["A", "B"]);
 
     act(() => void result.current.undo());
@@ -381,7 +382,7 @@ describe("useEditableDocument — gestos continuos (UN comando al soltar)", () =
 
     let outcome = { applied: false } as ReturnType<typeof result.current.commitGesture>;
     act(() => {
-      outcome = result.current.commitGesture("Mover 2 objetos");
+      outcome = result.current.commitGesture(cmd("Mover 2 objetos"));
     });
     expect(outcome.applied).toBe(true);
     expect(result.current.undoDepth).toBe(1);
@@ -421,7 +422,7 @@ describe("useEditableDocument — gestos continuos (UN comando al soltar)", () =
     act(() => void result.current.previewEdit(moveIds(["a1"], 0)));
     let outcome = { applied: true } as ReturnType<typeof result.current.commitGesture>;
     act(() => {
-      outcome = result.current.commitGesture("Mover");
+      outcome = result.current.commitGesture(cmd("Mover"));
     });
     expect(outcome).toMatchObject({ applied: false, reason: "no_change" });
     expect(result.current.undoDepth).toBe(0);
@@ -429,7 +430,7 @@ describe("useEditableDocument — gestos continuos (UN comando al soltar)", () =
 
   it("applyEdit/undo/redo se rechazan mientras hay un gesto activo; beginGesture doble no pisa el anterior", async () => {
     const { result } = await renderLoaded();
-    act(() => void result.current.applyEdit("previo", moveIds(["a2"], 1)));
+    act(() => void result.current.applyEdit(cmd("previo"), moveIds(["a2"], 1)));
     act(() => void result.current.beginGesture());
 
     let begun = true;
@@ -437,7 +438,7 @@ describe("useEditableDocument — gestos continuos (UN comando al soltar)", () =
     let undone: unknown = "x";
     act(() => {
       begun = result.current.beginGesture();
-      applied = result.current.applyEdit("x", moveIds(["a1"], 1));
+      applied = result.current.applyEdit(cmd("x"), moveIds(["a1"], 1));
       undone = result.current.undo();
     });
     expect(begun).toBe(false);
@@ -452,7 +453,7 @@ describe("useEditableDocument — gestos continuos (UN comando al soltar)", () =
     let commit = { applied: true } as ReturnType<typeof result.current.commitGesture>;
     act(() => {
       preview = result.current.previewEdit(moveIds(["a1"], 1));
-      commit = result.current.commitGesture("x");
+      commit = result.current.commitGesture(cmd("x"));
     });
     expect(preview.reason).toBe("no_gesture");
     expect(commit.reason).toBe("no_gesture");
@@ -473,7 +474,7 @@ describe("useEditableDocument — capas bloqueadas y ocultas", () => {
 
     let outcome = { applied: true } as ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("Mover", moveIds(["a1", "a2"], 10));
+      outcome = result.current.applyEdit(cmd("Mover"), moveIds(["a1", "a2"], 10));
     });
     expect(outcome).toMatchObject({ applied: false, reason: "blocked", skippedLockedObjects: 2, skippedHiddenObjects: 0 });
     expect(result.current.objectsByLayer.A).toBe(original);
@@ -484,7 +485,7 @@ describe("useEditableDocument — capas bloqueadas y ocultas", () => {
     const { result } = await renderLoaded([layer({ locked: true }), LAYERS[1]]);
     let outcome = { applied: false } as ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("Mover", moveIds(["a1", "b1"], 10));
+      outcome = result.current.applyEdit(cmd("Mover"), moveIds(["a1", "b1"], 10));
     });
     expect(outcome).toMatchObject({ applied: true, skippedLockedObjects: 1 });
     expect(layerBounds(result, "B", "b1")).toEqual({ x: 10, y: 20, width: 10, height: 10 });
@@ -504,7 +505,7 @@ describe("useEditableDocument — capas bloqueadas y ocultas", () => {
     expect(preview).toMatchObject({ applied: false, reason: "blocked", skippedLockedObjects: 1 });
     let commit = { applied: true } as ReturnType<typeof result.current.commitGesture>;
     act(() => {
-      commit = result.current.commitGesture("Mover");
+      commit = result.current.commitGesture(cmd("Mover"));
     });
     expect(commit).toMatchObject({ applied: false, reason: "blocked", skippedLockedObjects: 1 });
     expect(result.current.undoDepth).toBe(0);
@@ -515,14 +516,14 @@ describe("useEditableDocument — capas bloqueadas y ocultas", () => {
     rerender({ layers: [layer({ locked: true }), LAYERS[1]], options: {} });
     let outcome = { applied: true } as ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("Mover", moveIds(["a1"], 3));
+      outcome = result.current.applyEdit(cmd("Mover"), moveIds(["a1"], 3));
     });
     expect(outcome).toMatchObject({ applied: false, reason: "blocked" });
   });
 
   it("undo de una edición en una capa que se bloqueó después SÍ funciona (el historial no queda trabado)", async () => {
     const { result, rerender } = await renderLoaded();
-    act(() => void result.current.applyEdit("Mover", moveIds(["a1"], 3)));
+    act(() => void result.current.applyEdit(cmd("Mover"), moveIds(["a1"], 3)));
     rerender({ layers: [layer({ locked: true }), LAYERS[1]], options: {} });
     act(() => void result.current.undo());
     expect(layerBounds(result, "A", "a1")).toEqual({ x: 0, y: 0, width: 10, height: 10 });
@@ -532,7 +533,7 @@ describe("useEditableDocument — capas bloqueadas y ocultas", () => {
     const { result } = await renderLoaded(LAYERS, { visibility: { A: false, B: true } });
     let outcome = { applied: true } as ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("Mover", moveIds(["a1", "b1"], 3));
+      outcome = result.current.applyEdit(cmd("Mover"), moveIds(["a1", "b1"], 3));
     });
     expect(outcome).toMatchObject({ applied: true, skippedHiddenObjects: 1, skippedLockedObjects: 0 });
     expect(layerBounds(result, "A", "a1")).toEqual({ x: 0, y: 0, width: 10, height: 10 });
@@ -555,7 +556,7 @@ describe("useEditableDocument — coalescing de ediciones repetidas (flechas)", 
     // Se hace sin waitFor con timers falsos de Date: renderLoaded usa timers reales de waitFor (solo Date está falseado).
     const { result } = await renderLoaded();
     for (let press = 0; press < 5; press += 1) {
-      act(() => void result.current.applyEdit("Mover", moveIds(["a1"], 1), { coalesceKey: "nudge" }));
+      act(() => void result.current.applyEdit(cmd("Mover"), moveIds(["a1"], 1), { coalesceKey: "nudge" }));
       vi.setSystemTime(Date.now() + 100);
     }
     expect(result.current.undoDepth).toBe(1);
@@ -566,18 +567,18 @@ describe("useEditableDocument — coalescing de ediciones repetidas (flechas)", 
 
   it("fuera de la ventana o con otra clave -> comandos separados", async () => {
     const { result } = await renderLoaded();
-    act(() => void result.current.applyEdit("Mover", moveIds(["a1"], 1), { coalesceKey: "nudge" }));
+    act(() => void result.current.applyEdit(cmd("Mover"), moveIds(["a1"], 1), { coalesceKey: "nudge" }));
     vi.setSystemTime(Date.now() + COALESCE_WINDOW_MS + 1);
-    act(() => void result.current.applyEdit("Mover", moveIds(["a1"], 1), { coalesceKey: "nudge" }));
-    act(() => void result.current.applyEdit("Mover", moveIds(["a1"], 1), { coalesceKey: "otra" }));
-    act(() => void result.current.applyEdit("Mover", moveIds(["a1"], 1)));
+    act(() => void result.current.applyEdit(cmd("Mover"), moveIds(["a1"], 1), { coalesceKey: "nudge" }));
+    act(() => void result.current.applyEdit(cmd("Mover"), moveIds(["a1"], 1), { coalesceKey: "otra" }));
+    act(() => void result.current.applyEdit(cmd("Mover"), moveIds(["a1"], 1)));
     expect(result.current.undoDepth).toBe(4);
   });
 
   it("ir y volver (→ ←) deja el comando en no-op: se descarta y el documento vuelve a 'sin cambios'", async () => {
     const { result } = await renderLoaded();
-    act(() => void result.current.applyEdit("Mover", moveIds(["a1"], 1), { coalesceKey: "nudge" }));
-    act(() => void result.current.applyEdit("Mover", moveIds(["a1"], -1), { coalesceKey: "nudge" }));
+    act(() => void result.current.applyEdit(cmd("Mover"), moveIds(["a1"], 1), { coalesceKey: "nudge" }));
+    act(() => void result.current.applyEdit(cmd("Mover"), moveIds(["a1"], -1), { coalesceKey: "nudge" }));
     expect(result.current.undoDepth).toBe(0);
     expect(result.current.geometryDirty).toBe(false);
   });
@@ -628,7 +629,7 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
 
     let outcome = { applied: false } as ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("Recortar", cropTo(target));
+      outcome = result.current.applyEdit(cmd("Recortar", "document.crop"), cropTo(target));
     });
     expect(outcome.applied).toBe(true);
     expect(result.current.undoDepth).toBe(1); // UN comando, no uno por capa ni uno para el marco
@@ -655,7 +656,7 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
   it("el comando guarda before/after del marco (serializable) y undo/redo devuelven ese comando", async () => {
     const { result } = await renderLoaded(LAYERS, SIZE);
     const target = { x: 10, y: 10, width: 100, height: 100 };
-    act(() => void result.current.applyEdit("Recortar", cropTo(target)));
+    act(() => void result.current.applyEdit(cmd("Recortar", "document.crop"), cropTo(target)));
 
     let undone: ReturnType<typeof result.current.undo> = null;
     let redone: ReturnType<typeof result.current.redo> = null;
@@ -671,7 +672,7 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
 
   it("un crop que solo cambia el marco (todo queda adentro) también es un comando y deja geometría sin guardar", async () => {
     const { result } = await renderLoaded(LAYERS, SIZE);
-    act(() => void result.current.applyEdit("Recortar", cropTo({ x: 0, y: 0, width: 300, height: 200 })));
+    act(() => void result.current.applyEdit(cmd("Recortar", "document.crop"), cropTo({ x: 0, y: 0, width: 300, height: 200 })));
     expect(result.current.undoDepth).toBe(1);
     expect(result.current.frame).toEqual({ x: 0, y: 0, width: 300, height: 200 });
     expect([...result.current.editedLayerIds]).toEqual([]); // ninguna capa cambió...
@@ -684,7 +685,7 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
 
   it("retrocompatibilidad: un comando de S01 (sin marco) no trae la clave `frame` y no toca el marco", async () => {
     const { result } = await renderLoaded(LAYERS, SIZE);
-    act(() => void result.current.applyEdit("Mover", moveIds(["a1"], 5)));
+    act(() => void result.current.applyEdit(cmd("Mover"), moveIds(["a1"], 5)));
     let undone: ReturnType<typeof result.current.undo> = null;
     act(() => {
       undone = result.current.undo();
@@ -697,8 +698,8 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
   it("una edición de objetos DESPUÉS de un crop y su undo respetan el marco recortado (el marco no se pierde ni se pisa)", async () => {
     const { result } = await renderLoaded(LAYERS, SIZE);
     const target = { x: 0, y: 0, width: 300, height: 200 };
-    act(() => void result.current.applyEdit("Recortar", cropTo(target)));
-    act(() => void result.current.applyEdit("Mover", moveIds(["a1"], 5)));
+    act(() => void result.current.applyEdit(cmd("Recortar", "document.crop"), cropTo(target)));
+    act(() => void result.current.applyEdit(cmd("Mover"), moveIds(["a1"], 5)));
     expect(result.current.frame).toEqual(target);
     act(() => void result.current.undo()); // deshace el Mover
     expect(result.current.frame).toEqual(target);
@@ -709,9 +710,9 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
   it("las ráfagas fundidas (nudge con coalesceKey) después de un crop no arrastran el marco al fundirse", async () => {
     const { result } = await renderLoaded(LAYERS, SIZE);
     const target = { x: 0, y: 0, width: 300, height: 200 };
-    act(() => void result.current.applyEdit("Recortar", cropTo(target)));
-    act(() => void result.current.applyEdit("Mover", moveIds(["a1"], 1), { coalesceKey: "nudge" }));
-    act(() => void result.current.applyEdit("Mover", moveIds(["a1"], 1), { coalesceKey: "nudge" }));
+    act(() => void result.current.applyEdit(cmd("Recortar", "document.crop"), cropTo(target)));
+    act(() => void result.current.applyEdit(cmd("Mover"), moveIds(["a1"], 1), { coalesceKey: "nudge" }));
+    act(() => void result.current.applyEdit(cmd("Mover"), moveIds(["a1"], 1), { coalesceKey: "nudge" }));
     expect(result.current.undoDepth).toBe(2); // crop + ráfaga fundida
     act(() => void result.current.undo());
     expect(result.current.frame).toEqual(target);
@@ -722,7 +723,7 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
   it("rotar el documento: objetos de todas las capas + marco en UN comando (320×240 -> 240×320, valores a mano)", async () => {
     const { result } = await renderLoaded(LAYERS, SIZE);
     const originalA = result.current.objectsByLayer.A;
-    act(() => void result.current.applyEdit("Rotar 90° horario (documento completo)", rotateDocument));
+    act(() => void result.current.applyEdit(cmd("Rotar 90° horario (documento completo)", "document.rotate"), rotateDocument));
 
     expect(result.current.undoDepth).toBe(1);
     expect(result.current.frame).toEqual({ x: 40, y: -40, width: 240, height: 320 });
@@ -739,7 +740,7 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
   it("rotar el documento 90° cuatro veces (4 comandos separados) vuelve al marco y a las matrices originales EXACTOS", async () => {
     const { result } = await renderLoaded(LAYERS, SIZE);
     for (let turn = 0; turn < 4; turn += 1) {
-      act(() => void result.current.applyEdit(`Rotar ${turn + 1}`, rotateDocument));
+      act(() => void result.current.applyEdit(cmd(`Rotar ${turn + 1}`), rotateDocument));
     }
     expect(result.current.undoDepth).toBe(4);
     expect(result.current.frame).toEqual(SOURCE);
@@ -751,10 +752,10 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
   it("reflejar el documento dos veces = identidad exacta y el marco no cambia en ningún momento", async () => {
     const { result } = await renderLoaded(LAYERS, SIZE);
     const flip = (state: EditableDocument) => orientDocumentProduction(state, composeOrientation(IDENTITY_ORIENTATION, "flip-horizontal"));
-    act(() => void result.current.applyEdit("Reflejar", flip));
+    act(() => void result.current.applyEdit(cmd("Reflejar", "document.flip"), flip));
     expect(result.current.frame).toEqual(SOURCE);
     expect(layerBounds(result, "A", "a1")).toEqual({ x: 310, y: 0, width: 10, height: 10 }); // x' = 320 - x
-    act(() => void result.current.applyEdit("Reflejar", flip));
+    act(() => void result.current.applyEdit(cmd("Reflejar", "document.flip"), flip));
     expect(layerBounds(result, "A", "a1")).toEqual({ x: 0, y: 0, width: 10, height: 10 });
     expect(result.current.objectsByLayer.A[0].matrix.e === 0).toBe(true);
     expect(result.current.objectsByLayer.A[0].matrix.a === 1).toBe(true);
@@ -788,7 +789,7 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
     act(() => void result.current.previewEdit(rotateDocument));
     let outcome = { applied: false } as ReturnType<typeof result.current.commitGesture>;
     act(() => {
-      outcome = result.current.commitGesture("Rotar 90° horario (documento completo)");
+      outcome = result.current.commitGesture(cmd("Rotar 90° horario (documento completo)", "document.rotate"));
     });
     expect(outcome.applied).toBe(true);
     expect(result.current.undoDepth).toBe(1);
@@ -817,7 +818,7 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
     expect(layerBounds(result, "A", "a1")).toEqual({ x: 0, y: 0, width: 10, height: 10 });
     let committed = { applied: true } as ReturnType<typeof result.current.commitGesture>;
     act(() => {
-      committed = result.current.commitGesture("Rotar");
+      committed = result.current.commitGesture(cmd("Rotar"));
     });
     expect(committed).toMatchObject({ applied: false, reason: "no_change" });
     expect(result.current.undoDepth).toBe(0);
@@ -830,7 +831,7 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
 
     let outcome = { applied: true } as ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("Rotar documento", rotateDocument);
+      outcome = result.current.applyEdit(cmd("Rotar documento", "document.rotate"), rotateDocument);
     });
     expect(outcome).toMatchObject({ applied: false, reason: "blocked" });
     expect(outcome.skippedLockedObjects).toBeGreaterThan(0);
@@ -852,7 +853,7 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
     expect(layerBounds(result, "B", "b1")).toEqual({ x: 0, y: 20, width: 10, height: 10 });
     let committed = { applied: true } as ReturnType<typeof result.current.commitGesture>;
     act(() => {
-      committed = result.current.commitGesture("Rotar");
+      committed = result.current.commitGesture(cmd("Rotar"));
     });
     expect(committed.applied).toBe(false);
     expect(result.current.undoDepth).toBe(0);
@@ -863,7 +864,7 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
     const { result } = await renderLoaded([LAYERS[0], layer({ groupId: "B", svgUrl: "/svg/B", locked: true, order: 1 })], SIZE);
     let outcome = { applied: false } as ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("Rotar documento", rotateDocument);
+      outcome = result.current.applyEdit(cmd("Rotar documento", "document.rotate"), rotateDocument);
     });
     expect(outcome.applied).toBe(true);
   });
@@ -872,7 +873,7 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
     const { result } = await renderLoaded(LAYERS, { ...SIZE, visibility: { A: true, B: false } });
     let outcome = { applied: false } as ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("Rotar documento", rotateDocument);
+      outcome = result.current.applyEdit(cmd("Rotar documento", "document.rotate"), rotateDocument);
     });
     expect(outcome).toMatchObject({ applied: true, skippedHiddenObjects: 0 });
     expect(result.current.objectsByLayer.B[0].matrix).not.toEqual(IDENTITY_MATRIX);
@@ -881,7 +882,7 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
     // En cambio una edición normal (S01) sobre una capa oculta se sigue omitiendo e informando.
     let normal = { applied: true } as ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      normal = result.current.applyEdit("Mover", moveIds(["b1"], 5));
+      normal = result.current.applyEdit(cmd("Mover"), moveIds(["b1"], 5));
     });
     expect(normal).toMatchObject({ applied: false, reason: "blocked", skippedHiddenObjects: 1 });
   });
@@ -895,7 +896,7 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
     const target = { x: 0, y: 0, width: 15, height: 15 };
     let outcome = { applied: false } as ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("Recortar", cropTo(target));
+      outcome = result.current.applyEdit(cmd("Recortar", "document.crop"), cropTo(target));
     });
     expect(outcome).toMatchObject({ applied: true, skippedLockedObjects: 1 });
     expect(result.current.frame).toEqual(target);
@@ -909,8 +910,8 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
     let first = { applied: true } as ReturnType<typeof result.current.applyEdit>;
     let second = { applied: true } as ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      first = result.current.applyEdit("mal", bad({ x: 0, y: 0, width: 0, height: 10 }));
-      second = result.current.applyEdit("mal", bad({ x: Number.NaN, y: 0, width: 10, height: 10 }));
+      first = result.current.applyEdit(cmd("mal"), bad({ x: 0, y: 0, width: 0, height: 10 }));
+      second = result.current.applyEdit(cmd("mal"), bad({ x: Number.NaN, y: 0, width: 10, height: 10 }));
     });
     expect(first.applied).toBe(false);
     expect(second.applied).toBe(false);
@@ -923,7 +924,7 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
     const { result } = await renderLoaded(LAYERS, SIZE);
     let outcome = { applied: true } as ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("igual", () => ({ layers: {}, frame: { ...SOURCE } }));
+      outcome = result.current.applyEdit(cmd("igual"), () => ({ layers: {}, frame: { ...SOURCE } }));
     });
     expect(outcome).toMatchObject({ applied: false, reason: "no_change" });
     expect(result.current.undoDepth).toBe(0);
@@ -936,14 +937,14 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
     expect(result.current.frame).toEqual(SOURCE);
     expect(result.current.geometryDirty).toBe(false);
 
-    act(() => void result.current.applyEdit("Recortar", cropTo({ x: 0, y: 0, width: 300, height: 200 })));
+    act(() => void result.current.applyEdit(cmd("Recortar", "document.crop"), cropTo({ x: 0, y: 0, width: 300, height: 200 })));
     expect(result.current.frame).toEqual({ x: 0, y: 0, width: 300, height: 200 });
   });
 
   it("si una capa ya cargada cambia de svgUrl (documento regenerado) el marco también vuelve al original junto con el historial", async () => {
     installFetch({ "/svg/A2": () => svgResponse(SVG_B) });
     const { result, rerender } = await renderLoaded(LAYERS, SIZE);
-    act(() => void result.current.applyEdit("Recortar", cropTo({ x: 0, y: 0, width: 300, height: 200 })));
+    act(() => void result.current.applyEdit(cmd("Recortar", "document.crop"), cropTo({ x: 0, y: 0, width: 300, height: 200 })));
     expect(result.current.frame.width).toBe(300);
 
     rerender({ layers: [layer({ svgUrl: "/svg/A2" }), LAYERS[1]], options: SIZE });
@@ -973,7 +974,7 @@ describe("useEditableDocument — marco del documento (M3-S02): crop y rotar-doc
     expect(fetchMock.signals.some((signal) => signal?.aborted)).toBe(true);
 
     const target = { x: 0, y: 0, width: 15, height: 15 };
-    act(() => void latest!.applyEdit("Recortar", cropTo(target)));
+    act(() => void latest!.applyEdit(cmd("Recortar", "document.crop"), cropTo(target)));
     await waitFor(() => expect(latest!.frame).toEqual(target));
     expect(latest!.undoDepth).toBe(1);
     act(() => void latest!.undo());
