@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IDENTITY_MATRIX } from "../lib/svgTransform";
+import type { CommandDraft } from "../lib/editor/commands";
 import type { EditableDocument, EditableLayerMeta, EditorEdit, EditorObject, EditProduction } from "../lib/editor/types";
 import { abortAwareFetch } from "../test/abortableFetch";
 import type { ApplyEditResult, EditProducer } from "./useEditableDocument";
@@ -79,7 +80,7 @@ const APPLIED: ApplyEditResult = { applied: true, skippedLockedObjects: 0, skipp
 interface Setup {
   fetchMock: ReturnType<typeof abortAwareFetch>;
   calls: { floating: Body[]; bridge: Body[] };
-  applyEdit: ReturnType<typeof vi.fn<(label: string, producer: EditProducer) => ApplyEditResult>>;
+  applyEdit: ReturnType<typeof vi.fn<(draft: CommandDraft, producer: EditProducer) => ApplyEditResult>>;
   onApplied: ReturnType<typeof vi.fn>;
   onClose: ReturnType<typeof vi.fn>;
   onFocusRect: ReturnType<typeof vi.fn>;
@@ -97,7 +98,7 @@ function setup(overrides: Partial<UseFloatingToolParams> = {}, respond: { floati
     return respond.bridge ? respond.bridge(body) : json(bridgePayload(body));
   });
   vi.stubGlobal("fetch", fetchMock);
-  const applyEdit = vi.fn<(label: string, producer: EditProducer) => ApplyEditResult>(() => APPLIED);
+  const applyEdit = vi.fn<(draft: CommandDraft, producer: EditProducer) => ApplyEditResult>(() => APPLIED);
   const onApplied = vi.fn();
   const onClose = vi.fn();
   const onFocusRect = vi.fn();
@@ -357,7 +358,7 @@ describe("useFloatingTool", () => {
 
       await waitFor(() => expect(onApplied).toHaveBeenCalledTimes(1));
       expect(applyEdit).toHaveBeenCalledTimes(1);
-      expect(applyEdit.mock.calls[0][0]).toBe("Bridges: 1 bridge de 0.8 mm (1 → 0 flotantes)");
+      expect(applyEdit.mock.calls[0][0]).toMatchObject({ type: "geometry.bridge", label: "Bridges: 1 bridge de 0.8 mm (1 → 0 flotantes)", parameters: { bridgeCount: 1, floatingBefore: 1, floatingAfter: 0, unit: "mm" } });
       const producer = applyEdit.mock.calls[0][1];
       const production = producer(DOC) as EditProduction;
       expect(production.atomic).toBe(true);

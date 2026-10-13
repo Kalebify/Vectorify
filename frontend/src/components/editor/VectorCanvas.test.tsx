@@ -764,6 +764,10 @@ describe("VectorCanvas — Transformer (scale / rotate)", () => {
 
     expect(api().undoDepth).toBe(1);
     expect(api().undoLabel).toBe("Escalar 1 objeto");
+    // M3-S12: el comando es `object.scale` y sus parámetros DESCRIBEN el gesto (factores), nunca la geometría.
+    expect(api().undoCommand).toMatchObject({ type: "object.scale", targets: { objectIds: ["a1"] } });
+    expect(api().undoCommand!.parameters.sx).toBeCloseTo(2, 9);
+    expect(api().undoCommand!.parameters.sy).toBeCloseTo(2, 9);
     expect(api().objectsByLayer.A[0].d).toBe(originalD);
     expect(boundsOf(api(), "A", "a1")).toEqual({ x: 0, y: 0, width: 80, height: 80 });
     expect(api().objectsByLayer.A[0].matrix).toMatchObject({ a: 2, d: 2 });
@@ -791,6 +795,8 @@ describe("VectorCanvas — Transformer (scale / rotate)", () => {
     await waitFor(() => expect(transformer().nodes()).toHaveLength(1));
     simulateTransform(documentPaths()[0], (target) => target.rotation(90), "rotater");
     expect(api().undoLabel).toBe("Rotar 1 objeto");
+    expect(api().undoCommand).toMatchObject({ type: "object.rotate", origin: "user" });
+    expect(api().undoCommand!.parameters.degrees).toBeCloseTo(90, 6);
     expect(matrixRotationDegrees(api().objectsByLayer.A[0].matrix)).toBeCloseTo(90, 6);
     expect(api().undoDepth).toBe(1);
   });

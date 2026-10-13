@@ -142,7 +142,16 @@ export function useCutTool({ active, editable, state, selectedObjects, mmFactor,
         return;
       }
       const production = applied.production;
-      const result = applyEdit(cutLabel(applied.summary), (snapshot) => (snapshot.objectsByLayer === fresh.objectsByLayer ? production : null));
+      const summary = applied.summary;
+      const result = applyEdit(
+        {
+          type: "geometry.split",
+          label: cutLabel(summary),
+          // Solo CUÁNTOS puntos tenía la línea de corte, nunca los puntos.
+          parameters: { mode: summary.mode, slotWidth: summary.mode === "slot" ? summary.slotWidthMm : undefined, unit: summary.unit.label, extend: plan.request.extend, cutPointCount: plan.request.cutter.points.length, pieceCount: summary.pieceCount },
+        },
+        (snapshot) => (snapshot.objectsByLayer === fresh.objectsByLayer ? production : null),
+      );
       if (!result.applied) {
         update({ message: result.reason === "blocked" ? "Alguna capa está bloqueada u oculta: no se puede modificar. No se hizo ningún cambio." : describeEditFailure(result) });
         return;

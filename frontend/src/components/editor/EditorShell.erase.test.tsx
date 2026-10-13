@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectLastCommand } from "../../test/history";
 import {
   B1,
   clickAt,
@@ -83,6 +84,7 @@ describe("EditorShell — Erase (M3-S04)", () => {
       expect(pathData()).not.toContain(R1);
       expect(pathData()).toHaveLength(before.length - 1);
       expect(screen.getByText(GEOMETRY_DIRTY)).toBeInTheDocument();
+      expectLastCommand("object.erase.objects"); // M3-S12
       fireEvent.click(undoButton());
       expect(pathData()).toEqual(before);
       expect(undoButton()).toBeDisabled();
@@ -223,6 +225,7 @@ describe("EditorShell — Erase (M3-S04)", () => {
       });
       expect(screen.getByText(GEOMETRY_DIRTY)).toBeInTheDocument();
       expect(notice()).toMatch(/1 objeto partido en 2 piezas/);
+      expectLastCommand("object.erase.subtract"); // M3-S12
 
       // Undo exacto y redo exacto; un solo comando por gesto.
       fireEvent.click(undoButton());

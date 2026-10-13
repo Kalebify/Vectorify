@@ -127,6 +127,12 @@
   cursor: not-allowed;
 }
 
+/* M3-S12: el botón Historial avisa (sin esconderlo) cuando hay un aviso de reinicio/truncado o un error de capa sin leer. */
+.editor-header__button--attention {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
 /* ---------- Body: toolbar | canvas | right rail ---------- */
 
 .editor-shell__body {
@@ -1585,4 +1591,192 @@
 .floating-panel__warning--skipped,
 .floating-panel__warning--omitted {
   border-left-color: #b26a00;
+}
+
+/* ---------- Historial de acciones (M3-S12) ---------- */
+
+.history-panel {
+  position: absolute;
+  top: 52px;
+  right: var(--editor-space-4);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-2);
+  width: min(440px, calc(100vw - 2 * var(--editor-space-4)));
+  max-height: min(70vh, 560px);
+  padding: var(--editor-space-3);
+  background: var(--editor-panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.history-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.history-panel__title {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-h);
+}
+
+.history-panel__close,
+.history-panel__link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: var(--editor-space-1);
+  font-size: 12px;
+  text-decoration: underline;
+}
+
+.history-panel__close {
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.history-panel__scope,
+.history-panel__notice {
+  margin: 0;
+}
+
+.history-panel__notice {
+  padding: var(--editor-space-1) var(--editor-space-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-h);
+}
+
+.history-panel__notice--truncated,
+.history-panel__notice--reset {
+  border-color: var(--warn);
+}
+
+.history-panel__notice--error {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.editor-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.history-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+}
+
+.history-panel__entry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--editor-space-1) var(--editor-space-2);
+  width: 100%;
+  padding: var(--editor-space-1) var(--editor-space-2);
+  text-align: left;
+  background: var(--bg);
+  color: var(--text-h);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.history-panel__entry:hover:not(:disabled) {
+  border-color: var(--border);
+}
+
+.history-panel__entry:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.history-panel__entry:disabled {
+  cursor: not-allowed;
+}
+
+.history-panel__entry--current {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+/* Las acciones «futuras» (rama de rehacer) se ven atenuadas: existen, pero todavía no están aplicadas. */
+.history-panel__entry--future {
+  opacity: 0.5;
+  font-style: italic;
+}
+
+.history-panel__time,
+.history-panel__type,
+.history-panel__affected,
+.history-panel__origin {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.history-panel__type {
+  font-family: ui-monospace, monospace;
+}
+
+.history-panel__badge {
+  margin-left: auto;
+  padding: 0 var(--editor-space-1);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.history-panel__badge--future {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.editor-shell__history-alert {
+  position: absolute;
+  left: var(--editor-space-2);
+  bottom: var(--editor-space-2);
+  margin: 0;
+  max-width: 60%;
+  padding: var(--editor-space-1) var(--editor-space-2);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-h);
+  background: var(--editor-panel-bg);
+  border: 1px solid var(--warn);
+}
+
+.editor-shell__history-alert--error {
+  border-color: var(--error);
+  color: var(--error);
+}
+
+.editor-shell__history-alert-button {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+  text-decoration: underline;
 }

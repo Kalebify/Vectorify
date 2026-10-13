@@ -77,6 +77,23 @@ export interface VectorDocumentLayer {
   isNew?: boolean;
 }
 
+/** Propiedades de capa que se escriben de a una por PATCH (Eye / Lock / Rename). */
+export type LayerPropField = "visible" | "locked" | "name";
+
+/**
+ * Cómo terminó una escritura de metadata de capa (M3-S12): `ok` (persistida), `noop` (la capa ya tenía ese valor / el nombre quedó vacío: no se pidió
+ * nada) o `failed` (la Web API falló o la capa no existe; con escritura optimista el cambio local ya se revirtió).
+ */
+export type LayerWriteStatus = "ok" | "noop" | "failed";
+
+export interface LayerWriteOptions {
+  /**
+   * Default true (el comportamiento de M2.1/M2.2): el cambio local se aplica de inmediato y se revierte si falla. Con false (deshacer/rehacer del
+   * historial, M3-S12) NO se toca nada local hasta que el servidor confirma: si falla, el estado queda intacto y no hay rollback que pelear.
+   */
+  optimistic?: boolean;
+}
+
 export interface VectorDocument {
   projectId: string;
   imageId: string;
@@ -158,12 +175,30 @@ export interface UseVectorDocumentState {
   renameLayer: (groupId: string, name: string) => void;
 
   /**
+   * Escribe UNA propiedad de capa con un valor explícito (no un toggle) -- lo que necesita deshacer/rehacer del historial (M3-S12) para re-persistir
+   * el valor anterior/siguiente con el MISMO PATCH. Con `optimistic: false` no hay cambio local ni rollback hasta que el servidor confirma.
+   */
+  setLayerProp: (groupId: string, field: LayerPropField, value: boolean | string, options?: LayerWriteOptions) => Promise<LayerWriteStatus>;
+
+  /**
    * Persiste (Drag & Drop, M2.1-S07) el nuevo orden visual completo -- optimista, con rollback
    * si falla. NUNCA toca geometría (`d`/`transform`/VectorId). Con `savedProjectId` activo
    * (cutover post-Save, M2.2-S05 ronda de fix 1): el PATCH v2 es por-layer, sin endpoint de
    * batch-reorder -- manda un PATCH `order` por cada layer cuyo orden efectivamente cambió.
    */
   reorderLayers: (orderedGroupIds: string[]) => void;
+
+  /**
+   * Igual que `reorderLayers` pero AWAITABLE y con `optimistic` opcional (M3-S12): devuelve cómo terminó la escritura del orden completo. Es lo que usan el
+   * panel de capas (para registrar el cambio en el historial solo si se persistió) y deshacer/rehacer (que re-persisten el orden anterior/siguiente).
+   */
+  setLayerOrder: (orderedGroupIds: string[], options?: LayerWriteOptions) => Promise<LayerWriteStatus>;
+
+  /**
+   * Las capas del servidor AHORA (incluye las escrituras ya aplicadas aunque React todavía no haya re-renderizado). Deshacer/rehacer encadena varias escrituras
+   * de capa dentro de un mismo `jumpTo` y cada una debe ver el resultado de la anterior, no el último render (M3-S12).
+   */
+  getLayers: () => VectorDocumentLayer[];
 
   /** Selección COMPARTIDA de "qué capa se está inspeccionando" (Canvas/LayersPanel/PaletteBar/Inspector). Efímera. Seleccionar una capa distinta limpia `selectedPathKeys`. */
   selectedGroupId: string | null;
@@ -346,7 +381,15 @@ export function useVectorDocument(
   trackPatch?: (promise: Promise<unknown>) => void,
 ): UseVectorDocumentState {
   const [status, setStatus] = useState<VectorDocumentStatus>("idle");
-  const [document, setDocument] = useState<VectorDocument | null>(null);
+  const [document, setDocumentState] = useState<VectorDocument | null>(null);
+  // Espejo SÍNCRONO del documento (M3-S12): deshacer/rehacer de metadata de capa encadena varias escrituras (jumpTo) y cada una debe leer el
+  // resultado de la anterior, no el último render. Toda escritura pasa por `setDocument`, que mantiene el espejo al día.
+  const documentRef = useRef<VectorDocument | null>(null);
+  const setDocument = useCallback((next: VectorDocument | null | ((current: VectorDocument | null) => VectorDocument | null)) => {
+    const resolved = typeof next === "function" ? next(documentRef.current) : next;
+    documentRef.current = resolved;
+    setDocumentState(resolved);
+  }, []);
   const [emptyReason, setEmptyReason] = useState<VectorDocumentEmptyReason | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isolatedGroupId, setIsolatedGroupId] = useState<string | null>(null);
@@ -468,7 +511,7 @@ export function useVectorDocument(
       setErrorMessage(GENERIC_ERROR_MESSAGE);
       setStatus("error");
     });
-  }, [projectId, imageId, paletteId, savedProjectId]);
+  }, [projectId, imageId, paletteId, savedProjectId, setDocument]);
 
   // Bug real encontrado por QA (M2.1-S07, fix round 2): este efecto tenía un guard por
   // "key" (`requestedForRef`) pensado para no disparar `load()` dos veces -- pero bajo React
@@ -492,46 +535,83 @@ export function useVectorDocument(
     load();
   }, [load]);
 
+  // ---- Escritura de metadata de capa (Eye / Lock / Rename), PERSISTIDA ----
+
+  /**
+   * Núcleo común de las escrituras de UNA propiedad de capa (M3-S12; antes triplicado en toggleVisibility/toggleLocked/renameLayer). Con
+   * `optimistic` (default, el comportamiento de M2.1/M2.2) el cambio local se aplica de inmediato y se revierte si falla la Web API. Sin él
+   * (deshacer/rehacer del historial) NO se toca nada hasta que el servidor confirma: si falla, el estado local queda intacto. Devuelve cómo terminó:
+   * `ok` (persistido y reflejado con la respuesta AUTORITATIVA del servidor), `noop` (la capa ya tenía ese valor) o `failed`.
+   * Con `savedProjectId` escribe por `PATCH /api/v2/projects/{id}/layers/{groupId}` (cutover post-Save); sin él, por los sidecars clásicos.
+   */
+  const writeLayerProp = useCallback(
+    (groupId: string, field: LayerPropField, value: boolean | string, optimistic: boolean): Promise<LayerWriteStatus> => {
+      const current = documentRef.current;
+      const layer = current?.layers.find((l) => l.groupId === groupId);
+      if (!current || !layer) return Promise.resolve("failed");
+      if (layer[field] === value) return Promise.resolve("noop");
+
+      const previous = layer[field];
+      const paletteIdForRequest = current.paletteId;
+      const setField = (next: boolean | string) =>
+        setDocument((doc) => doc && { ...doc, layers: doc.layers.map((l) => (l.groupId === groupId ? { ...l, [field]: next } : l)) });
+      if (optimistic) setField(value);
+      const rollback = () => {
+        if (optimistic) setField(previous);
+      };
+
+      if (savedProjectId) {
+        const patchPromise = updateVectorDocumentLayer(savedProjectId, groupId, { [field]: value });
+        // M2.2-S07: el PATCH YA ES el autosave real de una sesión guardada -- conecta el indicador compartido a ESTA promesa,
+        // sin alterar el rollback optimista de abajo.
+        trackPatch?.(patchPromise);
+        return patchPromise
+          .then((response) => {
+            setDocument((doc) => doc && applySavedLayerResponse(doc, response));
+            return "ok" as const;
+          })
+          .catch(() => {
+            rollback();
+            return "failed" as const;
+          });
+      }
+
+      const request =
+        field === "visible"
+          ? setLayerVisibleRequest(projectId, imageId, paletteIdForRequest, groupId, value as boolean)
+          : field === "locked"
+            ? setLayerLockedRequest(projectId, imageId, paletteIdForRequest, groupId, value as boolean)
+            : setLayerNameRequest(projectId, imageId, paletteIdForRequest, groupId, value as string);
+      return request
+        .then((response) => {
+          setDocument((doc) => doc && applyLayoutEntries(doc, response.entries));
+          return "ok" as const;
+        })
+        .catch(() => {
+          rollback();
+          return "failed" as const;
+        });
+    },
+    [projectId, imageId, savedProjectId, trackPatch, setDocument],
+  );
+
+  const setLayerProp = useCallback(
+    (groupId: string, field: LayerPropField, value: boolean | string, options?: LayerWriteOptions): Promise<LayerWriteStatus> => {
+      const normalized = field === "name" ? String(value).trim() : value;
+      if (field === "name" && !normalized) return Promise.resolve("noop");
+      return writeLayerProp(groupId, field, normalized, options?.optimistic ?? true);
+    },
+    [writeLayerProp],
+  );
+
   // ---- Visibilidad (Eye, PERSISTIDA) + Isolate/Show All (overlay EFÍMERO) ----
 
   const toggleVisibility = useCallback(
     (groupId: string) => {
-      if (!document) return;
-      const layer = document.layers.find((l) => l.groupId === groupId);
-      if (!layer) return;
-
-      const nextVisible = !layer.visible;
-      const paletteIdForRequest = document.paletteId;
-
-      // Updaters de setState PUROS (sin llamar a la Web API adentro, StrictMode
-      // los invoca 2 veces en desarrollo): el efecto (fetch) se dispara acá
-      // afuera, una sola vez, leyendo el valor "previo" ya calculado arriba.
-      setDocument((current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, visible: nextVisible } : l)) });
-
-      if (savedProjectId) {
-        const patchPromise = updateVectorDocumentLayer(savedProjectId, groupId, { visible: nextVisible });
-        // M2.2-S07: el PATCH YA ES el autosave real de una sesión guardada -- conecta el
-        // indicador compartido a ESTA promesa, sin alterar el rollback optimista de abajo.
-        trackPatch?.(patchPromise);
-        patchPromise
-          .then((response) => setDocument((current) => current && applySavedLayerResponse(current, response)))
-          .catch(() =>
-            setDocument(
-              (current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, visible: !nextVisible } : l)) },
-            ),
-          );
-        return;
-      }
-
-      setLayerVisibleRequest(projectId, imageId, paletteIdForRequest, groupId, nextVisible)
-        .then((response) => setDocument((current) => current && applyLayoutEntries(current, response.entries)))
-        .catch(() =>
-          setDocument(
-            (current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, visible: !nextVisible } : l)) },
-          ),
-        );
+      const layer = documentRef.current?.layers.find((l) => l.groupId === groupId);
+      if (layer) void writeLayerProp(groupId, "visible", !layer.visible, true);
     },
-    [document, projectId, imageId, savedProjectId, trackPatch],
+    [writeLayerProp],
   );
 
   const isolate = useCallback((groupId: string) => {
@@ -553,94 +633,42 @@ export function useVectorDocument(
 
   const toggleLocked = useCallback(
     (groupId: string) => {
-      if (!document) return;
-      const layer = document.layers.find((l) => l.groupId === groupId);
-      if (!layer) return;
-
-      const nextLocked = !layer.locked;
-      const paletteIdForRequest = document.paletteId;
-
-      setDocument((current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, locked: nextLocked } : l)) });
-
-      if (savedProjectId) {
-        const patchPromise = updateVectorDocumentLayer(savedProjectId, groupId, { locked: nextLocked });
-        trackPatch?.(patchPromise);
-        patchPromise
-          .then((response) => setDocument((current) => current && applySavedLayerResponse(current, response)))
-          .catch(() =>
-            setDocument(
-              (current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, locked: !nextLocked } : l)) },
-            ),
-          );
-        return;
-      }
-
-      setLayerLockedRequest(projectId, imageId, paletteIdForRequest, groupId, nextLocked)
-        .then((response) => setDocument((current) => current && applyLayoutEntries(current, response.entries)))
-        .catch(() =>
-          setDocument(
-            (current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, locked: !nextLocked } : l)) },
-          ),
-        );
+      const layer = documentRef.current?.layers.find((l) => l.groupId === groupId);
+      if (layer) void writeLayerProp(groupId, "locked", !layer.locked, true);
     },
-    [document, projectId, imageId, savedProjectId, trackPatch],
+    [writeLayerProp],
   );
 
   // ---- Rename (M2.1-S07, ronda de fix 1 -- ver docstring de renameLayer arriba) ----
 
   const renameLayer = useCallback(
     (groupId: string, name: string) => {
-      if (!document) return;
-      const layer = document.layers.find((l) => l.groupId === groupId);
-      if (!layer) return;
-
       const trimmed = name.trim();
-      if (!trimmed || trimmed === layer.name) return;
-
-      const previousName = layer.name;
-      const paletteIdForRequest = document.paletteId;
-
-      setDocument((current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, name: trimmed } : l)) });
-
-      if (savedProjectId) {
-        const patchPromise = updateVectorDocumentLayer(savedProjectId, groupId, { name: trimmed });
-        trackPatch?.(patchPromise);
-        patchPromise
-          .then((response) => setDocument((current) => current && applySavedLayerResponse(current, response)))
-          .catch(() =>
-            setDocument(
-              (current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, name: previousName } : l)) },
-            ),
-          );
-        return;
-      }
-
-      setLayerNameRequest(projectId, imageId, paletteIdForRequest, groupId, trimmed)
-        .then((response) => setDocument((current) => current && applyLayoutEntries(current, response.entries)))
-        .catch(() =>
-          setDocument(
-            (current) => current && { ...current, layers: current.layers.map((l) => (l.groupId === groupId ? { ...l, name: previousName } : l)) },
-          ),
-        );
+      if (trimmed) void writeLayerProp(groupId, "name", trimmed, true);
     },
-    [document, projectId, imageId, savedProjectId, trackPatch],
+    [writeLayerProp],
   );
 
   // ---- Reorder (Drag & Drop, PERSISTIDO -- NUNCA toca geometría) ----
 
-  const reorderLayers = useCallback(
-    (orderedGroupIds: string[]) => {
-      if (!document) return;
-      const byGroupId = new Map(document.layers.map((l) => [l.groupId, l]));
-      if (orderedGroupIds.length !== document.layers.length || orderedGroupIds.some((id) => !byGroupId.has(id))) {
-        return;
+  const setLayerOrder = useCallback(
+    (orderedGroupIds: string[], options?: LayerWriteOptions): Promise<LayerWriteStatus> => {
+      const current = documentRef.current;
+      if (!current) return Promise.resolve("failed");
+      const byGroupId = new Map(current.layers.map((l) => [l.groupId, l]));
+      if (orderedGroupIds.length !== current.layers.length || orderedGroupIds.some((id) => !byGroupId.has(id))) {
+        return Promise.resolve("failed");
       }
 
-      const previousLayers = document.layers;
-      const paletteIdForRequest = document.paletteId;
+      const optimistic = options?.optimistic ?? true;
+      const previousLayers = current.layers;
+      const paletteIdForRequest = current.paletteId;
       const optimisticLayers = orderedGroupIds.map((groupId, index) => ({ ...byGroupId.get(groupId)!, order: index }));
 
-      setDocument((current) => current && { ...current, layers: optimisticLayers });
+      if (optimistic) setDocument((doc) => doc && { ...doc, layers: optimisticLayers });
+      const rollback = () => {
+        if (optimistic) setDocument((doc) => doc && { ...doc, layers: previousLayers });
+      };
 
       if (savedProjectId) {
         // PATCH v2 es por-layer, sin endpoint de batch-reorder (decisión ya tomada en spec.md
@@ -649,26 +677,44 @@ export function useVectorDocument(
         // cambió respecto al valor previo, nunca uno por cada layer del documento.
         const changedLayers = optimisticLayers.filter((layer) => byGroupId.get(layer.groupId)!.order !== layer.order);
 
-        const patchPromise = Promise.all(
-          changedLayers.map((layer) => updateVectorDocumentLayer(savedProjectId, layer.groupId, { order: layer.order })),
-        );
+        const patchPromise = Promise.all(changedLayers.map((layer) => updateVectorDocumentLayer(savedProjectId, layer.groupId, { order: layer.order })));
         trackPatch?.(patchPromise);
-        patchPromise
-          .then((responses) =>
-            setDocument((current) => {
-              if (!current) return current;
-              return responses.reduce((doc, response) => applySavedLayerResponse(doc, response), current);
-            }),
-          )
-          .catch(() => setDocument((current) => current && { ...current, layers: previousLayers }));
-        return;
+        return patchPromise
+          .then((responses) => {
+            setDocument((doc) => {
+              if (!doc) return doc;
+              // Sin optimismo previo el documento todavía tiene el orden viejo de las capas SIN PATCH: se aplica el orden pedido completo y luego las respuestas.
+              const base = optimistic ? doc : { ...doc, layers: optimisticLayers };
+              return responses.reduce((acc, response) => applySavedLayerResponse(acc, response), base);
+            });
+            return "ok" as const;
+          })
+          .catch(() => {
+            rollback();
+            return "failed" as const;
+          });
       }
 
-      reorderLayersRequest(projectId, imageId, paletteIdForRequest, orderedGroupIds)
-        .then((response) => setDocument((current) => current && applyLayoutEntries(current, response.entries)))
-        .catch(() => setDocument((current) => current && { ...current, layers: previousLayers }));
+      return reorderLayersRequest(projectId, imageId, paletteIdForRequest, orderedGroupIds)
+        .then((response) => {
+          setDocument((doc) => doc && applyLayoutEntries(doc, response.entries));
+          return "ok" as const;
+        })
+        .catch(() => {
+          rollback();
+          return "failed" as const;
+        });
     },
-    [document, projectId, imageId, savedProjectId, trackPatch],
+    [projectId, imageId, savedProjectId, trackPatch, setDocument],
+  );
+
+  const getLayers = useCallback(() => documentRef.current?.layers ?? [], []);
+
+  const reorderLayers = useCallback(
+    (orderedGroupIds: string[]) => {
+      void setLayerOrder(orderedGroupIds);
+    },
+    [setLayerOrder],
   );
 
   // ---- Selección (EFÍMERA) ----
@@ -710,7 +756,10 @@ export function useVectorDocument(
     showAll,
     toggleLocked,
     renameLayer,
+    setLayerProp,
     reorderLayers,
+    setLayerOrder,
+    getLayers,
     selectedGroupId,
     selectGroup,
     selectedPathKeys,

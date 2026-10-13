@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectLastCommand } from "../../test/history";
 import {
   clickAt,
   dragAlong,
@@ -92,6 +93,7 @@ describe("EditorShell — Draw (M3-S04)", () => {
       expect(created.stroke()).toBeUndefined();
       expect(layerNames()).toEqual(["Rojo", "Azul", "Líneas"]);
       expect(undoButton()).toBeEnabled();
+      expectLastCommand("object.draw"); // M3-S12: la ruta real de la UI deja un comando tipado
 
       fireEvent.click(undoButton());
       expect(pathByData("M60 10 L100 10 L100 50 Z")).toBeUndefined();

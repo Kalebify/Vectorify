@@ -2,6 +2,7 @@ import Konva from "konva";
 import { StrictMode } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { historyTypes } from "../../test/history";
 import { abortAwareFetch, svgResponse } from "../../test/abortableFetch";
 import { EditorShell } from "./EditorShell";
 
@@ -703,11 +704,15 @@ describe("EditorShell — Copiar / Pegar / Duplicar / Eliminar (M3-S06)", () => 
       fireEvent.click(screen.getByRole("button", { name: "Ocultar la capa Azul" }));
       press(document.body, "v", { ctrlKey: true });
       expect(await screen.findByRole("alert")).toHaveTextContent(/No se pegó nada: 1 objeto no se pegó \(capa «Azul» oculta\)/);
-      expect(undoButton()).toBeDisabled();
+      // Pegar no registró ningún comando: lo último deshacible sigue siendo ocultar la capa (la metadata de capa entra al historial desde M3-S12).
+      expect(undoButton()).toHaveAttribute("aria-label", "Deshacer: Ocultar la capa «Azul»");
 
       fireEvent.click(screen.getByRole("button", { name: "Mostrar la capa Azul" }));
       press(document.body, "v", { ctrlKey: true });
-      expect(screen.getByRole("button", { name: "Deshacer: Pegar 1 objeto" })).toBeEnabled();
+      // Deshacer queda deshabilitado mientras se guarda el cambio de visibilidad de la capa (M3-S12: una operación de metadata a la vez) y la entrada de
+      // metadata se registra al CONFIRMARSE: el pegado, hecho mientras tanto, queda antes en el historial.
+      await waitFor(() => expect(undoButton()).toBeEnabled());
+      expect(historyTypes()).toEqual(["layer.setVisible", "object.paste", "layer.setVisible"]);
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 

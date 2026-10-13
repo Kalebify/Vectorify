@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectLastCommand } from "../../test/history";
 import {
   clickAt,
   dragAlong,
@@ -678,6 +679,7 @@ describe("EditorShell — Cut (M3-S10)", () => {
 
       await waitFor(() => expect(undoButton()).toBeEnabled());
       expect(undoButton().getAttribute("title") ?? undoButton().getAttribute("aria-label")).toMatch(/Cortar: dividir \(1 objeto → 2 piezas\)/);
+      expectLastCommand("geometry.split"); // M3-S12
     });
 
     it("Separar con hueco: las piezas quedan separadas por la ranura (0,5 mm = 1 u) y la etiqueta lo dice", async () => {

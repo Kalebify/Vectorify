@@ -3,6 +3,7 @@ import { assignManufacturingOperation, getManufacturingOperations } from "../api
 import { ApiClientError } from "../api/httpClient";
 import { updateVectorDocumentLayer } from "../api/vectorDocumentApi";
 import type { ApiErrorResponse } from "../types/preprocess";
+import type { LayerWriteStatus } from "./useVectorDocument";
 import type {
   ManufacturingOperationChoice,
   ManufacturingOperationErrorCode,
@@ -42,6 +43,12 @@ export interface UseManufacturingOperationsState {
   /** groupId de la capa cuya operación se está asignando/reasignando, para deshabilitar su selector mientras la request está en curso. */
   mutatingGroupId: string | null;
   assign: (groupId: string, operation: ManufacturingOperationChoice) => void;
+  /**
+   * Igual que `assign` pero AWAITABLE (M3-S12, para que el historial sepa si registrar el cambio o si el PATCH inverso se persistió): `ok`, `noop` (sin paleta:
+   * nada que pedir) o `failed` (el error queda en `errorMessage`). Con un proyecto ya guardado acepta además `"unassigned"` (vacía la asignación; lo que necesita
+   * deshacer una primera asignación): el sidecar clásico de staging NO lo acepta nunca (ver `ManufacturingOperationParser`) y devuelve `failed`.
+   */
+  assignOperation: (groupId: string, operation: ManufacturingOperationChoice | "unassigned") => Promise<LayerWriteStatus>;
 }
 
 /**
@@ -167,20 +174,28 @@ export function useManufacturingOperations(
       });
   }, [projectId, imageId, paletteId, layerSetId, savedProjectId, applyResponse]);
 
-  const assign = useCallback(
-    (groupId: string, operation: ManufacturingOperationChoice) => {
+  const assignOperation = useCallback(
+    (groupId: string, operation: ManufacturingOperationChoice | "unassigned"): Promise<LayerWriteStatus> => {
       if (!paletteId) {
-        return;
+        return Promise.resolve("noop");
       }
 
       setErrorCode(null);
       setErrorMessage(null);
+
+      if (!savedProjectId && operation === "unassigned") {
+        // El sidecar clásico nunca acepta "unassigned" como entrada (es un estado derivado): se informa, no se inventa un request.
+        setErrorCode("invalid_parameters");
+        setErrorMessage("En un proyecto sin guardar no se puede volver a «sin asignar»: elegí Corte, Grabado o Ignorar.");
+        return Promise.resolve("failed");
+      }
+
       setMutatingGroupId(groupId);
 
       if (savedProjectId) {
         const patchPromise = updateVectorDocumentLayer(savedProjectId, groupId, { manufacturingOperation: operation });
         trackPatch?.(patchPromise);
-        patchPromise
+        return patchPromise
           .then((response) => {
             setMutatingGroupId(null);
             setOperations((current) => ({
@@ -192,26 +207,37 @@ export function useManufacturingOperations(
                 operation: response.manufacturingOperation as ManufacturingOperationValue,
               },
             }));
+            return "ok" as const;
           })
           .catch((error: unknown) => {
             setMutatingGroupId(null);
             handleError(error);
+            return "failed" as const;
           });
-        return;
       }
 
-      assignManufacturingOperation(projectId, imageId, paletteId, groupId, operation)
+      // (Más arriba se descartó "unassigned" para el sidecar clásico: acá es una elección real.)
+      return assignManufacturingOperation(projectId, imageId, paletteId, groupId, operation as ManufacturingOperationChoice)
         .then((response) => {
           setMutatingGroupId(null);
           applyResponse(response);
+          return "ok" as const;
         })
         .catch((error: unknown) => {
           setMutatingGroupId(null);
           handleError(error);
+          return "failed" as const;
         });
     },
     [projectId, imageId, paletteId, savedProjectId, applyResponse, handleError, trackPatch],
   );
 
-  return { operations, summary, errorCode, errorMessage, mutatingGroupId, assign };
+  const assign = useCallback(
+    (groupId: string, operation: ManufacturingOperationChoice) => {
+      void assignOperation(groupId, operation);
+    },
+    [assignOperation],
+  );
+
+  return { operations, summary, errorCode, errorMessage, mutatingGroupId, assign, assignOperation };
 }

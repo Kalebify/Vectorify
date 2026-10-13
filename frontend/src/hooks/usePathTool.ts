@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CommandDraft } from "../lib/editor/commands";
 import { invertMatrix } from "../lib/editor/matrix";
 import {
   addNodeOnSegment,
@@ -108,6 +109,8 @@ interface DragSession {
   inverse: NonNullable<ReturnType<typeof invertMatrix>>;
   /** Handle (local) al empezar el arrastre: el handle sigue al puntero conservando el agarre. */
   startHandle: Point | null;
+  /** Desplazamiento local total del último paso (parámetro `dx`/`dy` del comando `path.moveAnchors`). */
+  lastDelta: Point;
 }
 
 export interface HandleInfo {
@@ -251,10 +254,11 @@ export function usePathTool({ activeTool, editable, layers, selectedObjects, fra
   /**
    * Corre una operación del modelo sobre el objeto y la aplica como UN comando. Se planifica primero contra el estado CONFIRMADO para poder
    * explicar el rechazo (los productores de `applyEdit` no pueden devolver errores); `applyEdit` vuelve a derivar lo mismo del estado que recibe.
-   * `silent`: el error se devuelve pero no se muestra en el panel (lo muestra el campo que lo originó).
+   * `silent`: el error se devuelve pero no se muestra en el panel (lo muestra el campo que lo originó). `command` es el borrador del comando (tipo `path.*` +
+   * parámetros descriptivos, nunca los puntos del path).
    */
   const runEdit = useCallback(
-    (label: string, edit: (current: PathModel) => ModelResult, options: { coalesceKey?: string; silent?: boolean } = {}): { ok: boolean; error: string | null } => {
+    (command: CommandDraft, edit: (current: PathModel) => ModelResult, options: { coalesceKey?: string; silent?: boolean } = {}): { ok: boolean; error: string | null } => {
       const state = latest.current;
       const fail = (message: string) => {
         if (!options.silent) setError(message);
@@ -286,7 +290,7 @@ export function usePathTool({ activeTool, editable, layers, selectedObjects, fra
       }
 
       const objectId = current.id;
-      const result = applyEdit(label, (document) => nodeEditProduction(document, objectId, memory, edit), options.coalesceKey ? { coalesceKey: options.coalesceKey } : undefined);
+      const result = applyEdit(command, (document) => nodeEditProduction(document, objectId, memory, edit), options.coalesceKey ? { coalesceKey: options.coalesceKey } : undefined);
       if (!result.applied) return fail(describeEditFailure(result));
       rememberKinds(memory, outcome.object.d, outcome.kinds);
       if (outcome.selection) setSelectionTo(objectId, outcome.model, outcome.selection);
@@ -295,14 +299,18 @@ export function usePathTool({ activeTool, editable, layers, selectedObjects, fra
     [applyEdit, getSnapshot, memory, setSelectionTo],
   );
 
-  const addNode = useCallback((subpath: number, segment: number, t: number) => runEdit("Agregar nodo", (current) => addNodeOnSegment(current, subpath, segment, t)), [runEdit]);
+  const addNode = useCallback(
+    (subpath: number, segment: number, t: number) => runEdit({ type: "path.addNode", label: "Agregar nodo", parameters: { subpath, segment, t } }, (current) => addNodeOnSegment(current, subpath, segment, t)),
+    [runEdit],
+  );
 
   const toggleKindAt = useCallback(
     (ref: NodeRef) => {
       const state = latest.current;
       const located = state.model ? locateNode(state.model, ref) : null;
       if (!state.object || !state.model || !located) return;
-      runEdit(`Nodo ${located.node.kind === "corner" ? "suave" : "esquina"}`, (current) => toggleNodeKind(current, ref));
+      const nextKind = located.node.kind === "corner" ? "smooth" : "corner";
+      runEdit({ type: "path.setNodeKind", label: `Nodo ${KIND_LABEL[nextKind]}`, parameters: { kind: nextKind, nodeCount: 1 } }, (current) => toggleNodeKind(current, ref));
       // El nodo alternado queda seleccionado, como cuando se hace click sobre él.
       setSelectionTo(state.object.id, state.model, [ref]);
     },
@@ -314,7 +322,7 @@ export function usePathTool({ activeTool, editable, layers, selectedObjects, fra
       const state = latest.current;
       if (state.refs.length === 0) return;
       const picked = state.refs;
-      runEdit(`Nodo ${KIND_LABEL[kind]}`, (current) => setNodeKind(current, picked, kind));
+      runEdit({ type: "path.setNodeKind", label: `Nodo ${KIND_LABEL[kind]}`, parameters: { kind, nodeCount: picked.length } }, (current) => setNodeKind(current, picked, kind));
     },
     [runEdit],
   );
@@ -325,7 +333,10 @@ export function usePathTool({ activeTool, editable, layers, selectedObjects, fra
       if (state.refs.length === 0) return;
       const picked = state.refs;
       const count = picked.length;
-      runEdit(removeSubpaths ? "Eliminar subpath" : `Eliminar ${plural(count, "nodo", "nodos")}`, (current) => deleteNodes(current, picked, { removeSubpaths }));
+      runEdit(
+        { type: "path.deleteNodes", label: removeSubpaths ? "Eliminar subpath" : `Eliminar ${plural(count, "nodo", "nodos")}`, parameters: { nodeCount: count, removeSubpaths } },
+        (current) => deleteNodes(current, picked, { removeSubpaths }),
+      );
     },
     [runEdit],
   );
@@ -343,7 +354,7 @@ export function usePathTool({ activeTool, editable, layers, selectedObjects, fra
       const delta = documentVectorToLocal(inverse, { x: dx * amount, y: dy * amount });
       const picked = state.refs;
       // Una ráfaga de flechas sobre los MISMOS nodos es un solo comando de undo.
-      runEdit(`Mover ${plural(picked.length, "nodo", "nodos")}`, (current) => moveAnchors(current, picked, delta), {
+      runEdit({ type: "path.moveAnchors", label: `Mover ${plural(picked.length, "nodo", "nodos")}`, parameters: { nodeCount: picked.length, dx: delta.x, dy: delta.y, source: "keyboard" } }, (current) => moveAnchors(current, picked, delta), {
         coalesceKey: `path-nudge:${state.object.id}:${[...state.keys].sort().join(",")}`,
       });
     },
@@ -372,7 +383,7 @@ export function usePathTool({ activeTool, editable, layers, selectedObjects, fra
         setError("Hay una transformación pendiente: aplicala (Apply) o cancelala (Cancel) antes de editar.");
         return false;
       }
-      dragRef.current = { objectId: current.id, request, inverse, startHandle };
+      dragRef.current = { objectId: current.id, request, inverse, startHandle, lastDelta: { x: 0, y: 0 } };
       return true;
     },
     [beginGesture, getSnapshot],
@@ -384,6 +395,7 @@ export function usePathTool({ activeTool, editable, layers, selectedObjects, fra
       if (!drag) return;
       const restricted = modifiers.shift ? (Math.abs(delta.x) >= Math.abs(delta.y) ? { x: delta.x, y: 0 } : { x: 0, y: delta.y }) : delta;
       const local = documentVectorToLocal(drag.inverse, restricted);
+      drag.lastDelta = local;
       const { request, startHandle } = drag;
       // Cada paso parte del estado ANTES del gesto (previewEdit): el resultado depende solo de (antes, delta total).
       previewEdit((document) =>
@@ -401,8 +413,12 @@ export function usePathTool({ activeTool, editable, layers, selectedObjects, fra
     const drag = dragRef.current;
     if (!drag) return;
     dragRef.current = null;
-    const label = drag.request.kind === "anchors" ? `Mover ${plural(drag.request.refs.length, "nodo", "nodos")}` : "Mover handle";
-    const result = commitGesture(label);
+    const request = drag.request;
+    const draft: CommandDraft =
+      request.kind === "anchors"
+        ? { type: "path.moveAnchors", label: `Mover ${plural(request.refs.length, "nodo", "nodos")}`, parameters: { nodeCount: request.refs.length, dx: drag.lastDelta.x, dy: drag.lastDelta.y, source: "drag" } }
+        : { type: "path.moveHandle", label: "Mover handle", parameters: { side: request.side, source: "drag" } };
+    const result = commitGesture(draft);
     if (result.applied) {
       if (memory.live) rememberKinds(memory, memory.live.d, memory.live.kinds);
     } else if (result.reason === "blocked") {
@@ -437,7 +453,11 @@ export function usePathTool({ activeTool, editable, layers, selectedObjects, fra
         const moved = axis === "x" ? { x: documentValue, y: inDocument.y } : { x: inDocument.x, y: documentValue };
         return [{ ref, point: localToDocument(inverse, moved) }];
       });
-      return runEdit(`Mover ${plural(entries.length, "nodo", "nodos")} (Inspector)`, (current) => setAnchors(current, entries), { silent: true }).error;
+      return runEdit(
+        { type: "path.setNodeCoords", label: `Mover ${plural(entries.length, "nodo", "nodos")} (Inspector)`, parameters: { axis, value, nodeCount: entries.length } },
+        (current) => setAnchors(current, entries),
+        { silent: true },
+      ).error;
     },
     [runEdit],
   );
@@ -458,7 +478,11 @@ export function usePathTool({ activeTool, editable, layers, selectedObjects, fra
       const vector = { x: handleInDocument.x - anchorInDocument.x, y: handleInDocument.y - anchorInDocument.y };
       const length = field === "length" ? state.fromDisplay(value) : Math.hypot(vector.x, vector.y);
       const angle = field === "angle" ? value : (Math.atan2(vector.y, vector.x) * 180) / Math.PI;
-      return runEdit("Editar handle (Inspector)", (current) => setHandleVector(current, ref, side, length, angle, matrix), { silent: true }).error;
+      return runEdit(
+        { type: "path.moveHandle", label: "Editar handle (Inspector)", parameters: { side, source: "inspector", field, value } },
+        (current) => setHandleVector(current, ref, side, length, angle, matrix),
+        { silent: true },
+      ).error;
     },
     [runEdit],
   );
@@ -469,12 +493,12 @@ export function usePathTool({ activeTool, editable, layers, selectedObjects, fra
       if (!state.model || state.refs.length === 0) return;
       if (which === "selected") {
         const segments = selectedSegments(state.model, state.keys);
-        runEdit(`Alternar ${plural(segments.length, "segmento", "segmentos")} recto/curvo`, (current) => toggleSegments(current, segments));
+        runEdit({ type: "path.toggleSegment", label: `Alternar ${plural(segments.length, "segmento", "segmentos")} recto/curvo`, parameters: { scope: "selected" } }, (current) => toggleSegments(current, segments));
         return;
       }
       const around = adjacentSegments(state.model, state.refs[0]);
       const segment = which === "before" ? around.before : around.after;
-      if (segment) runEdit("Alternar segmento recto/curvo", (current) => toggleSegmentKind(current, segment.subpath, segment.segment));
+      if (segment) runEdit({ type: "path.toggleSegment", label: "Alternar segmento recto/curvo", parameters: { scope: which } }, (current) => toggleSegmentKind(current, segment.subpath, segment.segment));
     },
     [runEdit],
   );
@@ -490,14 +514,14 @@ export function usePathTool({ activeTool, editable, layers, selectedObjects, fra
     if (!state.model) return;
     const index = state.refs.length > 0 ? state.refs[0].subpath : state.model.subpaths.length === 1 ? 0 : null;
     if (index === null) return;
-    runEdit("Cerrar subpath", (current) => closeSubpath(current, index));
+    runEdit({ type: "path.closeSubpath", label: "Cerrar subpath", parameters: { subpath: index } }, (current) => closeSubpath(current, index));
   }, [runEdit]);
 
   const openAtSelected = useCallback(() => {
     const state = latest.current;
     if (state.refs.length !== 1) return;
     const ref = state.refs[0];
-    runEdit("Abrir subpath", (current) => openSubpathAt(current, ref));
+    runEdit({ type: "path.openSubpath", label: "Abrir subpath", parameters: { subpath: ref.subpath, node: ref.node } }, (current) => openSubpathAt(current, ref));
   }, [runEdit]);
 
   // ---- Salir de la herramienta ----

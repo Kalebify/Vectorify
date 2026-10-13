@@ -1,5 +1,6 @@
 import { StrictMode, useEffect } from "react";
 import { act, render, renderHook, waitFor } from "@testing-library/react";
+import { cmd } from "../test/commands";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildFillProduction, buildRecolorProduction, planRecolor, type ColorTarget } from "../lib/editor/colors";
 import type { EditableDocument, EditorObject, EditProduction } from "../lib/editor/types";
@@ -88,7 +89,7 @@ describe("useEditableDocument — estructura de capas (M3-S03)", () => {
 
     let outcome!: ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("Rellenar 2 objetos", fillProducer(["a1", "b1"], newTarget("#00ff00", "NEW")));
+      outcome = result.current.applyEdit(cmd("Rellenar 2 objetos", "object.fill"), fillProducer(["a1", "b1"], newTarget("#00ff00", "NEW")));
     });
     expect(outcome).toMatchObject({ applied: true, skippedLockedObjects: 0, skippedHiddenObjects: 0 });
     expect(result.current.undoDepth).toBe(1); // UN solo comando para capa + objetos
@@ -139,7 +140,7 @@ describe("useEditableDocument — estructura de capas (M3-S03)", () => {
     const fetchMock = installFetch();
     const { result } = await renderLoaded();
     const callsBefore = fetchMock.mock.calls.length;
-    act(() => void result.current.applyEdit("Rellenar", fillProducer(["a1"], newTarget("#00ff00"))));
+    act(() => void result.current.applyEdit(cmd("Rellenar", "object.fill"), fillProducer(["a1"], newTarget("#00ff00"))));
     act(() => void result.current.undo());
     act(() => void result.current.redo());
     await act(async () => {});
@@ -149,7 +150,7 @@ describe("useEditableDocument — estructura de capas (M3-S03)", () => {
   it("Recolor de capa conserva el groupId (identidad): cambia su color y el fill de sus objetos; undo hasta el origen deja la estructura LIMPIA", async () => {
     const { result } = await renderLoaded();
     act(() => {
-      result.current.applyEdit("Recolorear", (state) => buildRecolorProduction("layer", state, { target: newTarget("#00ff00"), sourceGroupId: "A" }));
+      result.current.applyEdit(cmd("Recolorear", "object.recolor"), (state) => buildRecolorProduction("layer", state, { target: newTarget("#00ff00"), sourceGroupId: "A" }));
     });
     const recolored = result.current.layers.find((candidate) => candidate.groupId === "A")!;
     expect(recolored).toMatchObject({ groupId: "A", colorHex: "#00FF00", fill: "#00FF00", name: "Rojo", order: 0, manufacturingOperation: "cut" });
@@ -173,7 +174,7 @@ describe("useEditableDocument — estructura de capas (M3-S03)", () => {
   it("COLOR COMPARTIDO: pintar B con el hex de A deja DOS capas distintas con el mismo hex (ninguna se fusiona ni desaparece)", async () => {
     const { result } = await renderLoaded();
     act(() => {
-      result.current.applyEdit("Recolorear", (state) => buildRecolorProduction("layer", state, { target: { kind: "layer", groupId: "A" }, sourceGroupId: "B" }));
+      result.current.applyEdit(cmd("Recolorear", "object.recolor"), (state) => buildRecolorProduction("layer", state, { target: { kind: "layer", groupId: "A" }, sourceGroupId: "B" }));
     });
     const hexes = Object.fromEntries(result.current.layers.map((candidate) => [candidate.groupId, candidate.colorHex.toLowerCase()]));
     expect(hexes).toEqual({ A: "#ff0000", B: "#ff0000", C: "#ff0000" });
@@ -188,7 +189,7 @@ describe("useEditableDocument — estructura de capas (M3-S03)", () => {
     const originalA = result.current.objectsByLayer.A;
     const originalC = result.current.objectsByLayer.C;
     act(() => {
-      result.current.applyEdit("Fusionar", (state) => buildRecolorProduction("layer", state, { target: { kind: "layer", groupId: "C" }, sourceGroupId: "A", mergeIntoGroupId: "C" }));
+      result.current.applyEdit(cmd("Fusionar"), (state) => buildRecolorProduction("layer", state, { target: { kind: "layer", groupId: "C" }, sourceGroupId: "A", mergeIntoGroupId: "C" }));
     });
     expect(result.current.layers.map((candidate) => candidate.groupId)).toEqual(["A", "B", "C"]); // la capa origen sigue existiendo
     expect(result.current.objectsByLayer.A).toEqual([]);
@@ -247,7 +248,7 @@ describe("useEditableDocument — estructura de capas (M3-S03)", () => {
     act(() => void result.current.previewEdit(fillProducer(["a1"], newTarget("#00ff00", "NEW"))));
     let outcome!: ReturnType<typeof result.current.commitGesture>;
     act(() => {
-      outcome = result.current.commitGesture("Rellenar 1 objeto");
+      outcome = result.current.commitGesture(cmd("Rellenar 1 objeto", "object.fill"));
     });
     expect(outcome.applied).toBe(true);
     expect(result.current.undoDepth).toBe(1);
@@ -263,7 +264,7 @@ describe("useEditableDocument — estructura de capas (M3-S03)", () => {
     const { result } = await renderLoaded([LAYER_A, { ...LAYER_B, locked: true }, LAYER_C], { visibility: { A: true, B: true, C: false } });
     let seen: EditableDocument["layers"];
     act(() => {
-      result.current.applyEdit("espía", (state) => {
+      result.current.applyEdit(cmd("espía"), (state) => {
         seen = state.layers;
         return null;
       });
@@ -297,7 +298,7 @@ describe("useEditableDocument — estructura de capas: bloqueo y visibilidad (to
     const originalA = result.current.objectsByLayer.A;
     let outcome!: ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("mover", moveA1ToB(true));
+      outcome = result.current.applyEdit(cmd("mover"), moveA1ToB(true));
     });
     expect(outcome).toMatchObject({ applied: false, reason: "blocked", skippedLockedObjects: 1 });
     expect(result.current.objectsByLayer.A).toBe(originalA);
@@ -309,7 +310,7 @@ describe("useEditableDocument — estructura de capas: bloqueo y visibilidad (to
     const { result } = await renderLoaded([{ ...LAYER_A, locked: true }, LAYER_B, LAYER_C]);
     let outcome!: ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("mover", moveA1ToB(true));
+      outcome = result.current.applyEdit(cmd("mover"), moveA1ToB(true));
     });
     expect(outcome).toMatchObject({ applied: false, reason: "blocked" });
     expect(result.current.objectsByLayer.B.map((object) => object.id)).toEqual(["b1"]);
@@ -319,7 +320,7 @@ describe("useEditableDocument — estructura de capas: bloqueo y visibilidad (to
     const { result } = await renderLoaded(LAYERS, { visibility: { A: true, B: false, C: true } });
     let outcome!: ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("mover", moveA1ToB(true));
+      outcome = result.current.applyEdit(cmd("mover"), moveA1ToB(true));
     });
     expect(outcome).toMatchObject({ applied: false, reason: "blocked", skippedHiddenObjects: 1 });
     expect(result.current.objectsByLayer.A).toHaveLength(2);
@@ -331,7 +332,7 @@ describe("useEditableDocument — estructura de capas: bloqueo y visibilidad (to
     // Producción armada a mano para saltarse la comprobación del constructor: el filtro del hook es la defensa en profundidad.
     let outcome!: ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("recolor", (state) => {
+      outcome = result.current.applyEdit(cmd("recolor"), (state) => {
         const plan = planRecolor("layer", { ...state, layers: state.layers!.map((meta) => ({ ...meta, locked: false })) }, { target: newTarget("#00ff00"), sourceGroupId: "A" });
         return plan.production;
       });
@@ -346,7 +347,7 @@ describe("useEditableDocument — estructura de capas: bloqueo y visibilidad (to
     const { result } = await renderLoaded();
     let outcome!: ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("igual", (state) => ({ layers: {}, layerMetas: [state.layers![0]] }));
+      outcome = result.current.applyEdit(cmd("igual"), (state) => ({ layers: {}, layerMetas: [state.layers![0]] }));
     });
     expect(outcome).toMatchObject({ applied: false, reason: "no_change" });
     expect(result.current.undoDepth).toBe(0);
@@ -354,9 +355,9 @@ describe("useEditableDocument — estructura de capas: bloqueo y visibilidad (to
 
   it("un comando que solo cambia la estructura (capa vacía recoloreada) SÍ es un comando", async () => {
     const { result } = await renderLoaded();
-    act(() => void result.current.applyEdit("vaciar", () => ({ layers: { B: [] } })));
+    act(() => void result.current.applyEdit(cmd("vaciar"), () => ({ layers: { B: [] } })));
     act(() => {
-      result.current.applyEdit("recolor", (state) => buildRecolorProduction("layer", state, { target: newTarget("#123456"), sourceGroupId: "B" }));
+      result.current.applyEdit(cmd("recolor"), (state) => buildRecolorProduction("layer", state, { target: newTarget("#123456"), sourceGroupId: "B" }));
     });
     expect(result.current.layers.find((candidate) => candidate.groupId === "B")!.colorHex).toBe("#123456");
     expect(result.current.undoDepth).toBe(2);
@@ -367,7 +368,7 @@ describe("useEditableDocument — estructura de capas: bloqueo y visibilidad (to
     const { result } = await renderLoaded([LAYER_A, empty]);
     expect(result.current.geometryDirty).toBe(false);
     act(() => {
-      result.current.applyEdit("Recolorear", (state) => buildRecolorProduction("layer", state, { target: newTarget("#abcdef"), sourceGroupId: "E" }));
+      result.current.applyEdit(cmd("Recolorear", "object.recolor"), (state) => buildRecolorProduction("layer", state, { target: newTarget("#abcdef"), sourceGroupId: "E" }));
     });
     expect(result.current.editedLayerIds.size).toBe(0); // ninguna geometría cambió...
     expect(result.current.geometryDirty).toBe(true); // ...pero la estructura sí
@@ -380,8 +381,8 @@ describe("useEditableDocument — estructura de capas: bloqueo y visibilidad (to
   it("los comandos con cambio de estructura no se funden con otros aunque compartan coalesceKey", async () => {
     const { result } = await renderLoaded();
     const producer = (hex: string, groupId: string) => (state: EditableDocument) => buildFillProduction(state, ids("a1"), newTarget(hex, groupId));
-    act(() => void result.current.applyEdit("uno", producer("#00ff00", "N1"), { coalesceKey: "k" }));
-    act(() => void result.current.applyEdit("dos", producer("#0000aa", "N2"), { coalesceKey: "k" }));
+    act(() => void result.current.applyEdit(cmd("uno"), producer("#00ff00", "N1"), { coalesceKey: "k" }));
+    act(() => void result.current.applyEdit(cmd("dos"), producer("#0000aa", "N2"), { coalesceKey: "k" }));
     expect(result.current.undoDepth).toBe(2);
   });
 });
@@ -394,7 +395,7 @@ describe("useEditableDocument — metadata local de capas nuevas (sin PATCH)", (
 
   async function withNewLayer() {
     const hook = await renderLoaded();
-    act(() => void hook.result.current.applyEdit("Rellenar", fillProducer(["a1"], newTarget("#00ff00", "NEW"))));
+    act(() => void hook.result.current.applyEdit(cmd("Rellenar", "object.fill"), fillProducer(["a1"], newTarget("#00ff00", "NEW"))));
     return hook;
   }
 
@@ -446,7 +447,7 @@ describe("useEditableDocument — metadata local de capas nuevas (sin PATCH)", (
     act(() => void result.current.updateLocalLayer("NEW", { locked: true }));
     let outcome!: ReturnType<typeof result.current.applyEdit>;
     act(() => {
-      outcome = result.current.applyEdit("quitar", () => ({ layers: { NEW: [] } }));
+      outcome = result.current.applyEdit(cmd("quitar"), () => ({ layers: { NEW: [] } }));
     });
     expect(outcome).toMatchObject({ applied: false, reason: "blocked", skippedLockedObjects: 1 });
     expect(result.current.objectsByLayer.NEW).toHaveLength(1);
@@ -463,9 +464,9 @@ describe("useEditableDocument — metadata local de capas nuevas (sin PATCH)", (
   it("si una capa ya cargada cambia de svgUrl (documento regenerado) se descarta TODA edición sin guardar: capas creadas, colores recoloreados y objetos movidos vuelven a lo cargado, junto con el historial", async () => {
     installFetch({ "/svg/A2": () => svgResponse(SVG_B) });
     const { result, rerender } = await renderLoaded();
-    act(() => void result.current.applyEdit("Rellenar", fillProducer(["a1"], newTarget("#00ff00", "NEW"))));
+    act(() => void result.current.applyEdit(cmd("Rellenar", "object.fill"), fillProducer(["a1"], newTarget("#00ff00", "NEW"))));
     act(() => {
-      result.current.applyEdit("Recolorear", (state) => buildRecolorProduction("layer", state, { target: newTarget("#123456"), sourceGroupId: "C" }));
+      result.current.applyEdit(cmd("Recolorear", "object.recolor"), (state) => buildRecolorProduction("layer", state, { target: newTarget("#123456"), sourceGroupId: "C" }));
     });
     expect(result.current.geometryDirty).toBe(true);
 
@@ -499,7 +500,7 @@ describe("useEditableDocument — metadata local de capas nuevas (sin PATCH)", (
     await waitFor(() => expect(latest?.layerStatus.B).toBe("ready"));
     expect(fetchMock.signals.some((signal) => signal?.aborted)).toBe(true);
 
-    act(() => void latest!.applyEdit("Rellenar", fillProducer(["a1"], newTarget("#00ff00", "NEW"))));
+    act(() => void latest!.applyEdit(cmd("Rellenar", "object.fill"), fillProducer(["a1"], newTarget("#00ff00", "NEW"))));
     await waitFor(() => expect(latest!.layers.some((candidate) => candidate.groupId === "NEW")).toBe(true));
     act(() => void latest!.undo());
     await waitFor(() => expect(latest!.layers.some((candidate) => candidate.groupId === "NEW")).toBe(false));

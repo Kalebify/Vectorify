@@ -6,11 +6,11 @@ import { useBooleanOperation } from "../../hooks/useBooleanOperation";
 import { useCutTool } from "../../hooks/useCutTool";
 import { useFloatingTool } from "../../hooks/useFloatingTool";
 import { useOffsetOperation } from "../../hooks/useOffsetOperation";
-import { useEditableDocument, type ApplyEditResult, type EditProducer } from "../../hooks/useEditableDocument";
+import { useEditableDocument, type ApplyEditResult, type EditProducer, type PersistLayerMeta, type PersistResult } from "../../hooks/useEditableDocument";
 import { usePathTool } from "../../hooks/usePathTool";
 import { useLaserWarnings } from "../../hooks/useLaserWarnings";
 import { useManufacturingOperations } from "../../hooks/useManufacturingOperations";
-import { useVectorDocument, type VectorDocumentLayer } from "../../hooks/useVectorDocument";
+import { useVectorDocument, type LayerWriteStatus, type VectorDocumentLayer } from "../../hooks/useVectorDocument";
 import { useWorkspaceSave } from "../../hooks/useWorkspaceSave";
 import {
   ARRANGE_SHORTCUTS,
@@ -57,6 +57,8 @@ import {
   type PasteMode,
   type PlanSkip,
 } from "../../lib/editor/clipboard";
+import { arrangeDraft, colorDraft } from "../../lib/editor/commandDrafts";
+import { type CommandDraft } from "../../lib/editor/commands";
 import {
   DEFAULT_CONFIRM_THRESHOLD,
   mergeCandidates,
@@ -84,6 +86,7 @@ import {
   validateFrame,
 } from "../../lib/editor/frame";
 import { toDocumentUnits } from "../../lib/editor/geometry";
+import { rotateProduction, setBoundsProduction } from "../../lib/editor/operations";
 import {
   applyOffsetResult,
   DEFAULT_MITRE_LIMIT,
@@ -116,18 +119,20 @@ import {
   composeOrientation,
   IDENTITY_ORIENTATION,
   isIdentityOrientation,
+  orientationCommand,
   orientationLabel,
   orientationVerb,
   orientSelectionProduction,
   type Orientation,
   type OrientationStep,
 } from "../../lib/editor/orientation";
-import { replaceObjects, resolveSelection, selectableObjects as selectableObjectsOf, splitByLock } from "../../lib/editor/selection";
-import { groupBounds, groupCenter, rotateAbout, setBounds } from "../../lib/editor/transform";
-import type { DocumentFrame, EditorEdit, EditProduction, Point, Rect } from "../../lib/editor/types";
+import { resolveSelection, selectableObjects as selectableObjectsOf, splitByLock } from "../../lib/editor/selection";
+import { groupBounds, groupCenter, setBounds } from "../../lib/editor/transform";
+import type { DocumentFrame, EditorEdit, EditProduction, LayerMetaChange, Point, Rect } from "../../lib/editor/types";
 import { formatDisplayNumber, mmPerUnit as mmPerUnitOf, toMm } from "../../lib/editor/units";
 import { svgToDataUrl } from "../../lib/svgToDataUrl";
 import type { OffsetCapStyle, OffsetJoinStyle } from "../../types/geometry";
+import type { ManufacturingOperationChoice } from "../../types/manufacturingOperations";
 import { ArrangeBar, type ArrangeNotice } from "./ArrangeBar";
 import { BooleanBar, type BooleanNotice } from "./BooleanBar";
 import { BooleanPanel, NEW_LAYER_VALUE } from "./BooleanPanel";
@@ -147,6 +152,7 @@ import { PaletteBar } from "./PaletteBar";
 import { OffsetPanel, ORIGIN_LAYER_VALUE } from "./OffsetPanel";
 import { CutPanel } from "./CutPanel";
 import { FloatingPanel } from "./FloatingPanel";
+import { HistoryPanel } from "./HistoryPanel";
 import { PathPanel } from "./PathPanel";
 import { PreviewNavigator } from "./PreviewNavigator";
 import { VectorCanvas } from "./VectorCanvas";
@@ -178,6 +184,8 @@ export interface EditorShellProps {
   colorConfirmThreshold?: number;
   /** Generador de ids de los objetos que crean Pegar y Duplicar (M3-S06; default `crypto.randomUUID`). Inyectable en tests. */
   createId?: () => string;
+  /** Cuántas acciones guarda el historial de la sesión (M3-S12; default 200, ver `MAX_UNDO_STEPS`). Al desbordar se descarta la más vieja y el panel avisa. Inyectable en tests. */
+  historyLimit?: number;
 }
 
 const EMPTY_LAYERS: VectorDocumentLayer[] = [];
@@ -319,6 +327,7 @@ export function EditorShell({
   onClose,
   colorConfirmThreshold = DEFAULT_CONFIRM_THRESHOLD,
   createId,
+  historyLimit,
 }: EditorShellProps) {
   // M2.2-S07: `useVectorDocument`/`useManufacturingOperations` necesitan `trackPatch` (expuesto
   // por `useWorkspaceSave`, declarado más abajo) para conectar cada PATCH-por-edición al
@@ -340,13 +349,12 @@ export function EditorShell({
     errorMessage,
     reload,
     visibility: serverVisibility,
-    toggleVisibility,
     isolate,
     isolatedGroupId,
     showAll,
-    toggleLocked,
-    renameLayer,
-    reorderLayers,
+    setLayerProp,
+    setLayerOrder,
+    getLayers: getServerLayers,
     selectedGroupId,
     selectGroup,
     selectedPathKeys,
@@ -389,7 +397,7 @@ export function EditorShell({
   const {
     operations: manufacturingOperations,
     mutatingGroupId: manufacturingMutatingGroupId,
-    assign: assignManufacturingOperation,
+    assignOperation: assignManufacturingOperation,
   } = useManufacturingOperations(projectId, imageId, paletteId, document?.layerSetId ?? null, savedProjectId, trackPatch);
 
   const { transform, zoomBy, panBy, fitToScreen, centerOn } = useCanvasTransform();
@@ -403,7 +411,22 @@ export function EditorShell({
   const serverLayers = document?.layers ?? EMPTY_LAYERS;
   const sourceWidthPx = document?.sourceWidthPx ?? 0;
   const sourceHeightPx = document?.sourceHeightPx ?? 0;
-  const editable = useEditableDocument(serverLayers, { visibility: serverVisibility, isolatedGroupId, sourceSize: { width: sourceWidthPx, height: sourceHeightPx } });
+  // Historial (M3-S12): la metadata de capa que deshacer/rehacer re-persiste vive en `useVectorDocument`/`useManufacturingOperations`, declarados antes;
+  // el persistidor real se define más abajo (necesita `editable.updateLocalLayer`) y se alcanza por una ref, como `trackPatch`.
+  const persistLayerMetaRef = useRef<PersistLayerMeta | null>(null);
+  const persistLayerMeta = useCallback<PersistLayerMeta>(
+    (change, direction, mode) => (persistLayerMetaRef.current ? persistLayerMetaRef.current(change, direction, mode) : Promise.resolve({ ok: false, error: "El editor todavía no está listo." })),
+    [],
+  );
+  const editable = useEditableDocument(serverLayers, {
+    visibility: serverVisibility,
+    isolatedGroupId,
+    sourceSize: { width: sourceWidthPx, height: sourceHeightPx },
+    persistLayerMeta,
+    limit: historyLimit,
+    // Otro proyecto/imagen/paleta = otro documento: el historial no se arrastra (se reinicia con aviso).
+    documentKey: `${projectId}|${imageId}|${paletteId}`,
+  });
   const { undo, redo, applyEdit, geometryDirty, frame, committedFrame } = editable;
   const documentLayers = editable.layers;
   const committedLayers = editable.committedLayers;
@@ -476,6 +499,35 @@ export function EditorShell({
     }
     if (edit?.frame) refitTo(edit.frame.after);
   }, [redo, refitTo, disarmColorPreview, selectionJournal, closeBooleanSession]);
+  // Panel de Historial (M3-S12): ir a una posición deshace/rehace varios pasos de una vez. La selección es la del ÚLTIMO paso con diario de selección
+  // (la del estado al que se llega) y, si algún paso cambió el marco, se vuelve a ajustar la vista al marco final.
+  const { jumpTo } = editable;
+  const jumpToWithView = useCallback(
+    async (entryId: string | null) => {
+      const result = await jumpTo(entryId);
+      if (result.edits.length > 0) {
+        closeBooleanSession();
+        disarmColorPreview();
+        setClipboardNotice(null);
+        setArrangeNotice(null);
+        for (let index = result.edits.length - 1; index >= 0; index -= 1) {
+          const selection = selectionJournal.get(result.edits[index]);
+          if (selection) {
+            setRawSelectedObjectIds(result.direction === "undo" ? selection.before : selection.after);
+            break;
+          }
+        }
+        if (result.edits.some((edit) => edit.frame)) refitTo(editable.getSnapshot().frame ?? committedFrame);
+      }
+      return result;
+    },
+    [jumpTo, refitTo, disarmColorPreview, selectionJournal, closeBooleanSession, editable, committedFrame],
+  );
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const closeHistory = useCallback(() => {
+    setHistoryOpen(false);
+    globalThis.document?.getElementById("editor-history-toggle")?.focus();
+  }, []);
 
   const selectableObjects = useMemo(
     () => selectableObjectsOf(editable.objectsByLayer, documentLayers, visibility),
@@ -577,6 +629,11 @@ export function EditorShell({
     onClose();
   };
 
+  // Por qué Deshacer / Rehacer están deshabilitados (tooltip y aria-label del header, M3-S12).
+  const historyBlockReason = editable.gestureActive ? "hay una transformación pendiente" : editable.historyBusy ? "hay un cambio de capa guardándose" : null;
+  const undoDisabledReason = editable.canUndo ? null : (historyBlockReason ?? "no hay nada que deshacer");
+  const redoDisabledReason = editable.canRedo ? null : (historyBlockReason ?? "no hay nada que rehacer");
+
   const objectEditMessage = (result: ApplyEditResult): string | null => {
     if (result.reason === "blocked") return "La capa está bloqueada: no se puede modificar. Desbloqueala en el panel de Capas.";
     if (result.reason === "gesture_active") return TRANSFORM_PENDING_MESSAGE;
@@ -592,12 +649,7 @@ export function EditorShell({
     const resized = Math.abs(target.width - current.width) > 1e-9 || Math.abs(target.height - current.height) > 1e-9;
     const count = ids.size === 1 ? "1 objeto" : `${ids.size} objetos`;
     return objectEditMessage(
-      applyEdit(`${resized ? "Redimensionar" : "Mover"} ${count} (Inspector)`, (state) => {
-        const targets = Object.values(state.objectsByLayer)
-          .flat()
-          .filter((object) => ids.has(object.id));
-        return replaceObjects(state, targets, (found) => setBounds(found, target) ?? found);
-      }),
+      applyEdit({ type: "object.setBounds", label: `${resized ? "Redimensionar" : "Mover"} ${count} (Inspector)`, parameters: { x: target.x, y: target.y, width: target.width, height: target.height } }, (state) => setBoundsProduction(state, ids, target)),
     );
   };
 
@@ -608,10 +660,7 @@ export function EditorShell({
     if (!center) return "La selección no tiene geometría para rotar.";
     const delta = degrees - matrixRotationDegrees(object.matrix);
     return objectEditMessage(
-      applyEdit("Rotar objeto (Inspector)", (state) => {
-        const target = state.objectsByLayer[object.layerGroupId]?.find((candidate) => candidate.id === object.id);
-        return target ? replaceObjects(state, [target], (found) => rotateAbout(found, center, delta)) : null;
-      }),
+      applyEdit({ type: "object.rotate", label: "Rotar objeto (Inspector)", parameters: { degrees: delta } }, (state) => rotateProduction(state, new Set([object.id]), delta)),
     );
   };
 
@@ -675,7 +724,8 @@ export function EditorShell({
 
   const handleApplyPending = () => {
     if (!pending) return;
-    if (isIdentityOrientation(pending.orientation)) {
+    const orientation = orientationCommand(pending.orientation);
+    if (orientation === null) {
       cancelPending();
       return;
     }
@@ -689,7 +739,12 @@ export function EditorShell({
     }
     const scopeLabel = pending.scope === "document" ? "documento completo" : plural(pending.ids.length, "objeto", "objetos");
     const label = `${orientationLabel(pending.orientation)} (${scopeLabel})`;
-    const result = editable.commitGesture(label);
+    const documentScope = pending.scope === "document";
+    const draft: CommandDraft =
+      orientation.kind === "rotate"
+        ? { type: documentScope ? "document.rotate" : "selection.rotate", label, parameters: { quarterTurns: orientation.quarterTurns } }
+        : { type: documentScope ? "document.flip" : "selection.flip", label, parameters: { axis: orientation.axis, quarterTurns: orientation.quarterTurns } };
+    const result = editable.commitGesture(draft);
     setPending(null);
     setOrientationMessage(null);
     if (!result.applied) return;
@@ -757,7 +812,10 @@ export function EditorShell({
     }
     const target = checked.frame;
     const label = `Recortar el área de trabajo a ${formatFrameSize(target)}`;
-    const result = applyEdit(label, (state) => cropProduction(state, target, cropRemoveOutside));
+    const result = applyEdit(
+      { type: "document.crop", label, parameters: { x: target.x, y: target.y, width: target.width, height: target.height, removeOutside: cropRemoveOutside } },
+      (state) => cropProduction(state, target, cropRemoveOutside),
+    );
     if (!result.applied) {
       setCropError(
         result.reason === "blocked"
@@ -876,9 +934,9 @@ export function EditorShell({
     reportClipboard("ok", skipped.length > 0 ? `${summary}. ${describeSkipped(skipped, verb)}.` : `${summary}.`);
 
   /** Aplica la producción de un plan como UN comando y deja la selección resultante, asociando la de antes y la de después al comando (undo/redo). */
-  const applyClipboardEdit = (label: string, production: EditProduction, nextIds: string[], nextLayerId: string | null): ApplyEditResult => {
+  const applyClipboardEdit = (draft: CommandDraft, production: EditProduction, nextIds: string[], nextLayerId: string | null): ApplyEditResult => {
     const before = selectedObjectIds;
-    const result = applyEdit(label, () => production);
+    const result = applyEdit(draft, () => production);
     if (result.applied) {
       if (result.edit) selectionJournal.set(result.edit, { before, after: new Set(nextIds) });
       handleSelectObjects(nextIds, nextLayerId);
@@ -915,7 +973,7 @@ export function EditorShell({
         reportClipboard("error", plan.error ?? "No hay nada que eliminar.");
         return;
       }
-      const result = applyClipboardEdit(plan.label, plan.production, [], null);
+      const result = applyClipboardEdit({ type: action === "cut" ? "object.cut" : "object.delete", label: plan.label }, plan.production, [], null);
       if (!result.applied) {
         reportClipboard("error", describeEditFailure(result));
         return;
@@ -936,7 +994,15 @@ export function EditorShell({
       return;
     }
     const last = plan.newObjects[plan.newObjects.length - 1];
-    const result = applyClipboardEdit(plan.label, plan.production, plan.newIds, last.layerGroupId);
+    const offset = duplicating ? pasteOffset(1, mmFactor) : mode === "in-place" ? { x: 0, y: 0 } : clipboard.nextOffset(mmFactor);
+    const pasteDraft: CommandDraft = duplicating
+      ? { type: "object.duplicate", label: plan.label, parameters: { offsetX: offset.x, offsetY: offset.y } }
+      : mode === "in-place"
+        ? { type: "object.pasteInPlace", label: plan.label }
+        : mode === "active-layer"
+          ? { type: "object.pasteToLayer", label: plan.label, parameters: { layerId: selectedGroupId ?? undefined } }
+          : { type: "object.paste", label: plan.label, parameters: { offsetX: offset.x, offsetY: offset.y } };
+    const result = applyClipboardEdit(pasteDraft, plan.production, plan.newIds, last.layerGroupId);
     if (!result.applied) {
       reportClipboard("error", describeEditFailure(result));
       return;
@@ -1085,7 +1151,7 @@ export function EditorShell({
   const commitColor = (scope: RecolorScope, request: RecolorRequest, plan: ColorPlan) => {
     editable.cancelGesture();
     const label = recolorLabel(plan.summary);
-    const result = applyEdit(label, (state) => planRecolor(scope, state, request).production);
+    const result = applyEdit(colorDraft(colorMode === "fill", scope, request, label), (state) => planRecolor(scope, state, request).production);
     if (!result.applied) {
       setColorMessage(
         result.reason === "blocked"
@@ -1176,7 +1242,7 @@ export function EditorShell({
       reportArrange(message.kind, message.text);
       return;
     }
-    const applied = applyEdit(result.label, () => production);
+    const applied = applyEdit(arrangeDraft(id, result.label, arrangeReference), () => production);
     if (!applied.applied) {
       reportArrange("error", describeEditFailure(applied));
       return;
@@ -1342,7 +1408,23 @@ export function EditorShell({
         return;
       }
       const production = applied.production;
-      const result = applyEdit(booleanLabel(applied.summary), (current) => (current.objectsByLayer === fresh.objectsByLayer ? production : null));
+      const summary = applied.summary;
+      const result = applyEdit(
+        {
+          type: "geometry.boolean",
+          label: booleanLabel(summary),
+          parameters: {
+            operation: summary.op,
+            operandCount: summary.operandCount,
+            keepOriginals: summary.keepOriginals,
+            resultCount: summary.resultCount,
+            toleranceMm: latest.session.toleranceMm,
+            targetLayerId: summary.target.created ? undefined : summary.target.groupId,
+            newColorHex: summary.target.created ? summary.target.colorHex : undefined,
+          },
+        },
+        (current) => (current.objectsByLayer === fresh.objectsByLayer ? production : null),
+      );
       if (!result.applied) {
         updateBoolean({ message: result.reason === "blocked" ? "Alguna capa está bloqueada u oculta: no se puede modificar. No se hizo ningún cambio." : describeEditFailure(result) });
         return;
@@ -1487,7 +1569,26 @@ export function EditorShell({
         return;
       }
       const production = applied.production;
-      const result = applyEdit(offsetLabel(applied.summary), (current) => (current.objectsByLayer === fresh.objectsByLayer ? production : null));
+      const summary = applied.summary;
+      const result = applyEdit(
+        {
+          type: "geometry.offset",
+          label: offsetLabel(summary),
+          parameters: {
+            direction: summary.direction,
+            distance: summary.magnitude,
+            unit: summary.unit.label,
+            joinStyle: plan.request.joinStyle,
+            capStyle: plan.request.capStyle,
+            mitreLimit: plan.request.mitreLimit,
+            keepOriginals: summary.keepOriginals,
+            resultCount: summary.resultCount,
+            toleranceMm: latest.session.toleranceMm,
+            ...(summary.targets.length === 1 && summary.targets[0].created ? { newColorHex: summary.targets[0].colorHex } : {}),
+          },
+        },
+        (current) => (current.objectsByLayer === fresh.objectsByLayer ? production : null),
+      );
       if (!result.applied) {
         updateOffset({ message: result.reason === "blocked" ? "Alguna capa está bloqueada u oculta: no se puede modificar. No se hizo ningún cambio." : describeEditFailure(result) });
         return;
@@ -1636,63 +1737,105 @@ export function EditorShell({
   // mentiroso, inmediatamente pisado por el resultado del PATCH (spec.md M2.2-S07, "Estado
   // Dirty/Saving/Saved/Error").
   const { markDirty } = workspaceSave;
-  // Capas creadas en el cliente (`isNew`, M3-S03): no existen en el servidor, así que su metadata se edita en LOCAL y NUNCA dispara un PATCH
-  // ni marca "dirty" del documento guardado (la geometría sin guardar ya la refleja `geometryDirty`). Las capas del servidor siguen como siempre.
-  const newLayerOf = (groupId: string) => documentLayers.find((layer) => layer.groupId === groupId && layer.isNew === true);
-  const handleToggleVisibility = (groupId: string) => {
-    const created = newLayerOf(groupId);
-    if (created) {
-      editable.updateLocalLayer(groupId, { visible: !created.visible });
-      return;
+  // Metadata de capa (M3-S12): TODA escritura -- el cambio original del usuario y su deshacer/rehacer -- pasa por `applyLayerMeta`, que decide por capa:
+  // - capa creada en el cliente (`isNew`, M3-S03): no existe en el servidor, así que se edita en LOCAL y NUNCA dispara un PATCH ni marca "dirty" del documento
+  //   guardado (la geometría sin guardar ya la refleja `geometryDirty`);
+  // - capa del servidor: el PATCH de siempre (sesión guardada: PATCH v2; sin guardar: sidecar clásico + `markDirty`). Al deshacer/rehacer se re-persiste el valor
+  //   anterior/siguiente con ese mismo PATCH y SIN escritura optimista (si falla, no cambia nada local); el cambio original sí es optimista, como desde M2.1.
+  // El historial (`editable.commitLayerMeta`) registra el cambio solo si se persistió.
+  const metaFailureText = (change: LayerMetaChange, direction: "undo" | "redo", mode: { optimistic: boolean }): string => {
+    const what = change.kind === "order" ? "el orden de las capas" : `la capa «${change.layerName}»`;
+    if (mode.optimistic) return `No se pudo guardar el cambio de ${what} en el servidor. No se modificó nada.`;
+    return `No se pudo ${direction === "undo" ? "deshacer" : "rehacer"} el cambio de ${what}: el servidor no lo aceptó. No se modificó nada; podés reintentar.`;
+  };
+
+  /** Reordena el panel de capas. El servidor solo conoce SUS capas (PATCH como siempre); las nuevas se acomodan en local con un `order` fraccionario entre sus vecinas. */
+  const applyLayerOrder = async (orderedGroupIds: string[], optimistic: boolean): Promise<LayerWriteStatus> => {
+    // Estado FRESCO (no el del último render): un `jumpTo` encadena varios cambios y cada uno debe ver el resultado del anterior.
+    const serverNow = getServerLayers();
+    const newIds = new Set((editable.getSnapshot().layers ?? []).filter((layer) => layer.isNew).map((layer) => layer.groupId));
+    const serverIds = orderedGroupIds.filter((groupId) => !newIds.has(groupId));
+    const serverChanged = serverIds.length !== serverNow.length || serverIds.some((groupId, index) => serverNow[index]?.groupId !== groupId);
+    if (newIds.size === 0 || serverChanged) {
+      if (!savedProjectId) markDirty();
+      const status = await setLayerOrder(serverIds, { optimistic });
+      if (status === "failed") return "failed";
     }
+    if (newIds.size > 0) {
+      const serverOrder = new Map(serverNow.map((layer) => [layer.groupId, serverChanged ? serverIds.indexOf(layer.groupId) : layer.order]));
+      const orders = placeNewLayers(orderedGroupIds, (groupId) => newIds.has(groupId), (groupId) => serverOrder.get(groupId) ?? 0);
+      for (const [groupId, order] of Object.entries(orders)) editable.updateLocalLayer(groupId, { order });
+    }
+    return "ok";
+  };
+
+  const applyLayerMeta: PersistLayerMeta = async (change, direction, mode): Promise<PersistResult> => {
+    const side = direction === "undo" ? "before" : "after";
+    const fail = (): PersistResult => ({ ok: false, error: metaFailureText(change, direction, mode) });
+
+    if (change.kind === "order") {
+      const status = await applyLayerOrder(change[side], mode.optimistic);
+      return status === "failed" ? fail() : { ok: true };
+    }
+
+    // Estado FRESCO: tras los pasos de geometría de un `jumpTo` (que crean o quitan capas nuevas) el último render todavía no lo refleja.
+    const layer = (editable.getSnapshot().layers ?? []).find((candidate) => candidate.groupId === change.groupId);
+    if (!layer) return { ok: false, error: `La capa «${change.layerName}» ya no existe: no se pudo ${direction === "undo" ? "deshacer" : "rehacer"} el cambio.` };
+    if (layer.isNew) {
+      if (change.kind === "rename") editable.updateLocalLayer(change.groupId, { name: change[side] });
+      else if (change.kind === "visible") editable.updateLocalLayer(change.groupId, { visible: change[side] });
+      else if (change.kind === "locked") editable.updateLocalLayer(change.groupId, { locked: change[side] });
+      else editable.updateLocalLayer(change.groupId, { manufacturingOperation: change[side] });
+      return { ok: true };
+    }
+
     if (!savedProjectId) markDirty();
-    toggleVisibility(groupId);
+    let status: LayerWriteStatus;
+    if (change.kind === "operation") status = await assignManufacturingOperation(change.groupId, change[side] === "unassigned" ? "unassigned" : change[side]);
+    else if (change.kind === "rename") status = await setLayerProp(change.groupId, "name", change[side], { optimistic: mode.optimistic });
+    else status = await setLayerProp(change.groupId, change.kind === "visible" ? "visible" : "locked", change[side], { optimistic: mode.optimistic });
+    return status === "failed" ? fail() : { ok: true, noop: status === "noop" };
+  };
+  useEffect(() => {
+    persistLayerMetaRef.current = applyLayerMeta;
+  });
+
+  /** Dispara el cambio (persiste y, si se persistió, lo registra en el historial). Un fallo queda visible en `editable.historyError`. */
+  const commitLayerChange = (change: LayerMetaChange) => {
+    void editable.commitLayerMeta(change);
+  };
+  const handleToggleVisibility = (groupId: string) => {
+    const layer = documentLayers.find((candidate) => candidate.groupId === groupId);
+    if (layer) commitLayerChange({ kind: "visible", groupId, layerName: layer.name, before: layer.visible, after: !layer.visible });
   };
   const handleToggleLocked = (groupId: string) => {
-    const created = newLayerOf(groupId);
-    if (created) {
-      editable.updateLocalLayer(groupId, { locked: !created.locked });
-      return;
-    }
-    if (!savedProjectId) markDirty();
-    toggleLocked(groupId);
+    const layer = documentLayers.find((candidate) => candidate.groupId === groupId);
+    if (layer) commitLayerChange({ kind: "locked", groupId, layerName: layer.name, before: layer.locked, after: !layer.locked });
   };
   const handleRenameLayer = (groupId: string, name: string) => {
-    const created = newLayerOf(groupId);
-    if (created) {
-      const trimmed = name.trim();
-      if (trimmed && trimmed !== created.name) editable.updateLocalLayer(groupId, { name: trimmed });
-      return;
-    }
-    if (!savedProjectId) markDirty();
-    renameLayer(groupId, name);
+    const layer = documentLayers.find((candidate) => candidate.groupId === groupId);
+    const trimmed = name.trim();
+    if (layer && trimmed && trimmed !== layer.name) commitLayerChange({ kind: "rename", groupId, layerName: layer.name, before: layer.name, after: trimmed });
   };
   const handleReorderLayers = (orderedGroupIds: string[]) => {
-    const newIds = new Set(documentLayers.filter((layer) => layer.isNew).map((layer) => layer.groupId));
-    if (newIds.size === 0) {
-      if (!savedProjectId) markDirty();
-      reorderLayers(orderedGroupIds);
-      return;
-    }
-    // El servidor solo conoce SUS capas: se le manda el nuevo orden de ellas (PATCH como siempre) y las capas nuevas se acomodan en local
-    // con un `order` fraccionario entre sus vecinas, para que el orden pedido se vea exacto sin persistir nada de las capas nuevas.
-    const serverIds = orderedGroupIds.filter((groupId) => !newIds.has(groupId));
-    const serverChanged = serverIds.length !== serverLayers.length || serverIds.some((groupId, index) => serverLayers[index]?.groupId !== groupId);
-    if (serverChanged) {
-      if (!savedProjectId) markDirty();
-      reorderLayers(serverIds);
-    }
-    const serverOrder = new Map(serverLayers.map((layer) => [layer.groupId, serverChanged ? serverIds.indexOf(layer.groupId) : layer.order]));
-    const orders = placeNewLayers(orderedGroupIds, (groupId) => newIds.has(groupId), (groupId) => serverOrder.get(groupId) ?? 0);
-    for (const [groupId, order] of Object.entries(orders)) editable.updateLocalLayer(groupId, { order });
+    const before = documentLayers.map((layer) => layer.groupId);
+    if (before.length === orderedGroupIds.length && before.every((groupId, index) => groupId === orderedGroupIds[index])) return;
+    commitLayerChange({ kind: "order", before, after: [...orderedGroupIds] });
   };
-  const handleChangeOperation: typeof assignManufacturingOperation = (groupId, operation) => {
-    if (newLayerOf(groupId)) {
-      editable.updateLocalLayer(groupId, { manufacturingOperation: operation });
+  const handleChangeOperation = (groupId: string, operation: ManufacturingOperationChoice) => {
+    const layer = documentLayers.find((candidate) => candidate.groupId === groupId);
+    if (!layer) return;
+    const before = layer.isNew ? layer.manufacturingOperation : (manufacturingOperations[groupId]?.operation ?? layer.manufacturingOperation);
+    if (before === operation) return;
+    if (!layer.isNew && !savedProjectId && before === "unassigned") {
+      // El sidecar clásico de un proyecto SIN guardar nunca acepta volver a «sin asignar»: este cambio no se podría deshacer con su PATCH inverso, así que
+      // no entra al historial (no se promete un deshacer que fallaría) y se avisa. Los proyectos guardados y las capas nuevas sí lo registran.
+      markDirty();
+      void assignManufacturingOperation(groupId, operation);
+      setActionNotice("Operación asignada. En un proyecto sin guardar la primera asignación no se puede deshacer: el servidor no acepta volver a «sin asignar».");
       return;
     }
-    if (!savedProjectId) markDirty();
-    assignManufacturingOperation(groupId, operation);
+    commitLayerChange({ kind: "operation", groupId, layerName: layer.name, before, after: operation });
   };
 
   return (
@@ -1713,9 +1856,29 @@ export function EditorShell({
         canRedo={editable.canRedo}
         undoLabel={editable.undoLabel}
         redoLabel={editable.redoLabel}
+        undoDisabledReason={undoDisabledReason}
+        redoDisabledReason={redoDisabledReason}
         onUndo={undoWithView}
         onRedo={redoWithView}
+        historyOpen={historyOpen}
+        historyCount={editable.historyEntries.length}
+        historyAttention={editable.historyNotices.length > 0 || editable.historyError !== null}
+        onToggleHistory={() => (historyOpen ? closeHistory() : setHistoryOpen(true))}
       />
+      {historyOpen && (
+        <HistoryPanel
+          entries={editable.historyEntries}
+          position={editable.historyPosition}
+          limit={editable.historyLimit}
+          busy={editable.historyBusy}
+          error={editable.historyError}
+          notices={editable.historyNotices}
+          onJumpTo={(entryId) => void jumpToWithView(entryId)}
+          onDismissError={editable.dismissHistoryError}
+          onDismissNotice={editable.dismissHistoryNotice}
+          onClose={closeHistory}
+        />
+      )}
 
       <div className="editor-shell__body">
         <EditorToolbar activeTool={activeTool} onSelectTool={handleSelectTool} />
@@ -1810,6 +1973,27 @@ export function EditorShell({
                   {actionNotice}
                 </p>
               )}
+              {/* Con el panel de Historial cerrado, un fallo de metadata de capa o un aviso de reinicio/truncado siguen siendo visibles (M3-S12). */}
+              {editable.historyError && !historyOpen && (
+                <p className="editor-shell__history-alert editor-shell__history-alert--error" role="alert">
+                  {editable.historyError}{" "}
+                  <button type="button" className="editor-shell__history-alert-button" onClick={editable.dismissHistoryError}>
+                    Cerrar
+                  </button>
+                </p>
+              )}
+              {!historyOpen &&
+                editable.historyNotices.map((notice) => (
+                  <p key={notice.kind} className="editor-shell__history-alert" role="status">
+                    {notice.message}{" "}
+                    <button type="button" className="editor-shell__history-alert-button" onClick={() => setHistoryOpen(true)}>
+                      Ver historial
+                    </button>{" "}
+                    <button type="button" className="editor-shell__history-alert-button" onClick={() => editable.dismissHistoryNotice(notice.kind)}>
+                      Cerrar
+                    </button>
+                  </p>
+                ))}
             </>
           ) : null}
         </main>

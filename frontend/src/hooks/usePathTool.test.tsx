@@ -2,6 +2,7 @@ import { StrictMode, useState, type ReactNode } from "react";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IDENTITY_MATRIX, type AffineMatrix } from "../lib/svgTransform";
+import type { CommandDraft } from "../lib/editor/commands";
 import type { DocumentFrame, EditableDocument, EditableLayerMeta, EditorObject, EditProduction } from "../lib/editor/types";
 import type { ApplyEditResult } from "./useEditableDocument";
 import { usePathTool, type UsePathToolParams } from "./usePathTool";
@@ -38,6 +39,8 @@ interface HarnessOptions {
 function harness(options: HarnessOptions = {}) {
   let state: EditableDocument = { objectsByLayer: { A: [shape(options.d ?? SQUARE, options.matrix)] } };
   const commands: Array<{ label: string; coalesceKey?: string }> = [];
+  // Borradores de comando (M3-S12) tal como los recibe el historial: tipo + parámetros de cada acción de la herramienta.
+  const drafts: CommandDraft[] = [];
   let base: EditableDocument | null = null;
   let preview: EditProduction | null = null;
 
@@ -51,11 +54,12 @@ function harness(options: HarnessOptions = {}) {
 
   const editable = {
     getSnapshot: () => state,
-    applyEdit: vi.fn((label: string, producer: (current: EditableDocument) => EditProduction | null, editOptions?: { coalesceKey?: string }): ApplyEditResult => {
+    applyEdit: vi.fn((draft: CommandDraft, producer: (current: EditableDocument) => EditProduction | null, editOptions?: { coalesceKey?: string }): ApplyEditResult => {
       const production = producer(state);
       if (!production) return none;
       apply(production);
-      commands.push({ label, coalesceKey: editOptions?.coalesceKey });
+      commands.push({ label: draft.label ?? "", coalesceKey: editOptions?.coalesceKey });
+      drafts.push(draft);
       bump();
       return ok;
     }),
@@ -72,12 +76,13 @@ function harness(options: HarnessOptions = {}) {
       bump();
       return preview ? ok : none;
     }),
-    commitGesture: vi.fn((label: string): ApplyEditResult => {
+    commitGesture: vi.fn((draft: CommandDraft): ApplyEditResult => {
       const had = preview;
       base = null;
       preview = null;
       if (!had) return none;
-      commands.push({ label });
+      commands.push({ label: draft.label ?? "" });
+      drafts.push(draft);
       bump();
       return ok;
     }),
@@ -124,7 +129,7 @@ function harness(options: HarnessOptions = {}) {
     });
     return event;
   };
-  return { ...hook, editable, commands, current, select, press, onNotice, onPickObject, onExit, rerenderWith: (activeTool: string) => hook.rerender({ activeTool }) };
+  return { ...hook, editable, commands, drafts, current, select, press, onNotice, onPickObject, onExit, rerenderWith: (activeTool: string) => hook.rerender({ activeTool }) };
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -348,7 +353,7 @@ describe("usePathTool — ediciones de un paso (un comando cada una)", () => {
     expect([...h.result.current.keys]).toEqual(["0:3"]);
     // Cambio externo de estructura (como un undo de otro comando): el objeto pasa a tener un nodo más.
     act(() => {
-      h.editable.applyEdit("externo", (current) => ({ layers: { A: [{ ...current.objectsByLayer.A[0], d: "M20 20 L70 20 L120 20 L120 120 L20 120 Z" }] } }));
+      h.editable.applyEdit({ type: "object.move", label: "externo" }, (current) => ({ layers: { A: [{ ...current.objectsByLayer.A[0], d: "M20 20 L70 20 L120 20 L120 120 L20 120 Z" }] } }));
     });
     h.rerender({ activeTool: "path" });
     expect(h.result.current.keys.size).toBe(0);

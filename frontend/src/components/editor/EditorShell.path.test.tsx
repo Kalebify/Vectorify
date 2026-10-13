@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectLastCommand, historyTypes } from "../../test/history";
 import { pathToModel } from "../../lib/editor/nodes";
 import {
   clickAt,
@@ -834,6 +835,88 @@ describe("EditorShell — herramienta Path (M3-S05)", () => {
       fireEvent.click(undoButton());
       expect(pathData().some((d) => d.startsWith("M10 100 L10.05 110"))).toBe(true);
       expect(undoButton()).toBeDisabled();
+    });
+  });
+
+  /**
+   * M3-S12: cada gesto de la herramienta Path deja un comando tipado `path.*` en el historial (no `object.move` genérico): el tipo, el parámetro descriptivo y NINGÚN
+   * dato de geometría (ni `d` ni los puntos del nodo).
+   */
+  describe("tipos de comando del historial (M3-S12)", () => {
+    it("arrastrar un anchor -> path.moveAnchors; arrastrar un handle -> path.moveHandle", async () => {
+      await open();
+      enterPathOn(70, 70);
+      dragOnSurface([120, 20], [130, 25]);
+      expectLastCommand("path.moveAnchors");
+      fireEvent.click(tool(/^Select/));
+      enterPathOn(60, 170);
+      clickAt(surface(), 100, 200);
+      dragOnSurface([120, 240], [130, 240]);
+      expectLastCommand("path.moveHandle");
+    });
+
+    it("las flechas -> path.moveAnchors (una ráfaga es UN comando)", async () => {
+      await open();
+      enterPathOn(70, 70);
+      clickAt(surface(), 120, 20);
+      press("ArrowRight");
+      press("ArrowRight");
+      expectLastCommand("path.moveAnchors");
+      expect(historyTypes()).toEqual(["path.moveAnchors"]);
+    });
+
+    it("Suprimir nodos -> path.deleteNodes; doble click en un segmento -> path.addNode", async () => {
+      await open();
+      enterPathOn(70, 70);
+      clickAt(surface(), 20, 120);
+      press("Delete");
+      expectLastCommand("path.deleteNodes");
+      fireEvent.doubleClick(surface(), toScreen(70, 20));
+      expectLastCommand("path.addNode");
+      expect(historyTypes()).toEqual(["path.deleteNodes", "path.addNode"]);
+    });
+
+    it("Alt+click sobre una esquina y el tipo de nodo del panel -> path.setNodeKind", async () => {
+      await open();
+      enterPathOn(70, 70);
+      fireEvent.pointerDown(surface(), { pointerId: 1, button: 0, altKey: true, ...toScreen(120, 20) });
+      fireEvent.pointerUp(surface(), { pointerId: 1, altKey: true, ...toScreen(120, 20) });
+      expectLastCommand("path.setNodeKind");
+    });
+
+    it("recto <-> curvo del panel -> path.toggleSegment", async () => {
+      await open();
+      enterPathOn(70, 70);
+      clickAt(surface(), 120, 20);
+      fireEvent.click(inPanel().getByRole("button", { name: /Segmento siguiente: recto → curvo/ }));
+      expectLastCommand("path.toggleSegment");
+    });
+
+    it("Cerrar subpath -> path.closeSubpath; Abrir en el nodo -> path.openSubpath", async () => {
+      await open();
+      enterPathOn(265, 120);
+      fireEvent.click(inPanel().getByRole("button", { name: "Cerrar subpath" }));
+      expectLastCommand("path.closeSubpath");
+      clickAt(surface(), 290, 160);
+      fireEvent.click(inPanel().getByRole("button", { name: "Abrir en el nodo" }));
+      expectLastCommand("path.openSubpath");
+    });
+
+    it("X / Y del panel -> path.setNodeCoords; largo/ángulo del handle -> path.moveHandle (Inspector)", async () => {
+      await open();
+      enterPathOn(70, 70);
+      clickAt(surface(), 120, 20);
+      const x = inPanel().getByLabelText("X (mm)") as HTMLInputElement;
+      fireEvent.change(x, { target: { value: "70" } });
+      fireEvent.keyDown(x, { key: "Enter" });
+      expectLastCommand("path.setNodeCoords");
+      fireEvent.click(tool(/^Select/));
+      enterPathOn(60, 170);
+      clickAt(surface(), 100, 200);
+      const angle = inPanel().getByLabelText("Handle de salida: ángulo (°)") as HTMLInputElement;
+      fireEvent.change(angle, { target: { value: "90" } });
+      fireEvent.keyDown(angle, { key: "Enter" });
+      expectLastCommand("path.moveHandle");
     });
   });
 });

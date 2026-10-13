@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectLastCommand } from "../../test/history";
 import {
   B1,
   GEOMETRY_DIRTY,
@@ -189,6 +190,7 @@ describe("EditorShell — Booleanas (M3-S08)", () => {
       expect(screen.getByText(GEOMETRY_DIRTY)).toBeInTheDocument();
       expect(within(bar()).getByRole("status")).toHaveTextContent(/Unión aplicada: 2 objetos → 1 objeto en la capa «Rojo»\. 2 originales reemplazados\./);
       expect(geometryCalls(fetchMock)).toHaveLength(1); // Apply usó el resultado ya calculado
+      expectLastCommand("geometry.boolean"); // M3-S12
 
       fireEvent.click(undoButton());
       expect(pathData()).toEqual(before); // un único comando: un solo Deshacer devuelve todo, en el mismo orden
