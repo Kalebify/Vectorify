@@ -380,6 +380,30 @@ de round-trip: `parse(serialize(doc))` ≡ `doc` (ids, d, fill, matriz) — se p
   y lo resalta en el overlay. Teclado: la lista es un `listbox` (↑/↓/Inicio/Fin mueven el cursor, Enter/Espacio activan, Escape cierra y devuelve el foco al botón del header) y el resumen va en una región `aria-live`.
 - Fuera de alcance: correcciones automáticas, exportar el reporte, checks de MVP 4.
 
+### D8. Export avanzado SVG / DXF / PNG / layers (M3-S15)
+Detalle de formatos, primitivas DXF y validación en `docs/EXPORT_FORMATOS.md`.
+- **Se implementa en el cliente, sobre el documento en memoria** (desviación declarada del stack «ASP.NET Core» de la tarjeta). El export v1 (M1-S10, `ExportPanel`) solo sirve el SVG del
+  pipeline guardado y no se toca; el backend no tiene DXF/PNG/ZIP ni librerías para ello, y exportar desde el servidor obligaría a guardar antes (el archivo no sería «lo que ves») y a añadir
+  dependencias (Svg.Skia, ezdxf). **Backend y Python sin cambios, sin dependencias nuevas**: ZIP (*stored* + CRC-32), DXF y PNG con código propio y APIs del navegador.
+- **SVG es el formato canónico; DXF/PNG son adaptadores.** Módulos puros en `lib/editor/export/` (`fileNames`, `zip`, `svgExport`, `dxfExport`, `pngExport`, `exportPlan`, `exportRunner`);
+  el DOM (canvas y descarga) queda en `browser.ts`, inyectable (`Rasterizer`, `DownloadFile`) para probar sin navegador.
+- **SVG**: `width`/`height` en mm y `viewBox` en unidades de documento (con el origen del marco); sin escala física, sin unidades y con aviso (nunca mm inventados). Un `<g>` por layer. Los `<path>` salen de la
+  misma serialización que el guardado (`serializeEditablePaths`, extraída de `serializeEditableLayer` sin cambiar sus bytes), así que reabrir con `parseEditableLayer` da la misma geometría.
+- **DXF**: ASCII R12 (`AC1009`) con `POLYLINE`/`VERTEX`/`SEQEND` (no `LWPOLYLINE`), `$INSUNITS = 4` (0 sin escala), mm, origen en la esquina inferior-izquierda del marco y **Y invertido**
+  (`y' = alto − y`). Las curvas se aplanan a ≤ 0,01 mm; los huecos son subpaths = polilíneas adicionales (DXF no tiene relleno); sin color ni relleno. Una capa DXF por layer.
+- **PNG**: ancho configurable (default 1 024 px, alto por relación de aspecto, topes 8 192 px por lado y 16 MP, rechazo con mensaje, nunca recorte silencioso), fondo transparente o de color; rasterizado detrás de
+  `Rasterizer` (el real usa `<canvas>`). Es una vista previa, no un archivo de fabricación.
+- **Layers y ZIP**: se eligen las layers (por defecto visibles y no IGNORE); modo «un archivo» o «un archivo por layer» (mismo `viewBox`/tamaño/origen para que se superpongan); varios archivos van en un ZIP
+  `proyecto_layers.zip` (*stored*, sin ZIP64: límite documentado, error explícito al superarlo). Nombres `proyecto_layer_operación.ext`: saneados a `[a-z0-9._-]`, ≤ 40 caracteres por parte, sin reservados de
+  Windows, deterministas (orden por `order`) y sin colisiones (`-2`, `-3`).
+- **Preflight** (`buildExportPreflight`, puro) antes de generar: dimensiones (o «sin escala»), layers incluidas/excluidas con su operación y el motivo, nombres de archivo, avisos y el **Laser Check de S14 restringido
+  a lo que se exporta**. Un reporte ausente, desactualizado o con checks sin correr se muestra **NO VERIFICADO**, nunca como OK. Con `Blocking` el botón dice «Exportar de todos modos» y exige confirmación
+  explícita ligada a ese conjunto de issues; no se impide del todo (decisión del usuario). El diálogo comparte la instancia de `useLaserCheck` del panel (una sola petición de flotantes).
+- **Diálogo accesible**: `role="dialog"` + `aria-modal`, foco inicial en el diálogo y devuelto al botón EXPORT, Escape cierra, Tab atrapado, `aria-live` para «Generando… / Listo / Error». La generación es
+  todo-o-nada (un error se muestra y no se descarga nada), cancelable (cerrar el diálogo aborta) y cede el control entre layers.
+- **Lo que NO está validado**: la importación de los DXF en LightBurn/LibreCAD/AutoCAD, el rasterizado real del PNG en navegadores y la descarga real (ver `docs/EXPORT_FORMATOS.md`, «Qué NO se validó»).
+- Fuera de alcance: DXF como formato interno, correcciones automáticas, export desde el servidor, cambios al export clásico.
+
 ## Consecuencias
 - Un solo mecanismo de comandos hace S06/S12 (copy/paste, undo/redo, historial) una extensión, no una reescritura.
 - Hornear matrices solo cuando hace falta evita degradar geometría con transforms triviales.
@@ -391,4 +415,4 @@ S01 base (modelo, comandos, selección, move/scale/rotate) · S02 crop/rotate/fl
 S04 draw/erase · S05 nodos/Bézier · S06 copy/paste/duplicate/delete · S07 align/distribute/z-order ·
 S08 booleanas (servidor) · S09 offset (servidor) · S10 corte (servidor) · S11 puentes/piezas flotantes (servidor) ·
 S12 historial de comandos unificado (incluye metadata de capas; `docs/EDITOR_COMMANDS.md`) · S13 autosave de geometría + historial de versiones ·
-S14 Laser Checker integrado (D7) · S15 export avanzado · S16 E2E + release candidate.
+S14 Laser Checker integrado (D7) · S15 export avanzado (D8, `docs/EXPORT_FORMATOS.md`) · S16 E2E + release candidate.

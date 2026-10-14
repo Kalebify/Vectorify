@@ -131,6 +131,9 @@ import {
 import { resolveSelection, selectableObjects as selectableObjectsOf, splitByLock } from "../../lib/editor/selection";
 import { groupBounds, groupCenter, setBounds } from "../../lib/editor/transform";
 import type { DocumentFrame, EditorEdit, EditProduction, LayerMetaChange, Point, Rect } from "../../lib/editor/types";
+import { downloadFile, rasterizeWithCanvas, type DownloadFile } from "../../lib/editor/export/browser";
+import type { ExportDocument } from "../../lib/editor/export/exportDocument";
+import type { Rasterizer } from "../../lib/editor/export/pngExport";
 import { formatDisplayNumber, mmPerUnit as mmPerUnitOf, toMm } from "../../lib/editor/units";
 import { svgToDataUrl } from "../../lib/svgToDataUrl";
 import type { OffsetCapStyle, OffsetJoinStyle } from "../../types/geometry";
@@ -154,6 +157,7 @@ import { PaletteBar } from "./PaletteBar";
 import { OffsetPanel, ORIGIN_LAYER_VALUE } from "./OffsetPanel";
 import { CutPanel } from "./CutPanel";
 import { FloatingPanel } from "./FloatingPanel";
+import { ExportDialog } from "./ExportDialog";
 import { LaserCheckPanel } from "./LaserCheckPanel";
 import { HistoryPanel } from "./HistoryPanel";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
@@ -190,6 +194,8 @@ export interface EditorShellProps {
   createId?: () => string;
   /** Cuántas acciones guarda el historial de la sesión (M3-S12; default 200, ver `MAX_UNDO_STEPS`). Al desbordar se descarta la más vieja y el panel avisa. Inyectable en tests. */
   historyLimit?: number;
+  /** Puntos de inyección del export (M3-S15): la descarga (Blob + `<a download>`), el rasterizado del PNG (`<canvas>`) y el cede-control entre layers. Inyectables en tests. */
+  exportSeams?: { download?: DownloadFile; rasterize?: Rasterizer; yieldToEventLoop?: () => Promise<void> };
 }
 
 const EMPTY_LAYERS: VectorDocumentLayer[] = [];
@@ -332,6 +338,7 @@ export function EditorShell({
   colorConfirmThreshold = DEFAULT_CONFIRM_THRESHOLD,
   createId,
   historyLimit,
+  exportSeams,
 }: EditorShellProps) {
   // M2.2-S07: `useVectorDocument`/`useManufacturingOperations` necesitan `trackPatch` (expuesto
   // por `useWorkspaceSave`, declarado más abajo) para conectar cada PATCH-por-edición al
@@ -537,6 +544,12 @@ export function EditorShell({
   const closeLaserCheck = useCallback(() => {
     setLaserCheckOpen(false);
     globalThis.document?.getElementById("editor-laser-check-toggle")?.focus();
+  }, []);
+  // Export avanzado (M3-S15): diálogo modal; al cerrar devuelve el foco al botón EXPORT del header.
+  const [exportOpen, setExportOpen] = useState(false);
+  const closeExport = useCallback(() => {
+    setExportOpen(false);
+    globalThis.document?.getElementById("editor-export-button")?.focus();
   }, []);
   const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
   const closeVersionHistory = useCallback(() => {
@@ -1717,7 +1730,8 @@ export function EditorShell({
   // Analiza la geometría editada en memoria (estado confirmado): checks locales de lib/editor/laserCheck.ts + piezas flotantes del servicio de S11. Activar un issue
   // selecciona los objetos implicados y centra la vista en ellos; el overlay resalta su geometría. No toca la pila de undo ni el documento.
   const laserCheck = useLaserCheck({
-    open: laserCheckOpen && Boolean(document),
+    // El preflight del export (M3-S15) reutiliza este mismo análisis: con el diálogo abierto también corre, sin duplicar la petición de flotantes del servidor.
+    open: (laserCheckOpen || exportOpen) && Boolean(document),
     state: colorState,
     mmFactor,
     onActivateIssue: (issue) => {
@@ -1727,6 +1741,13 @@ export function EditorShell({
       if (issue.rect) centerOn(issue.rect, canvasSize, frame);
     },
   });
+
+  // ---- Export avanzado (M3-S15) ----
+  // Lo exportado es lo que el usuario ve: estado confirmado en memoria (con la estructura y visibilidad efectivas de capas), no la versión guardada.
+  const exportDocument = useMemo<ExportDocument>(
+    () => ({ projectName, frame: committedFrame, mmFactor, layers: colorState.layers ?? [], objectsByLayer: colorState.objectsByLayer }),
+    [projectName, committedFrame, mmFactor, colorState],
+  );
 
   // ---- Draw / Erase (M3-S04) ----
   // Toda geometría nueva pertenece a una capa identificada (la activa, o una «Dibujo» nueva en el mismo comando); Erase resta geometría real en el
@@ -1926,6 +1947,8 @@ export function EditorShell({
         onToggleHistory={() => (historyOpen ? closeHistory() : setHistoryOpen(true))}
         laserCheckOpen={laserCheckOpen}
         onToggleLaserCheck={status === "ready" && document ? () => (laserCheckOpen ? closeLaserCheck() : setLaserCheckOpen(true)) : undefined}
+        exportOpen={exportOpen}
+        onExport={status === "ready" && document ? () => setExportOpen(true) : undefined}
       />
       {historyOpen && (
         <HistoryPanel
@@ -1950,6 +1973,17 @@ export function EditorShell({
           onClose={closeVersionHistory}
           onBeforeRestore={suspendAutosave}
           onRestored={handleRestored}
+        />
+      )}
+      {exportOpen && document && (
+        <ExportDialog
+          document={exportDocument}
+          // Un análisis desactualizado (el documento cambió) no es un resultado vigente: el preflight lo muestra como no verificado.
+          laserReport={laserCheck.stale ? null : laserCheck.report}
+          rasterize={exportSeams?.rasterize ?? rasterizeWithCanvas}
+          download={exportSeams?.download ?? downloadFile}
+          yieldToEventLoop={exportSeams?.yieldToEventLoop}
+          onClose={closeExport}
         />
       )}
       {geometrySave.conflictDetected && (
@@ -2047,7 +2081,7 @@ export function EditorShell({
                 offsetOverlay={offsetOverlay}
                 cutOverlay={cut.overlay}
                 floatingOverlay={floating.overlay}
-                laserCheckOverlay={laserCheck.overlay}
+                laserCheckOverlay={laserCheckOpen ? laserCheck.overlay : undefined}
                 onEditPath={(objectId, layerGroupId) => {
                   handleSelectObjects([objectId], layerGroupId);
                   handleSelectTool("path");
