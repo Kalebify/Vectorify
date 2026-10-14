@@ -19,7 +19,7 @@ S01–S12 mergeados en `main`:
 | S11 | Bridges + piezas flotantes | #58 |
 | S12 | EditorCommand v1 + HistoryPanel + ejecutor IA | #59 |
 
-S13 (Autosave + Version History, PR #60) y S14 (Laser Checker integrado, PR #61) mergeadas en `main`.
+S13 (#60), S14 (#61) y S15 (#62) mergeadas en `main`.
 
 ## Decisiones clave
 
@@ -31,19 +31,17 @@ S13 (Autosave + Version History, PR #60) y S14 (Laser Checker integrado, PR #61)
 
 ## Problemas abiertos
 
-- **Docker Desktop no arranca** (WSL1 incompatible, 2026-10-14): `dotnet test` con Testcontainers no corre. Los 26 casos E2E nuevos de `editor-save`
-  (en `VectorDocumentEndpointsTests`) compilan pero **no se han ejecutado**. Correrlos cuando vuelva Docker.
-- `dotnet build` falló intermitentemente por lock de OneDrive (`CoreGenerateAssemblyInfo`) en sesiones anteriores; hoy compiló bien.
+- **Docker Desktop volvió** (2026-10-14): `dotnet test` completo corrió (1706 tests; los 26 E2E de `editor-save` de S13 pasan). En una corrida con la máquina saturada fallaron 8 por timeout de cliente HTTP; aislados, pasan.
 - El contrato de `editor-save` no lleva `baseVersion`: solo detecta escrituras simultáneas (409 por `xmin`), no "otra pestaña guardó antes".
 - El listado de versiones no expone el nº de capas (el endpoint es de M2.2-S06 y el spec de S13 prohíbe tocarlo): el panel muestra el tamaño en mm.
 
-- **Export** (S15): en el cliente desde el documento en memoria, sin dependencias nuevas (SVG canónico; DXF R12 en mm; PNG; ZIP stored). La compatibilidad DXF con LightBurn/LibreCAD/AutoCAD y el rasterizado PNG real **no se han verificado** (ver `docs/EXPORT_FORMATOS.md`).
+- **Export** (S15): en el cliente desde el documento en memoria, sin dependencias nuevas (SVG canónico; DXF R12 en mm; PNG; ZIP stored). El PNG y los demás formatos se generaron y comprobaron en un navegador real (una imagen, S16); la **importación de DXF/SVG en LightBurn/LibreCAD/AutoCAD no se ha verificado** (ver `docs/EXPORT_FORMATOS.md`).
 - **Laser Check** (S14): en cliente; el modo `stencil` de S11 puede marcar el agujero de una "O" como isla flotante (falso Blocking).
 
 ## En curso
 
-**S15 · Export avanzado** — rama `sprint/3e8d77b2-m3-s15-export-avanzado`: implementado y verificado localmente; falta PR → merge → Notion.
+**S16 · E2E + Release Candidate** — rama `sprint/3e8d77b2-m3-s16-e2e-release-candidate`: gate implementado y verificado (E2E HTTP 10/10, recorrido jsdom, recorrido real en navegador); falta PR → merge → Notion. Detalle y bugs conocidos en `docs/MVP3_RELEASE.md`.
 
 ## Siguiente paso
 
-Cerrar S15 y seguir con S16 (E2E + release candidate).
+Cerrar S16 (MVP 3 completo). Pendiente humano: probar los DXF/SVG exportados en el software de fabricación objetivo y decidir los bugs conocidos de `docs/MVP3_RELEASE.md`.

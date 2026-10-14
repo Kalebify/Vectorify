@@ -419,7 +419,14 @@ export function EditorShell({
   // M3-S03: la estructura de capas es parte del estado editable. `serverLayers` son las del servidor (PATCH, useVectorDocument);
   // `documentLayers` la lista EFECTIVA (servidor + capas creadas en el cliente + colores recoloreados + previsualización) que consumen el
   // canvas y TODOS los paneles; `committedLayers` es lo mismo sin la previsualización de un gesto en curso.
-  const serverLayers = document?.layers ?? EMPTY_LAYERS;
+  // La operación de fabricación elegida en la sesión vive en `useManufacturingOperations`; el documento cargado conserva la del momento de abrirlo. Se aplica acá, en la
+  // fuente, para que TODO consumidor de las capas (guardado, Laser Check, export, flotantes) vea la operación vigente y no la vieja. Sin diferencias, la misma referencia.
+  const serverLayers = useMemo(() => {
+    const base = document?.layers ?? EMPTY_LAYERS;
+    const withOperation = (layer: VectorDocumentLayer) => manufacturingOperations[layer.groupId]?.operation ?? layer.manufacturingOperation;
+    if (!base.some((layer) => withOperation(layer) !== layer.manufacturingOperation)) return base;
+    return base.map((layer) => (withOperation(layer) === layer.manufacturingOperation ? layer : { ...layer, manufacturingOperation: withOperation(layer) }));
+  }, [document?.layers, manufacturingOperations]);
   const sourceWidthPx = document?.sourceWidthPx ?? 0;
   const sourceHeightPx = document?.sourceHeightPx ?? 0;
   // Historial (M3-S12): la metadata de capa que deshacer/rehacer re-persiste vive en `useVectorDocument`/`useManufacturingOperations`, declarados antes;

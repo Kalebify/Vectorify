@@ -1232,4 +1232,46 @@ describe("EditorShell — guardado de geometría (M3-S13)", () => {
     expect(beforeUnloadPrevented()).toBe(false);
     confirm.mockRestore();
   });
+
+  // Defecto bloqueante hallado en el recorrido real del release candidate (M3-S16): la operación de fabricación cambiada en la sesión vive en
+  // `useManufacturingOperations`, pero el documento cargado conservaba la vieja. El autosave la devolvía al servidor, y el Laser Check y el export la ignoraban.
+  describe("operación de fabricación cambiada en la sesión (M3-S16)", () => {
+    const operationSelect = (name: string) => screen.getByLabelText(`Operación de fabricación de la capa ${name}`) as HTMLSelectElement;
+    const savedOperationOf = (shell: Awaited<ReturnType<typeof renderShell>>, groupId: string) =>
+      (shell.server.editorSaves[0].layers as Array<{ groupId: string; manufacturingOperation: string | null }>).find((entry) => entry.groupId === groupId)!.manufacturingOperation;
+
+    it("el editor-save lleva la operación que el usuario eligió, no la del documento cargado", async () => {
+      const shell = await renderShell({ mode: "saved" });
+      fireEvent.change(operationSelect("Azul"), { target: { value: "engrave" } }); // cargado: «sin asignar»
+      fireEvent.change(operationSelect("Rojo"), { target: { value: "ignore" } }); // cargado: «cut»
+      await waitFor(() => expect(shell.server.calls.filter((call) => call.method === "PATCH")).toHaveLength(2));
+
+      fireEvent.click(saveButton());
+
+      await waitFor(() => expect(shell.server.editorSaves).toHaveLength(1));
+      expect(savedOperationOf(shell, GROUP_B_ID)).toBe("engrave");
+      expect(savedOperationOf(shell, GROUP_A_ID)).toBe("ignore");
+    });
+
+    it("«sin asignar» se guarda como null aunque el documento cargado tuviera otra operación", async () => {
+      const shell = await renderShell({ mode: "saved" });
+      fireEvent.change(operationSelect("Rojo"), { target: { value: "unassigned" } });
+      await waitFor(() => expect(shell.server.calls.filter((call) => call.method === "PATCH")).toHaveLength(1));
+
+      fireEvent.click(saveButton());
+
+      await waitFor(() => expect(shell.server.editorSaves).toHaveLength(1));
+      expect(savedOperationOf(shell, GROUP_A_ID)).toBeNull();
+    });
+
+    it("el Laser Check respeta la operación elegida: una capa pasada a «Ignorar» deja de analizarse", async () => {
+      const shell = await renderShell({ mode: "saved" });
+      fireEvent.change(operationSelect("Rojo"), { target: { value: "ignore" } });
+      await waitFor(() => expect(shell.server.calls.filter((call) => call.method === "PATCH")).toHaveLength(1));
+
+      fireEvent.click(screen.getByRole("button", { name: /^Laser Check/ }));
+
+      expect(await screen.findByText(/Ignoradas por su operación: Rojo/)).toBeInTheDocument();
+    });
+  });
 });
