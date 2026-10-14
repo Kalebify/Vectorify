@@ -1,0 +1,18 @@
+{
+  "card_id": "3c1d77b2-6398-8152-9e25-c802c547461d",
+  "card_url": "https://app.notion.com/p/3c1d77b2639881529e25c802c547461d",
+  "title": "M3-S15 · Export avanzado SVG / DXF / PNG / Layers",
+  "stack": "Frontend (React/TS) -- export en el cliente desde el documento en memoria; sin dependencias nuevas; backend/Python sin cambios previstos",
+  "branch": "sprint/3e8d77b2-m3-s15-export-avanzado",
+  "column": "Doing",
+  "phase": "implementation",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "started_at": "2026-10-14T00:00:00Z",
+  "exceptions": [
+    "Corrida autonoma de MVP 3 (S01..S16) confirmada por el usuario: mergea el orquestador; ante un error la tarjeta pasa a Bloqueado y se sigue.",
+    "DESVIACION: la propiedad Area dice ASP.NET Core, pero el export se implementa en el cliente (el export v1 solo sirve el pipeline guardado, el backend no tiene DXF/PNG/ZIP y exportar desde servidor exigiria guardar antes y dependencias nuevas).",
+    "DECISION: DXF AC1009 (POLYLINE/VERTEX/SEQEND) en mm con Y invertido; ZIP stored con CRC-32 propio; PNG por canvas con rasterizador inyectable.",
+    "NOTA: la compatibilidad DXF con visores externos (LightBurn/LibreCAD/AutoCAD) NO se puede verificar en este entorno: documentarlo como no verificado."
+  ]
+}
