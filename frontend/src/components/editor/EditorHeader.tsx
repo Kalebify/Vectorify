@@ -34,6 +34,9 @@ interface EditorHeaderProps {
   /** Panel de Historial de versiones (M3-S13). Sin `onToggleVersionHistory` el botón no se muestra. */
   versionHistoryOpen?: boolean;
   onToggleVersionHistory?: () => void;
+  /** Panel del Laser Checker (M3-S14). Sin `onToggleLaserCheck` el botón no se muestra. */
+  laserCheckOpen?: boolean;
+  onToggleLaserCheck?: () => void;
 }
 
 const DIRTY_STATE_COPY: Record<WorkspaceSaveState, string> = {
@@ -103,6 +106,8 @@ export function EditorHeader({
   onToggleHistory,
   versionHistoryOpen = false,
   onToggleVersionHistory,
+  laserCheckOpen = false,
+  onToggleLaserCheck,
 }: EditorHeaderProps) {
   const isSaving = saveState === "saving" || geometrySaveState === "saving";
 
@@ -150,6 +155,19 @@ export function EditorHeader({
       </div>
 
       <div className="editor-header__actions">
+        {onToggleLaserCheck && (
+          <button
+            type="button"
+            id="editor-laser-check-toggle"
+            className="editor-header__button"
+            aria-expanded={laserCheckOpen}
+            aria-controls="editor-laser-check-panel"
+            onClick={onToggleLaserCheck}
+            title="Laser Check: revisar la fabricabilidad del documento (paths abiertos, duplicados, piezas flotantes, detalles pequeños...)"
+          >
+            Laser Check
+          </button>
+        )}
         {onToggleVersionHistory && (
           <button
             type="button"

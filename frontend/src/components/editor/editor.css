@@ -1926,3 +1926,156 @@
   font-size: 12px;
   text-decoration: underline;
 }
+
+/* ---------- Laser Check (M3-S14; reusa .boolean-panel / .boolean-overlay / .offset-panel__warnings) ---------- */
+
+.laser-check-panel:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.laser-check-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.laser-check-panel__header .editor-panel__heading {
+  margin: 0;
+}
+
+.laser-check-panel__close {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: var(--editor-space-1);
+  font-size: 14px;
+}
+
+.laser-check-panel__status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--editor-space-2);
+}
+
+/* El estado global se lee por su TEXTO (Ready / Review / Blocking); el color solo lo refuerza. */
+.laser-check-panel__badge {
+  padding: var(--editor-space-1) var(--editor-space-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--neutral);
+  background: var(--neutral-bg);
+}
+
+.laser-check-panel__badge--ready {
+  color: var(--ok);
+  background: var(--ok-bg);
+  border-color: var(--ok);
+}
+
+.laser-check-panel__badge--review {
+  color: var(--warn);
+  background: var(--warn-bg);
+  border-color: var(--warn);
+}
+
+.laser-check-panel__badge--blocking {
+  color: var(--error);
+  background: var(--error-bg);
+  border-color: var(--error);
+}
+
+.laser-check-panel__badge--stale {
+  border-style: dashed;
+  font-style: italic;
+}
+
+.laser-check-panel[data-stale="true"] .laser-check-panel__issues {
+  opacity: 0.6;
+}
+
+.laser-check-panel__unverified {
+  border-left-color: var(--warn);
+}
+
+.laser-check-panel__issues {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.laser-check-panel__issues:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.laser-check-panel__issue {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--editor-space-1) var(--editor-space-2);
+  border-left: 3px solid transparent;
+  color: var(--text-h);
+  cursor: pointer;
+}
+
+.laser-check-panel__issue--error {
+  border-left-color: var(--error);
+}
+
+.laser-check-panel__issue--warning {
+  border-left-color: var(--warn);
+}
+
+.laser-check-panel__issue--active {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.laser-check-panel__issue--selected {
+  background: var(--editor-panel-bg);
+  font-weight: 600;
+}
+
+.laser-check-panel__issue--stale {
+  cursor: not-allowed;
+}
+
+.laser-check-panel__issue-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--editor-space-2);
+}
+
+.laser-check-panel__severity {
+  padding: 0 var(--editor-space-1);
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.laser-check-panel__severity--error {
+  color: var(--error);
+}
+
+.laser-check-panel__severity--warning {
+  color: var(--warn);
+}
+
+.laser-check-panel__issue-meta,
+.laser-check-panel__issue-action {
+  color: var(--text);
+  font-size: 11px;
+}

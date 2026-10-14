@@ -5,6 +5,7 @@ import { describeEditFailure, useDrawEraseTools } from "../../hooks/useDrawErase
 import { useBooleanOperation } from "../../hooks/useBooleanOperation";
 import { useCutTool } from "../../hooks/useCutTool";
 import { useFloatingTool } from "../../hooks/useFloatingTool";
+import { useLaserCheck } from "../../hooks/useLaserCheck";
 import { useOffsetOperation } from "../../hooks/useOffsetOperation";
 import { useEditableDocument, type ApplyEditResult, type EditProducer, type PersistLayerMeta, type PersistResult } from "../../hooks/useEditableDocument";
 import { usePathTool } from "../../hooks/usePathTool";
@@ -153,6 +154,7 @@ import { PaletteBar } from "./PaletteBar";
 import { OffsetPanel, ORIGIN_LAYER_VALUE } from "./OffsetPanel";
 import { CutPanel } from "./CutPanel";
 import { FloatingPanel } from "./FloatingPanel";
+import { LaserCheckPanel } from "./LaserCheckPanel";
 import { HistoryPanel } from "./HistoryPanel";
 import { VersionHistoryPanel } from "./VersionHistoryPanel";
 import { PathPanel } from "./PathPanel";
@@ -529,6 +531,12 @@ export function EditorShell({
   const closeHistory = useCallback(() => {
     setHistoryOpen(false);
     globalThis.document?.getElementById("editor-history-toggle")?.focus();
+  }, []);
+  // Laser Checker (M3-S14): NO es una herramienta (no cambia `activeTool`): es un panel que convive con cualquiera y se re-analiza solo al cambiar la geometría.
+  const [laserCheckOpen, setLaserCheckOpen] = useState(false);
+  const closeLaserCheck = useCallback(() => {
+    setLaserCheckOpen(false);
+    globalThis.document?.getElementById("editor-laser-check-toggle")?.focus();
   }, []);
   const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
   const closeVersionHistory = useCallback(() => {
@@ -1705,6 +1713,21 @@ export function EditorShell({
     onClose: () => setActiveTool("select"),
   });
 
+  // ---- Laser Checker (M3-S14) ----
+  // Analiza la geometría editada en memoria (estado confirmado): checks locales de lib/editor/laserCheck.ts + piezas flotantes del servicio de S11. Activar un issue
+  // selecciona los objetos implicados y centra la vista en ellos; el overlay resalta su geometría. No toca la pila de undo ni el documento.
+  const laserCheck = useLaserCheck({
+    open: laserCheckOpen && Boolean(document),
+    state: colorState,
+    mmFactor,
+    onActivateIssue: (issue) => {
+      // Un issue de capa completa (sin objetos propios) selecciona la capa.
+      if (issue.objectIds.length > 0) handleSelectObjects(issue.objectIds, issue.layerGroupId);
+      else handleSelectGroup(issue.layerGroupId);
+      if (issue.rect) centerOn(issue.rect, canvasSize, frame);
+    },
+  });
+
   // ---- Draw / Erase (M3-S04) ----
   // Toda geometría nueva pertenece a una capa identificada (la activa, o una «Dibujo» nueva en el mismo comando); Erase resta geometría real en el
   // servidor. La orquestación (borrador de la pluma, pipelines trazo -> servidor -> UN comando, teclado) vive en `useDrawEraseTools`.
@@ -1901,6 +1924,8 @@ export function EditorShell({
         historyCount={editable.historyEntries.length}
         historyAttention={editable.historyNotices.length > 0 || editable.historyError !== null}
         onToggleHistory={() => (historyOpen ? closeHistory() : setHistoryOpen(true))}
+        laserCheckOpen={laserCheckOpen}
+        onToggleLaserCheck={status === "ready" && document ? () => (laserCheckOpen ? closeLaserCheck() : setLaserCheckOpen(true)) : undefined}
       />
       {historyOpen && (
         <HistoryPanel
@@ -2022,6 +2047,7 @@ export function EditorShell({
                 offsetOverlay={offsetOverlay}
                 cutOverlay={cut.overlay}
                 floatingOverlay={floating.overlay}
+                laserCheckOverlay={laserCheck.overlay}
                 onEditPath={(objectId, layerGroupId) => {
                   handleSelectObjects([objectId], layerGroupId);
                   handleSelectTool("path");
@@ -2068,6 +2094,8 @@ export function EditorShell({
             viewportSize={canvasSize}
             layerImageOverrides={previewImageOverrides}
           />
+
+          {laserCheckOpen && document && <LaserCheckPanel {...laserCheck.panel} onClose={closeLaserCheck} />}
 
           {activeTool === "crop" && cropDraft && cropSummary && (
             <CropPanel
