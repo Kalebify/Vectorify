@@ -19,6 +19,7 @@ import { IDENTITY_MATRIX, type AffineMatrix } from "../../lib/svgTransform";
 import { BooleanOverlay, type BooleanOverlayProps } from "./BooleanOverlay";
 import { CutOverlay, type CutOverlayProps } from "./CutOverlay";
 import { FloatingOverlay, type FloatingOverlayProps } from "./FloatingOverlay";
+import { LaserCheckOverlay, type LaserCheckOverlayProps } from "./LaserCheckOverlay";
 import { OffsetOverlay, type OffsetOverlayProps } from "./OffsetOverlay";
 import { EditorLayerNodes } from "./EditorLayerNodes";
 import type { EditorTool } from "./EditorToolbar";
@@ -99,6 +100,8 @@ interface VectorCanvasProps {
   cutOverlay?: Omit<CutOverlayProps, "viewport">;
   /** Piezas flotantes y bridges (M3-S11): las piezas resaltadas (la seleccionada de la lista más fuerte) y los bridges propuestos. Solo lectura; el shell posee todo el estado. */
   floatingOverlay?: Omit<FloatingOverlayProps, "viewport">;
+  /** Laser Checker abierto (M3-S14): la geometría de cada issue resaltada (la activada en la lista más fuerte). Solo lectura; no es una herramienta: convive con cualquiera. */
+  laserCheckOverlay?: Omit<LaserCheckOverlayProps, "viewport">;
   /** Doble click sobre un objeto con Select (M3-S05): el shell lo selecciona y pasa a la herramienta Path. */
   onEditPath?: (objectId: string, layerGroupId: string) => void;
   /**
@@ -209,6 +212,7 @@ export function VectorCanvas({
   offsetOverlay,
   cutOverlay,
   floatingOverlay,
+  laserCheckOverlay,
   onEditPath,
   onDeleteSelection,
 }: VectorCanvasProps) {
@@ -1034,6 +1038,7 @@ export function VectorCanvas({
       {hasContainerSize && offsetOverlay && <OffsetOverlay {...offsetOverlay} viewport={viewport} />}
       {hasContainerSize && cutOverlay && <CutOverlay {...cutOverlay} viewport={viewport} />}
       {hasContainerSize && floatingOverlay && <FloatingOverlay {...floatingOverlay} viewport={viewport} />}
+      {hasContainerSize && laserCheckOverlay && <LaserCheckOverlay {...laserCheckOverlay} viewport={viewport} />}
       {hasContainerSize && pathSurface && tool === "path" && <PathSurface {...pathSurface} viewport={viewport} suspended={spacePanHeld || editingSuspended} pool={selectableObjects} />}
 
       {lockedSelected.length > 0 && (

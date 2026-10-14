@@ -215,4 +215,26 @@ describe("EditorHeader", () => {
       expect(screen.getByRole("button", { name: "Deshacer: Mover 2 objetos" })).not.toHaveAttribute("aria-describedby");
     });
   });
+
+  describe("Laser Check (M3-S14)", () => {
+    it("sin onToggleLaserCheck no hay botón", () => {
+      renderHeader();
+      expect(screen.queryByRole("button", { name: /^Laser Check/ })).not.toBeInTheDocument();
+    });
+
+    it("el botón expone aria-expanded/aria-controls y llama a onToggleLaserCheck", () => {
+      const onToggleLaserCheck = vi.fn();
+      const { rerender } = renderHeader({ onToggleLaserCheck, laserCheckOpen: false });
+
+      const button = screen.getByRole("button", { name: "Laser Check" });
+      expect(button).toHaveAttribute("id", "editor-laser-check-toggle");
+      expect(button).toHaveAttribute("aria-expanded", "false");
+      expect(button).toHaveAttribute("aria-controls", "editor-laser-check-panel");
+      fireEvent.click(button);
+      expect(onToggleLaserCheck).toHaveBeenCalledTimes(1);
+
+      rerender(<EditorHeader projectName="mi-diseño.svg" onClose={vi.fn()} saveState="idle" saveErrorMessage={null} canSave={true} onSave={vi.fn()} onToggleLaserCheck={onToggleLaserCheck} laserCheckOpen />);
+      expect(screen.getByRole("button", { name: "Laser Check" })).toHaveAttribute("aria-expanded", "true");
+    });
+  });
 });

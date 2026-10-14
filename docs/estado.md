@@ -19,7 +19,7 @@ S01–S12 mergeados en `main`:
 | S11 | Bridges + piezas flotantes | #58 |
 | S12 | EditorCommand v1 + HistoryPanel + ejecutor IA | #59 |
 
-S13 (Autosave + Version History) implementada en la rama `sprint/3e8d77b2-m3-s13-autosave-version-history`; ver abajo.
+S13 (Autosave + Version History) mergeada en `main` (PR #60).
 
 ## Decisiones clave
 
@@ -39,8 +39,8 @@ S13 (Autosave + Version History) implementada en la rama `sprint/3e8d77b2-m3-s13
 
 ## En curso
 
-**S13 · Autosave + Version History**: implementación y verificación local completas (frontend 2962 tests, build, lint, `dotnet build`). Falta PR → merge → Notion Done.
+**S14 · Laser Checker integrado** — rama `sprint/3e8d77b2-m3-s14-laser-checker-editor`: implementado y verificado localmente; falta PR → merge → Notion.
 
 ## Siguiente paso
 
-Cerrar S13 (commit → PR → merge → Notion Done) y seguir con S14 (Laser Checker integrado, reusa el análisis de flotantes de S11).
+Cerrar S14 y seguir con S15 (export avanzado) y S16 (E2E + release candidate).

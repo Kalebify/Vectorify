@@ -356,6 +356,30 @@ de round-trip: `parse(serialize(doc))` ≡ `doc` (ids, d, fill, matriz) — se p
 - Rendimiento: documentos de ≥ 5 000 paths no deben bloquear la UI en selección/drag (memoización por objeto,
   sin re-renderizar todas las capas por frame).
 
+### D7. Laser Checker integrado en el editor (M3-S14)
+- **Corre en el cliente sobre la geometría editada en memoria** (`EditableDocument`: capas efectivas + objetos confirmados), como módulo puro `lib/editor/laserCheck.ts`.
+  El checker de M1-S08 (`/api/v1/.../check`) analiza versiones *guardadas* y solo M/L/Z: no ve ediciones sin guardar ni las curvas del editor, así que no sirve acá y no se toca.
+- **Piezas flotantes: se reusa S11** (`planFloating` + `useFloatingAnalysis`, servidor Shapely; modo `stencil`, el default de S11). Es asíncrono: una sola petición viva con
+  aborto, y mientras no hay respuesta —o si falla— el check queda **NO VERIFICADO** (nunca «OK») sin invalidar los checks locales. Sin cambios de backend.
+- **Relevancia por operación**: capas `ignore` y ocultas no se analizan; las bloqueadas sí (solo lectura). Paths abiertos y flotantes solo importan en CUT (en ENGRAVE un
+  contorno abierto es una línea grabada válida). Una capa `unassigned` se analiza como CUT, cada issue lo indica y la capa suma un aviso propio: nunca se asume Corte en silencio.
+  Un objeto con `stroke` y sin `fill` (una línea) NO es «path abierto»: solo es problema donde se espera un área (relleno en CUT).
+- **Umbrales en mm, constantes exportadas** (`laserCheck.ts`; sin escala física se leen como unidades del documento y el panel avisa): detalle mínimo CUT 0,1 mm (kerf) y
+  ENGRAVE 0,05 mm; path cerrado si el hueco es ≤ 0,01 mm; duplicado exacto ≤ 0,001 mm y casi duplicado ≤ 0,05 mm; subforma degenerada < 0,0001 mm; complejidad > 5 000 nodos por
+  objeto o > 50 000 por capa; la autointersección tiene un presupuesto de comparaciones (2 M por objeto, 20 M en total) y, si se agota, queda no verificada.
+- **Checks**: geometría inválida (path ilegible, matriz/coordenadas no finitas, sin área/largo, subformas degeneradas, autointersección), path abierto, duplicado exacto y casi
+  (geometría horneada, desviación simétrica sobre puntos muestreados por longitud de arco, dentro de la misma clase de operación), pieza flotante, detalle pequeño (ancho del casco
+  convexo de cada subforma; un estrechamiento cóncavo dentro de una forma grande no se detecta) y complejidad.
+- **Severidad → estado global**: `Blocking` si hay algún issue `error` (inválida, path abierto en CUT, duplicado exacto, flotante); `Review` si solo hay avisos (casi duplicado,
+  detalle pequeño, complejidad, capa sin operación) **o** si algún check no se pudo verificar; `Ready` solo con cero issues y todos los checks verificados (también si no hay nada que analizar: `Review`).
+- **Re-run**: manual (*Volver a analizar*) y automático mientras el panel está abierto: al abrir (de inmediato) y 400 ms después de cambiar el documento confirmado. Cada resultado
+  lleva la **huella** del documento analizado (`documentFingerprint`: capas + referencias de objetos + escala); si cambió y todavía no se re-analizó, se muestra **«Desactualizado»**
+  (nunca como vigente), sin resaltado en el canvas y sin poder activar sus issues. Cerrar el panel descarta el resultado y cancela lo que esté en vuelo.
+- **UI**: no es una herramienta (`activeTool` no cambia; `VectorCanvas` solo suma el prop `laserCheckOverlay`: no hay nada que sumar a `selectOnly`, a Escape ni a `TOOL_LABELS`).
+  Botón *Laser Check* en el header y panel en el rail derecho. Activar un issue selecciona sus objetos (un issue de capa selecciona la capa), centra la vista con `centerOn`/`focusTransform`
+  y lo resalta en el overlay. Teclado: la lista es un `listbox` (↑/↓/Inicio/Fin mueven el cursor, Enter/Espacio activan, Escape cierra y devuelve el foco al botón del header) y el resumen va en una región `aria-live`.
+- Fuera de alcance: correcciones automáticas, exportar el reporte, checks de MVP 4.
+
 ## Consecuencias
 - Un solo mecanismo de comandos hace S06/S12 (copy/paste, undo/redo, historial) una extensión, no una reescritura.
 - Hornear matrices solo cuando hace falta evita degradar geometría con transforms triviales.
@@ -367,4 +391,4 @@ S01 base (modelo, comandos, selección, move/scale/rotate) · S02 crop/rotate/fl
 S04 draw/erase · S05 nodos/Bézier · S06 copy/paste/duplicate/delete · S07 align/distribute/z-order ·
 S08 booleanas (servidor) · S09 offset (servidor) · S10 corte (servidor) · S11 puentes/piezas flotantes (servidor) ·
 S12 historial de comandos unificado (incluye metadata de capas; `docs/EDITOR_COMMANDS.md`) · S13 autosave de geometría + historial de versiones ·
-S14 Laser Checker integrado · S15 export avanzado · S16 E2E + release candidate.
+S14 Laser Checker integrado (D7) · S15 export avanzado · S16 E2E + release candidate.
