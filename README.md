@@ -47,6 +47,14 @@ de vectorización. Estado actual:
   503 controlado), cadena de migraciones, **backup/restore** y un verificador de
   consistencia DB↔storage. Ver "Persistencia, backup y restore" más abajo,
   `docs/ARQUITECTURA_PERSISTENCIA.md` y `docs/BACKUP_RESTORE.md`.
+- **M3-S01 a S16** (MVP 3, "editor vectorial usable"): editor sobre el documento
+  guardado (selección y transformaciones, Draw/Erase, nodos, portapapeles,
+  color, booleanas, offset, corte, piezas flotantes y bridges), historial de
+  comandos con undo/redo, **autosave de geometría y versiones restaurables**,
+  **Laser Check integrado** y **export SVG / DXF / PNG / layers**; S16 es el
+  release candidate (E2E HTTP + recorrido del Workspace + checklist). Ver
+  "MVP 3: editor, persistencia, Laser Check y export" más abajo y
+  `docs/MVP3_RELEASE.md`.
 
 ## Arquitectura
 
@@ -859,6 +867,102 @@ verdad las dos primeras:
       LightBurn si está disponible) para confirmar que importa sin errores y
       las dimensiones en mm son correctas — no ejecutable en este entorno
       (sin ese software instalado).
+
+## MVP 3: editor, persistencia, Laser Check y export
+
+Primera versión utilizable de VECTORiZE: **imagen → vectorizar → editar → Laser
+Check → guardar → reabrir → exportar** sin editar el SVG fuera de la aplicación.
+Decisiones de arquitectura en `docs/ADR_EDITOR_MVP3.md`; estado de la release,
+checklist manual, bugs conocidos y límites en `docs/MVP3_RELEASE.md`.
+
+### Editor (Workspace)
+
+Se abre desde «Mis proyectos» sobre un proyecto guardado (o tras el primer
+Guardar). El documento es un conjunto de **capas** (una por color) con N
+objetos (`<path>`) cada una; las medidas se muestran en **mm** (`widthMm` del
+documento ÷ ancho del `viewBox`; sin escala física opera en unidades y lo avisa).
+
+| Herramienta | Qué hace |
+|---|---|
+| Select / Move | seleccionar (click, Shift, marquee), mover, escalar, rotar; el Inspector acepta medidas en mm |
+| Pan | desplazar la vista (Espacio mantenido o `H`); zoom con `+` / `-` |
+| Crop | recortar el área de trabajo (el original no se toca); rotar / voltear con `R` / `F` |
+| Fill / Color / Eyedropper | pintar la selección, recolorear objeto, capa o documento; `I` toma el color de la capa de un objeto |
+| Draw / Erase | pluma y mano alzada; borrar objetos o restar geometría con un pincel |
+| Path | editar nodos y handles Bézier (doble click sobre un objeto) |
+| Booleanas | unión, diferencia, intersección, XOR con 2 o más operandos |
+| Offset | contorno hacia afuera o adentro en mm (nunca colapsa en silencio) |
+| Cut | dividir o separar con hueco con una línea de corte |
+| Flotantes | analizar piezas que se caen al cortar y conectarlas con bridges en mm |
+
+Geometría pesada (booleanas, offset, corte, flotantes y bridges) se calcula en
+el motor Python (Shapely) vía `/api/v2/geometry/*`; el resto corre en el cliente.
+
+**Atajos** (con el foco en el canvas): `Ctrl/Cmd+Z` deshacer, `Ctrl/Cmd+Shift+Z`
+o `Ctrl/Cmd+Y` rehacer, `Ctrl/Cmd+C/X/V` copiar, cortar, pegar (`+Shift` en el
+lugar, `+Alt` en la capa activa), `Ctrl/Cmd+D` duplicar, `Suprimir`/`Retroceso`
+eliminar, `Ctrl/Cmd+A` seleccionar todo, flechas empujar el objeto (una ráfaga
+es un solo comando), `Ctrl/Cmd+]` / `[` traer adelante / enviar atrás (`+Shift`
+al frente / al fondo), `Escape` cancela la herramienta o la selección. La barra
+de portapapeles tiene un panel «Atajos» con la lista completa.
+
+**Historial**: cada acción es un comando versionado (`docs/EDITOR_COMMANDS.md`);
+el panel Historial permite saltar a cualquier entrada. El historial vive en
+memoria: recargar o reabrir lo reinicia.
+
+### Persistencia y versiones
+
+- Primer Guardar: `POST /api/v2/workspaces/save` crea el proyecto (versión 1).
+- Con un proyecto guardado, Guardar y el **autosave** (3 s después de la última
+  edición, un solo POST en vuelo, reintentos con backoff, idempotente) usan
+  `POST /api/v2/projects/{id}/document/editor-save`: una `DocumentVersion` nueva
+  por guardado (`MANUAL_EDIT` / `AUTOSAVE`), versiones inmutables. «Cambios de
+  geometría sin guardar» y el aviso al salir reflejan lo que el servidor no
+  confirmó; nunca dice «guardado» con geometría pendiente.
+- **Versiones**: lista (origen, fecha, mm) y restaurar crea una versión nueva
+  (`RESTORE`); la historia no se borra. Un 409 (escrituras simultáneas) ofrece
+  «Recargar documento» / «Reintentar».
+
+### Laser Check
+
+Botón **Laser Check** del header: analiza el documento **editado en memoria**
+(no solo lo guardado). Detecta geometría inválida, paths abiertos (en capas
+CUT), duplicados exactos y casi duplicados, piezas flotantes, detalles menores
+que el kerf y complejidad. Estado **Ready** / **Review** / **Blocking**; un
+check que no se pudo verificar nunca se muestra como OK. Click en un issue
+selecciona el objeto y centra la vista. Ver `docs/ADR_EDITOR_MVP3.md` (D7).
+
+### Export
+
+Botón **EXPORT**: SVG (canónico, `width`/`height` en mm, una `<g>` por layer),
+DXF R12 en mm, PNG (ancho configurable) y **layers** (un archivo por layer en un
+ZIP `proyecto_layers.zip`, nombres `proyecto_layer_operación.ext`). Sale desde el
+documento en memoria con un preflight (dimensiones, layers incluidas y por qué,
+avisos, Laser Check); con Blocking exige una confirmación explícita. Ver
+`docs/EXPORT_FORMATOS.md`. Importación de SVG: **no existe** (la entrada es
+PNG/JPEG/WEBP).
+
+### Cómo correr el gate de MVP 3 (M3-S16)
+
+```bash
+# E2E HTTP contra una pila YA arriba (no la levanta); 10 imágenes del dataset:
+# upload -> threshold -> paleta -> capas -> save -> editor-save -> reabrir -> restore
+BACKEND_URL=http://localhost:5080 node tests/e2e/mvp3_release_e2e_test.mjs
+
+# Recorrido del Workspace en jsdom (incluido en `npm test`) y suites existentes:
+cd frontend && npm test -- --run && npm run build && npm run lint
+
+# Backend (Docker requerido) y motor Python:
+dotnet test backend/Vectorify.sln
+services/python-engine/.venv/Scripts/python.exe -m pytest -q services/python-engine
+```
+
+El dataset de MVP 3 (`tests/e2e/fixtures/`, 10 PNG deterministas) suma
+`multicolor.png`, `illustration.png`, `floating.png` y `antialias.png` a los seis
+de M1-S11; se regenera con `generate_fixtures.py`. Lo que el gate **no**
+verifica (navegador real, DXF en software de fabricación, rendimiento con
+documentos enormes) está en `docs/MVP3_RELEASE.md`, junto al checklist manual y
+los bugs conocidos.
 
 ## Fuera de alcance de este sprint
 
