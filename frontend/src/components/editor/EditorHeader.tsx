@@ -37,6 +37,9 @@ interface EditorHeaderProps {
   /** Panel del Laser Checker (M3-S14). Sin `onToggleLaserCheck` el botón no se muestra. */
   laserCheckOpen?: boolean;
   onToggleLaserCheck?: () => void;
+  /** Diálogo de export (M3-S15). Sin `onExport` (documento sin cargar) el botón EXPORT queda deshabilitado. */
+  exportOpen?: boolean;
+  onExport?: () => void;
 }
 
 const DIRTY_STATE_COPY: Record<WorkspaceSaveState, string> = {
@@ -75,12 +78,10 @@ const GEOMETRY_DIRTY_COPY = "Cambios de geometría sin guardar";
  * Decisiones documentadas en IMPL.md (spec.md, "Ambigüedades detectadas"):
  * - **Undo/Redo** (M3-S01): ya funcionales sobre la geometría (ver
  *   `useEditableDocument`); deshabilitados cuando no hay nada que deshacer/rehacer.
- * - **Export**: placeholder deshabilitado. `ExportPanel` (M1-S10) exporta
- *   UN `VectorVersion`/`SimplificationVersion`/`DimensionVersion` del
- *   pipeline de un solo vector de MVP1 -- no existe hoy un endpoint que
- *   exporte el `VectorDocument` multicapa completo como un solo archivo, y
- *   crear uno no fue pedido por esta tarjeta (fuera de alcance: "no
- *   inventes que algo funciona").
+ * - **Export** (M3-S15): abre el diálogo de export avanzado (SVG/DXF/PNG/layers), que
+ *   exporta el documento EN MEMORIA desde el cliente. `ExportPanel` (M1-S10) sigue
+ *   siendo el export del pipeline guardado de MVP1 y no se toca. Mientras el documento
+ *   no terminó de cargar no hay `onExport` y el botón queda deshabilitado.
  */
 export function EditorHeader({
   projectName,
@@ -108,6 +109,8 @@ export function EditorHeader({
   onToggleVersionHistory,
   laserCheckOpen = false,
   onToggleLaserCheck,
+  exportOpen = false,
+  onExport,
 }: EditorHeaderProps) {
   const isSaving = saveState === "saving" || geometrySaveState === "saving";
 
@@ -250,10 +253,14 @@ export function EditorHeader({
         </button>
         <button
           type="button"
+          id="editor-export-button"
           className="editor-header__button"
-          disabled
-          aria-label="Exportar el documento completo (próximamente)"
-          title="Exportar el documento completo — próximamente"
+          disabled={!onExport}
+          onClick={onExport}
+          aria-haspopup="dialog"
+          aria-expanded={exportOpen}
+          aria-label={onExport ? "Exportar el documento (SVG, DXF, PNG o layers)" : "Exportar el documento (disponible cuando termine de cargar)"}
+          title={onExport ? "Exportar el documento: SVG, DXF, PNG o un archivo por layer" : "Exportar — disponible cuando el documento termine de cargar"}
         >
           EXPORT
         </button>

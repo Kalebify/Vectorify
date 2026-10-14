@@ -1,5 +1,5 @@
 import Konva from "konva";
-import { StrictMode } from "react";
+import { StrictMode, type ComponentProps } from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { expect, vi } from "vitest";
 import { EditorShell } from "../components/editor/EditorShell";
@@ -195,9 +195,16 @@ export function installWorkspaceFetch(options: WorkspaceOptions = {}) {
   return Object.assign(fetchMock, { geometryCalls, offsetCalls, splitCalls, floatingCalls, bridgeCalls });
 }
 
-export async function renderWorkspace({ strict = false, minPaths = 4, dimensionWidthMm = 160 }: { strict?: boolean; minPaths?: number; dimensionWidthMm?: number | null } = {}) {
+export async function renderWorkspace({
+  strict = false,
+  minPaths = 4,
+  dimensionWidthMm = 160,
+  exportSeams,
+}: { strict?: boolean; minPaths?: number; dimensionWidthMm?: number | null; exportSeams?: ComponentProps<typeof EditorShell>["exportSeams"] } = {}) {
   // `dimensionWidthMm: null` = documento SIN escala física (M3-S09: el offset opera en unidades y lo avisa).
-  const shell = <EditorShell projectId={PROJECT_ID} imageId={IMAGE_ID} paletteId={PALETTE_ID} projectName="mi-diseño.svg" dimensionWidthMm={dimensionWidthMm} savedProjectId={null} onClose={vi.fn()} />;
+  const shell = (
+    <EditorShell projectId={PROJECT_ID} imageId={IMAGE_ID} paletteId={PALETTE_ID} projectName="mi-diseño.svg" dimensionWidthMm={dimensionWidthMm} savedProjectId={null} onClose={vi.fn()} exportSeams={exportSeams} />
+  );
   const utils = render(strict ? <StrictMode>{shell}</StrictMode> : shell);
   const canvas = await screen.findByRole("application");
   await waitFor(() => expect(Konva.stages[Konva.stages.length - 1]?.find("Path").length).toBeGreaterThanOrEqual(minPaths));

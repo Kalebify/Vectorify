@@ -137,6 +137,18 @@ function finiteOrZero(value: number): number {
  * escribe con 0 en vez de emitir `NaN` en el SVG.
  */
 export function serializeEditableLayer(objects: EditorObject[], meta: LayerSvgMeta): string {
+  const width = finiteOrZero(meta.width);
+  const height = finiteOrZero(meta.height);
+  const originX = finiteOrZero(meta.x ?? 0);
+  const originY = finiteOrZero(meta.y ?? 0);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${originX} ${originY} ${width} ${height}">${serializeEditablePaths(objects)}</svg>`;
+}
+
+/**
+ * Los `<path>` de `serializeEditableLayer` sin el `<svg>` envolvente (M3-S15): el export agrupa cada capa en un `<g>` dentro de un solo documento y necesita
+ * exactamente la misma serialización por objeto para que reabrirlo con `parseEditableLayer` devuelva la misma geometría.
+ */
+export function serializeEditablePaths(objects: readonly EditorObject[]): string {
   const paths = objects.map((object) => {
     const { a, b, c, d, e, f } = object.matrix;
     const transform = isIdentityMatrix(object.matrix)
@@ -148,12 +160,7 @@ export function serializeEditableLayer(objects: EditorObject[], meta: LayerSvgMe
       : "";
     return `<path ${VID_ATTRIBUTE}="${escapeXmlAttribute(object.id)}" d="${escapeXmlAttribute(object.d)}" fill="${escapeXmlAttribute(object.fill)}"${stroke}${transform}/>`;
   });
-
-  const width = finiteOrZero(meta.width);
-  const height = finiteOrZero(meta.height);
-  const originX = finiteOrZero(meta.x ?? 0);
-  const originY = finiteOrZero(meta.y ?? 0);
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${originX} ${originY} ${width} ${height}">${paths.join("")}</svg>`;
+  return paths.join("");
 }
 
 // ---- Bounds ----

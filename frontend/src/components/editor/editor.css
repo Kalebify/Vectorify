@@ -2079,3 +2079,198 @@
   color: var(--text);
   font-size: 11px;
 }
+
+/* ---------- Export avanzado (M3-S15; reusa .laser-check-panel__badge / __issue / .offset-panel__warnings) ---------- */
+
+.export-dialog__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--editor-space-4);
+  background: rgba(8, 6, 13, 0.55);
+}
+
+.export-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-3);
+  width: min(680px, 100%);
+  max-height: calc(100vh - 2 * var(--editor-space-4));
+  overflow-y: auto;
+  padding: var(--editor-space-5);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+.export-dialog:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.export-dialog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.export-dialog__header .editor-panel__heading {
+  margin: 0;
+  font-size: 18px;
+}
+
+.export-dialog__group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-2);
+  margin: 0;
+  padding: var(--editor-space-2) var(--editor-space-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.export-dialog__group legend {
+  padding: 0 var(--editor-space-1);
+  color: var(--text-h);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.export-dialog__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--editor-space-2) var(--editor-space-4);
+}
+
+.export-dialog__option {
+  display: flex;
+  align-items: center;
+  gap: var(--editor-space-2);
+  color: var(--text-h);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.export-dialog__option input:focus-visible,
+.export-dialog__field input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.export-dialog__field {
+  display: flex;
+  align-items: center;
+  gap: var(--editor-space-2);
+  font-size: 13px;
+  color: var(--text-h);
+}
+
+.export-dialog__field input[type="text"] {
+  width: 110px;
+  padding: var(--editor-space-1) var(--editor-space-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.export-dialog__muted {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.export-dialog__bulk {
+  display: flex;
+  gap: var(--editor-space-2);
+}
+
+.export-dialog__layers {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.export-dialog__layer {
+  padding: var(--editor-space-1) var(--editor-space-2);
+  border-left: 3px solid var(--border);
+}
+
+.export-dialog__layer[data-included="true"] {
+  border-left-color: var(--ok);
+}
+
+.export-dialog__layer--excluded {
+  opacity: 0.8;
+}
+
+.export-dialog__swatch {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  flex: none;
+}
+
+.export-dialog__preflight {
+  display: flex;
+  flex-direction: column;
+  gap: var(--editor-space-2);
+  padding: var(--editor-space-3);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--editor-panel-bg);
+}
+
+.export-dialog__preflight .editor-panel__heading {
+  margin: 0;
+}
+
+.export-dialog__issues {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.export-dialog__issues .laser-check-panel__issue {
+  cursor: default;
+}
+
+.export-dialog__file-list {
+  margin: 0;
+  padding-left: var(--editor-space-5);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-h);
+}
+
+.export-dialog__confirm {
+  padding: var(--editor-space-2) var(--editor-space-3);
+  border: 1px solid var(--error);
+  border-radius: 4px;
+  background: var(--error-bg);
+}
+
+.export-dialog__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--editor-space-2);
+}

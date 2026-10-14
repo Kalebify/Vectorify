@@ -31,11 +31,31 @@ describe("EditorHeader", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("sin nada que deshacer/rehacer, Undo y Redo están deshabilitados; Exportar sigue deshabilitado", () => {
+  it("sin nada que deshacer/rehacer, Undo y Redo están deshabilitados", () => {
     renderHeader();
     expect(screen.getByRole("button", { name: /Deshacer/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: /Rehacer/ })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /Exportar/ })).toBeDisabled();
+  });
+
+  it("Export (M3-S15): sin onExport (documento sin cargar) queda deshabilitado y lo explica; ya NO dice «próximamente»", () => {
+    renderHeader();
+    const button = screen.getByRole("button", { name: /Exportar/ });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleName(/disponible cuando termine de cargar/);
+    expect(screen.queryByRole("button", { name: /próximamente/i })).not.toBeInTheDocument();
+  });
+
+  it("Export (M3-S15): con onExport está habilitado, abre el diálogo al click y refleja si está abierto (aria-haspopup / aria-expanded)", () => {
+    const onExport = vi.fn();
+    const { rerender } = render(<EditorHeader projectName="p.svg" onClose={vi.fn()} saveState="idle" saveErrorMessage={null} canSave onSave={vi.fn()} onExport={onExport} />);
+    const button = screen.getByRole("button", { name: "Exportar el documento (SVG, DXF, PNG o layers)" });
+    expect(button).toBeEnabled();
+    expect(button).toHaveAttribute("aria-haspopup", "dialog");
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(button);
+    expect(onExport).toHaveBeenCalledTimes(1);
+    rerender(<EditorHeader projectName="p.svg" onClose={vi.fn()} saveState="idle" saveErrorMessage={null} canSave onSave={vi.fn()} onExport={onExport} exportOpen />);
+    expect(screen.getByRole("button", { name: /Exportar el documento/ })).toHaveAttribute("aria-expanded", "true");
   });
 
   it("Undo/Redo (M3-S01): habilitados según canUndo/canRedo, con la etiqueta del comando en el aria-label, y llaman a sus handlers", () => {

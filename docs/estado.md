@@ -19,7 +19,7 @@ S01–S12 mergeados en `main`:
 | S11 | Bridges + piezas flotantes | #58 |
 | S12 | EditorCommand v1 + HistoryPanel + ejecutor IA | #59 |
 
-S13 (Autosave + Version History) mergeada en `main` (PR #60).
+S13 (Autosave + Version History, PR #60) y S14 (Laser Checker integrado, PR #61) mergeadas en `main`.
 
 ## Decisiones clave
 
@@ -37,10 +37,13 @@ S13 (Autosave + Version History) mergeada en `main` (PR #60).
 - El contrato de `editor-save` no lleva `baseVersion`: solo detecta escrituras simultáneas (409 por `xmin`), no "otra pestaña guardó antes".
 - El listado de versiones no expone el nº de capas (el endpoint es de M2.2-S06 y el spec de S13 prohíbe tocarlo): el panel muestra el tamaño en mm.
 
+- **Export** (S15): en el cliente desde el documento en memoria, sin dependencias nuevas (SVG canónico; DXF R12 en mm; PNG; ZIP stored). La compatibilidad DXF con LightBurn/LibreCAD/AutoCAD y el rasterizado PNG real **no se han verificado** (ver `docs/EXPORT_FORMATOS.md`).
+- **Laser Check** (S14): en cliente; el modo `stencil` de S11 puede marcar el agujero de una "O" como isla flotante (falso Blocking).
+
 ## En curso
 
-**S14 · Laser Checker integrado** — rama `sprint/3e8d77b2-m3-s14-laser-checker-editor`: implementado y verificado localmente; falta PR → merge → Notion.
+**S15 · Export avanzado** — rama `sprint/3e8d77b2-m3-s15-export-avanzado`: implementado y verificado localmente; falta PR → merge → Notion.
 
 ## Siguiente paso
 
-Cerrar S14 y seguir con S15 (export avanzado) y S16 (E2E + release candidate).
+Cerrar S15 y seguir con S16 (E2E + release candidate).
