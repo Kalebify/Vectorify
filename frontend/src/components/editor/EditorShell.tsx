@@ -12,6 +12,7 @@ import { useLaserWarnings } from "../../hooks/useLaserWarnings";
 import { useManufacturingOperations } from "../../hooks/useManufacturingOperations";
 import { useVectorDocument, type LayerWriteStatus, type VectorDocumentLayer } from "../../hooks/useVectorDocument";
 import { useWorkspaceSave } from "../../hooks/useWorkspaceSave";
+import { useGeometrySave } from "../../hooks/useGeometrySave";
 import {
   ARRANGE_SHORTCUTS,
   arrangeAvailability,
@@ -153,6 +154,7 @@ import { OffsetPanel, ORIGIN_LAYER_VALUE } from "./OffsetPanel";
 import { CutPanel } from "./CutPanel";
 import { FloatingPanel } from "./FloatingPanel";
 import { HistoryPanel } from "./HistoryPanel";
+import { VersionHistoryPanel } from "./VersionHistoryPanel";
 import { PathPanel } from "./PathPanel";
 import { PreviewNavigator } from "./PreviewNavigator";
 import { VectorCanvas } from "./VectorCanvas";
@@ -528,6 +530,11 @@ export function EditorShell({
     setHistoryOpen(false);
     globalThis.document?.getElementById("editor-history-toggle")?.focus();
   }, []);
+  const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
+  const closeVersionHistory = useCallback(() => {
+    setVersionHistoryOpen(false);
+    globalThis.document?.getElementById("editor-version-history-toggle")?.focus();
+  }, []);
 
   const selectableObjects = useMemo(
     () => selectableObjectsOf(editable.objectsByLayer, documentLayers, visibility),
@@ -559,6 +566,27 @@ export function EditorShell({
 
   // mm por unidad de documento: el tamaño físico del documento guardado manda; si no, el de las dimensiones del flujo clásico.
   const mmFactor = mmPerUnitOf(document?.widthMm ?? dimensionWidthMm, document?.sourceWidthPx);
+
+  // Guardado de geometría (M3-S13): autosave con debounce de 3 s + save manual.
+  // El projectId efectivo prioriza el savedProjectId del workspaceSave (puede haberse creado recién),
+  // luego el prop savedProjectId, o null si todavía no hay proyecto v2.
+  const effectiveSavedProjectId = workspaceSave.savedProjectId ?? savedProjectId ?? null;
+  // Última versión que ESTA sesión persistió: el documento cargado no se refresca tras un guardado, así que su `version` queda vieja.
+  const [lastSavedVersion, setLastSavedVersion] = useState<number | null>(null);
+  // El guardado confirma el baseline (`editable.markSaved`, dentro del hook) sin tocar el historial de undo: la geometría sigue editable.
+  const geometrySave = useGeometrySave({
+    projectId: effectiveSavedProjectId,
+    editable,
+    layers: committedLayers,
+    mmFactor,
+    onSaved: setLastSavedVersion,
+  });
+  const { suspendAutosave } = geometrySave;
+  // Restaurar recarga la página: el aviso de "cambios sin guardar" ya se confirmó en el panel y no debe repetirse.
+  const restoringRef = useRef(false);
+  const handleRestored = useCallback(() => {
+    restoringRef.current = true;
+  }, []);
 
   const handleSelectObjects = useCallback(
     (ids: string[], activeLayerId: string | null) => {
@@ -612,10 +640,11 @@ export function EditorShell({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [undoWithView, redoWithView]);
 
-  // Aviso al salir con geometría sin persistir (ADR D2): hasta M3-S13 las ediciones solo viven en memoria.
+  // Aviso al salir con geometría sin persistir (ADR D2): `geometryDirty` se limpia cuando el servidor confirma el guardado (M3-S13).
   useEffect(() => {
     if (!geometryDirty) return;
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (restoringRef.current) return;
       event.preventDefault();
       event.returnValue = "";
     };
@@ -1846,12 +1875,20 @@ export function EditorShell({
         saveState={workspaceSave.state}
         saveErrorMessage={workspaceSave.errorMessage}
         canSave={status === "ready" && Boolean(document)}
-        onSave={workspaceSave.save}
-        // TODO(M3-S13): persistir la geometría, el marco del documento Y la estructura de capas (serializeEditableLayer + serializeFrame ->
-        // DocumentVersion nueva con viewBox/mm; las capas `isNew` creadas por Fill se crean en el servidor con su color de paleta y los
-        // colores recoloreados se guardan sobre el mismo groupId) y limpiar `geometryDirty` al confirmar el guardado. Hasta entonces el indicador debe seguir diciendo
-        // "Cambios de geometría sin guardar" (un crop o un giro del documento también lo activan).
+        onSave={() => {
+          // Con un proyecto ya guardado SAVE es un checkpoint manual del editor (M3-S13): el save clásico regeneraría las capas desde el
+          // pipeline y pisaría la geometría editada. El clásico queda para el PRIMER guardado (staging, sin proyecto todavía).
+          if (effectiveSavedProjectId) {
+            geometrySave.save();
+          } else {
+            workspaceSave.save();
+          }
+        }}
         geometryDirty={geometryDirty}
+        geometrySaveState={geometrySave.state}
+        geometrySaveErrorMessage={geometrySave.errorMessage}
+        versionHistoryOpen={versionHistoryOpen}
+        onToggleVersionHistory={effectiveSavedProjectId ? () => setVersionHistoryOpen((open) => !open) : undefined}
         canUndo={editable.canUndo}
         canRedo={editable.canRedo}
         undoLabel={editable.undoLabel}
@@ -1878,6 +1915,28 @@ export function EditorShell({
           onDismissNotice={editable.dismissHistoryNotice}
           onClose={closeHistory}
         />
+      )}
+      {versionHistoryOpen && effectiveSavedProjectId && (
+        <VersionHistoryPanel
+          key={effectiveSavedProjectId}
+          projectId={effectiveSavedProjectId}
+          currentVersionNumber={lastSavedVersion ?? document?.version ?? null}
+          geometryDirty={geometryDirty}
+          onClose={closeVersionHistory}
+          onBeforeRestore={suspendAutosave}
+          onRestored={handleRestored}
+        />
+      )}
+      {geometrySave.conflictDetected && (
+        <div className="editor-shell__save-conflict" role="alert">
+          <span>{geometrySave.errorMessage}</span>
+          <button type="button" onClick={() => window.confirm("Se perderán los cambios no guardados. ¿Recargar el documento?") && window.location.reload()}>
+            Recargar documento
+          </button>
+          <button type="button" onClick={() => window.confirm("Reintentar puede sobrescribir los cambios de la otra versión. ¿Continuar?") && geometrySave.save()}>
+            Reintentar
+          </button>
+        </div>
       )}
 
       <div className="editor-shell__body">

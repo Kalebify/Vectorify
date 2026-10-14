@@ -159,6 +159,38 @@ public static class VectorDocumentEndpoints
             "nueva. 404 si la versión origen no existe. 409 si otro Save/Restore concurrente modificó el mismo " +
             "Project entre medio (concurrencia optimista vía xmin, igual que /workspaces/save).");
 
+        app.MapPost("/api/v2/projects/{projectId:guid}/document/editor-save", async (
+            Guid projectId,
+            EditorSaveRequest request,
+            IVectorDocumentService service,
+            CancellationToken cancellationToken) =>
+        {
+            var result = await service.EditorSaveAsync(projectId, request, cancellationToken);
+            return result switch
+            {
+                VectorDocumentResult.EditorSaved saved => Results.Ok(ToEditorSaveResponse(saved)),
+                VectorDocumentResult.NotFound notFound => Results.NotFound(new ApiErrorResponse(notFound.Code, notFound.Message)),
+                VectorDocumentResult.ValidationFailed failed => Results.BadRequest(new ApiErrorResponse(failed.Code, failed.Message)),
+                VectorDocumentResult.Conflict conflict => Results.Conflict(new ApiErrorResponse(conflict.Code, conflict.Message)),
+                VectorDocumentResult.UpstreamError error => UnprocessableEntity(error.Code, error.Message),
+                _ => UnexpectedResult(),
+            };
+        })
+        .WithName("EditorSaveVectorDocument")
+        .WithTags("VectorDocuments")
+        .Produces<EditorSaveResponse>(StatusCodes.Status200OK)
+        .Produces<ApiErrorResponse>(StatusCodes.Status400BadRequest)
+        .Produces<ApiErrorResponse>(StatusCodes.Status404NotFound)
+        .Produces<ApiErrorResponse>(StatusCodes.Status409Conflict)
+        .Produces<ApiErrorResponse>(StatusCodes.Status422UnprocessableEntity)
+        .WithSummary("Persiste el estado de geometría del editor como una nueva DocumentVersion (M3-S13).")
+        .WithDescription(
+            "El cliente manda el SVG serializado de TODAS las capas; el servidor sube cada uno como un Asset " +
+            "de tipo 'layer-svg' y crea una DocumentVersion nueva (Origin: MANUAL_EDIT o AUTOSAVE). Soporta " +
+            "idempotencia (misma key = mismo resultado, siempre 200 en replay), ownership (solo el dueño del " +
+            "proyecto), concurrencia optimista (xmin → 409). 400 si origin/viewBox/widthMm/heightMm/SVG son " +
+            "inválidos o hay groupIds duplicados. 404 si el proyecto no existe o no es del usuario efectivo.");
+
         app.MapPatch("/api/v2/projects/{projectId:guid}/layers/{layerId:guid}", async (
             Guid projectId,
             Guid layerId,
@@ -191,6 +223,9 @@ public static class VectorDocumentEndpoints
             "a una versión histórica ya superada), o si el proyecto no existe/no es del usuario efectivo. 409 si otro " +
             "Save/Restore/PATCH concurrente modificó el mismo Project entre medio (concurrencia optimista vía xmin).");
     }
+
+    private static EditorSaveResponse ToEditorSaveResponse(VectorDocumentResult.EditorSaved saved) =>
+        new(saved.ProjectId, saved.VersionNumber, saved.VersionId, saved.CreatedAt);
 
     private static VectorDocumentSaveResponse ToSaveResponse(VectorDocumentResult.Saved saved) =>
         new(saved.ProjectId, saved.VersionNumber, saved.SavedAt);

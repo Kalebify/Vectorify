@@ -40,6 +40,15 @@ public abstract record VectorDocumentResult
     public sealed record LayerReady(Layer Layer) : VectorDocumentResult;
 
     /// <summary>
+    /// Un save exitoso del estado del editor de geometría (M3-S13,
+    /// <c>POST /api/v2/projects/{projectId}/document/editor-save</c>) -- incluye
+    /// <see cref="VersionId"/> (el <c>DocumentVersion.Id</c> de la fila recién creada) a
+    /// diferencia de <see cref="Saved"/>, que no lo expone porque su contrato de respuesta
+    /// no lo necesitaba.
+    /// </summary>
+    public sealed record EditorSaved(Guid ProjectId, int VersionNumber, Guid VersionId, DateTimeOffset CreatedAt) : VectorDocumentResult;
+
+    /// <summary>
     /// No existe un proyecto con ese Id, O existe pero pertenece a otro usuario, O (para
     /// PATCH de un layer) no existe esa capa en la versión ACTUAL de ese proyecto -- mismo
     /// caso para todos (el endpoint responde 404, nunca 403: no revela que el recurso existe

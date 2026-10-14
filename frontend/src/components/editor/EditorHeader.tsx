@@ -1,4 +1,5 @@
 import type { WorkspaceSaveState } from "../../hooks/useWorkspaceSave";
+import type { GeometrySaveState } from "../../hooks/useGeometrySave";
 
 interface EditorHeaderProps {
   projectName: string;
@@ -11,6 +12,10 @@ interface EditorHeaderProps {
   onSave: () => void;
   /** Hay ediciones de GEOMETRÍA sin persistir (M3-S01, ADR D2): el indicador nunca dice "Guardado" mientras sea true. */
   geometryDirty?: boolean;
+  /** Estado de guardado de geometría (M3-S13): superpone el indicador cuando hay actividad de geometría. */
+  geometrySaveState?: GeometrySaveState;
+  /** Mensaje de error del guardado de geometría (M3-S13). */
+  geometrySaveErrorMessage?: string | null;
   /** Undo/Redo de geometría (M3-S01): estado habilitado + etiqueta del comando que se deshará/rehará. */
   canUndo?: boolean;
   canRedo?: boolean;
@@ -26,6 +31,9 @@ interface EditorHeaderProps {
   historyCount?: number;
   historyAttention?: boolean;
   onToggleHistory?: () => void;
+  /** Panel de Historial de versiones (M3-S13). Sin `onToggleVersionHistory` el botón no se muestra. */
+  versionHistoryOpen?: boolean;
+  onToggleVersionHistory?: () => void;
 }
 
 const DIRTY_STATE_COPY: Record<WorkspaceSaveState, string> = {
@@ -36,10 +44,16 @@ const DIRTY_STATE_COPY: Record<WorkspaceSaveState, string> = {
   error: "No se pudo guardar",
 };
 
+const GEOMETRY_SAVE_COPY: Record<GeometrySaveState, string> = {
+  idle: "Sin cambios desde la última apertura",
+  saving: "Guardando geometría…",
+  saved: "Geometría guardada",
+  error: "No se pudo guardar la geometría",
+};
+
 /**
- * Honestidad de guardado (M3-S01, ADR D2): hasta M3-S13 las ediciones de geometría viven solo en
- * memoria, así que el indicador NUNCA muestra "Guardado" mientras haya geometría sin persistir --
- * incluso si el último guardado de metadata (nombre/orden/visibilidad/bloqueo) sí se confirmó.
+ * Honestidad de guardado (M3-S01, ADR D2): cuando hay geometría sin persistir el indicador
+ * refleja ese estado (y desde M3-S13, el estado real del guardado de geometría).
  */
 const GEOMETRY_DIRTY_COPY = "Cambios de geometría sin guardar";
 
@@ -73,6 +87,8 @@ export function EditorHeader({
   canSave,
   onSave,
   geometryDirty = false,
+  geometrySaveState,
+  geometrySaveErrorMessage = null,
   canUndo = false,
   canRedo = false,
   undoLabel = null,
@@ -85,12 +101,37 @@ export function EditorHeader({
   historyCount = 0,
   historyAttention = false,
   onToggleHistory,
+  versionHistoryOpen = false,
+  onToggleVersionHistory,
 }: EditorHeaderProps) {
-  const isSaving = saveState === "saving";
-  // Un error de guardado y un guardado en curso siguen siendo lo más urgente de mostrar; en el resto de
-  // estados (idle/dirty/saved) la geometría sin persistir manda sobre cualquier "Guardado".
-  const showGeometryDirty = geometryDirty && saveState !== "error" && saveState !== "saving";
-  const dirtyStateKey = showGeometryDirty ? "geometry" : saveState;
+  const isSaving = saveState === "saving" || geometrySaveState === "saving";
+
+  // Prioridad del indicador: 1) guardado de geometría en curso / con error / confirmado, 2) error del save clásico, 3) geometría sin guardar,
+  // 4) estado del save clásico. "Geometría guardada" solo si no quedaron ediciones posteriores al envío: nunca dice "guardado" con geometría pendiente.
+  const showGeometrySaveState =
+    geometrySaveState === "saving" || geometrySaveState === "error" || (geometrySaveState === "saved" && !geometryDirty);
+  const showGeometryDirty = geometryDirty && !showGeometrySaveState && saveState !== "error" && saveState !== "saving";
+
+  let dirtyStateText: string;
+  if (showGeometrySaveState && geometrySaveState) {
+    if (geometrySaveState === "error" && geometrySaveErrorMessage) {
+      dirtyStateText = geometrySaveErrorMessage;
+    } else {
+      dirtyStateText = GEOMETRY_SAVE_COPY[geometrySaveState];
+    }
+  } else if (saveState === "error" && saveErrorMessage) {
+    dirtyStateText = saveErrorMessage;
+  } else if (showGeometryDirty) {
+    dirtyStateText = GEOMETRY_DIRTY_COPY;
+  } else {
+    dirtyStateText = DIRTY_STATE_COPY[saveState];
+  }
+
+  const dirtyStateKey = showGeometrySaveState && geometrySaveState
+    ? `geometry-${geometrySaveState}`
+    : showGeometryDirty
+    ? "geometry"
+    : saveState;
 
   return (
     <header className="editor-header">
@@ -104,11 +145,24 @@ export function EditorHeader({
           className={`editor-header__dirty-state editor-header__dirty-state--${dirtyStateKey}`}
           role="status"
         >
-          {showGeometryDirty ? GEOMETRY_DIRTY_COPY : saveState === "error" && saveErrorMessage ? saveErrorMessage : DIRTY_STATE_COPY[saveState]}
+          {dirtyStateText}
         </span>
       </div>
 
       <div className="editor-header__actions">
+        {onToggleVersionHistory && (
+          <button
+            type="button"
+            id="editor-version-history-toggle"
+            className="editor-header__button"
+            aria-expanded={versionHistoryOpen}
+            aria-controls="editor-version-history-panel"
+            onClick={onToggleVersionHistory}
+            title="Historial de versiones guardadas"
+          >
+            Versiones
+          </button>
+        )}
         {onToggleHistory && (
           <button
             type="button"
@@ -159,10 +213,22 @@ export function EditorHeader({
           className="editor-header__button editor-header__button--primary"
           onClick={onSave}
           disabled={!canSave || isSaving}
-          aria-label={saveState === "error" ? "Reintentar guardar" : "Guardar"}
-          title={saveState === "error" ? "Reintentar guardar" : "Guardar"}
+          aria-label={
+            geometrySaveState === "error" || saveState === "error"
+              ? "Reintentar guardar"
+              : "Guardar"
+          }
+          title={
+            geometrySaveState === "error" || saveState === "error"
+              ? "Reintentar guardar"
+              : "Guardar"
+          }
         >
-          {isSaving ? "GUARDANDO…" : saveState === "error" ? "REINTENTAR" : "SAVE"}
+          {isSaving
+            ? "GUARDANDO…"
+            : geometrySaveState === "error" || saveState === "error"
+            ? "REINTENTAR"
+            : "SAVE"}
         </button>
         <button
           type="button"

@@ -558,6 +558,233 @@ public sealed class VectorDocumentService : IVectorDocumentService
         }
     }
 
+    /// <summary>
+    /// Límite de tamaño de SVG por capa en bytes (2 MB). Configurable en el futuro;
+    /// codificado por ahora (M3-S13, spec.md: "&gt;2 MB por capa, configurable").
+    /// </summary>
+    private const int MaxSvgBytesPerLayer = 2 * 1024 * 1024;
+
+    /// <summary>Número máximo de capas aceptadas en un editor-save.</summary>
+    private const int MaxLayerCount = 500;
+
+    public async Task<VectorDocumentResult> EditorSaveAsync(
+        Guid projectId, EditorSaveRequest request, CancellationToken cancellationToken)
+    {
+        // ---- Validación del request ----
+        var parsedOrigin = request.Origin switch
+        {
+            "MANUAL_EDIT" => DocumentVersionOrigin.ManualEdit,
+            "AUTOSAVE" => DocumentVersionOrigin.Autosave,
+            _ => (DocumentVersionOrigin?)null,
+        };
+
+        if (parsedOrigin is null)
+        {
+            return new VectorDocumentResult.ValidationFailed(
+                "invalid_parameters",
+                $"origin '{request.Origin}' desconocido. Valores válidos: MANUAL_EDIT, AUTOSAVE.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.IdempotencyKey))
+        {
+            return new VectorDocumentResult.ValidationFailed(
+                "invalid_parameters", "idempotencyKey es requerido.");
+        }
+
+        // Validar viewBox: "X Y W H" con cuatro números, W > 0 y H > 0.
+        var viewBoxParts = request.ViewBox?.Split(' ');
+        if (viewBoxParts is null || viewBoxParts.Length != 4
+            || !double.TryParse(viewBoxParts[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var vbW)
+            || !double.TryParse(viewBoxParts[3], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var vbH)
+            || vbW <= 0 || vbH <= 0
+            || !double.TryParse(viewBoxParts[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _)
+            || !double.TryParse(viewBoxParts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out _))
+        {
+            return new VectorDocumentResult.ValidationFailed(
+                "invalid_parameters",
+                "viewBox inválido. Formato esperado: 'X Y W H' con W > 0 y H > 0.");
+        }
+
+        if (request.WidthMm <= 0)
+        {
+            return new VectorDocumentResult.ValidationFailed(
+                "invalid_parameters", "widthMm debe ser mayor a 0.");
+        }
+
+        if (request.HeightMm <= 0)
+        {
+            return new VectorDocumentResult.ValidationFailed(
+                "invalid_parameters", "heightMm debe ser mayor a 0.");
+        }
+
+        if (request.SchemaVersion < 1)
+        {
+            return new VectorDocumentResult.ValidationFailed(
+                "invalid_parameters", "schemaVersion debe ser >= 1.");
+        }
+
+        if (request.Layers is null || request.Layers.Count == 0)
+        {
+            return new VectorDocumentResult.ValidationFailed(
+                "invalid_parameters", "El documento debe tener al menos una capa.");
+        }
+
+        if (request.Layers.Count > MaxLayerCount)
+        {
+            return new VectorDocumentResult.ValidationFailed(
+                "invalid_parameters",
+                $"El documento tiene demasiadas capas ({request.Layers.Count}). Máximo: {MaxLayerCount}.");
+        }
+
+        // Detectar groupIds duplicados.
+        var layerGroupIds = new HashSet<Guid>();
+        for (var i = 0; i < request.Layers.Count; i++)
+        {
+            var layer = request.Layers[i];
+            if (layer.GroupId == Guid.Empty)
+            {
+                return new VectorDocumentResult.ValidationFailed(
+                    "invalid_parameters", $"groupId vacío en la capa {i}.");
+            }
+
+            if (!layerGroupIds.Add(layer.GroupId))
+            {
+                return new VectorDocumentResult.ValidationFailed(
+                    "invalid_parameters", $"groupId duplicado: {layer.GroupId}.");
+            }
+        }
+
+        // Validar el SVG de cada capa.
+        for (var i = 0; i < request.Layers.Count; i++)
+        {
+            var layer = request.Layers[i];
+            if (string.IsNullOrWhiteSpace(layer.SvgContent))
+            {
+                return new VectorDocumentResult.ValidationFailed(
+                    "invalid_parameters", $"El SVG de la capa {layer.GroupId} está vacío.");
+            }
+
+            var svgBytes = System.Text.Encoding.UTF8.GetByteCount(layer.SvgContent);
+            if (svgBytes > MaxSvgBytesPerLayer)
+            {
+                return new VectorDocumentResult.ValidationFailed(
+                    "invalid_parameters",
+                    $"El SVG de la capa {layer.GroupId} supera el límite de {MaxSvgBytesPerLayer / 1024 / 1024} MB.");
+            }
+
+            if (string.IsNullOrWhiteSpace(layer.ColorHex))
+            {
+                return new VectorDocumentResult.ValidationFailed(
+                    "invalid_parameters", $"colorHex es requerido para la capa {layer.GroupId}.");
+            }
+        }
+
+        // ---- Idempotencia ----
+        var ownerId = _userContext.GetEffectiveUserId();
+        var scopedKey = ScopeIdempotencyKey(ownerId, request.IdempotencyKey);
+
+        var existing = await _repository.FindByIdempotencyKeyAsync(ownerId, scopedKey, cancellationToken);
+        if (existing is not null)
+        {
+            _logger.LogInformation(
+                "Replay de idempotencyKey {IdempotencyKey} (editor-save): devolviendo la versión {VersionNumber} del proyecto {ProjectId}",
+                request.IdempotencyKey, existing.VersionNumber, existing.ProjectId);
+
+            return new VectorDocumentResult.EditorSaved(existing.ProjectId, existing.VersionNumber, existing.VersionId, existing.SavedAt);
+        }
+
+        // ---- Ownership ----
+        var existingProject = await _projectRepository.FindByIdAsync(projectId, ownerId, cancellationToken);
+        if (existingProject is null)
+        {
+            return new VectorDocumentResult.NotFound("not_found", "No existe un proyecto con ese Id.");
+        }
+
+        // ---- Subir los SVGs como Assets ----
+        var layerSnapshots = new List<LayerSnapshot>(request.Layers.Count);
+        for (var i = 0; i < request.Layers.Count; i++)
+        {
+            var layerReq = request.Layers[i];
+            var svgBytes = System.Text.Encoding.UTF8.GetBytes(layerReq.SvgContent);
+
+            var assetResult = await _assetService.CreateFromBytesAsync(
+                projectId,
+                "layer-svg",
+                $"{layerReq.GroupId:N}.svg",
+                "image/svg+xml",
+                svgBytes,
+                cancellationToken);
+
+            if (assetResult is not AssetResult.Ready assetReady)
+            {
+                var (code, message) = assetResult switch
+                {
+                    AssetResult.ValidationFailed vf => (vf.Code, vf.Message),
+                    AssetResult.StorageFailed sf => (sf.Code, sf.Message),
+                    _ => ("asset_upload_failed", "No se pudo subir el SVG de una de las capas."),
+                };
+                return new VectorDocumentResult.UpstreamError(code, message);
+            }
+
+            // Parsear la operación de fabricación: null → sin asignar.
+            var operation = ManufacturingOperationParser.Parse(layerReq.ManufacturingOperation);
+
+            // Contar paths en el SVG (simple: cuenta '<path' como proxy del pathCount real).
+            var pathCount = CountPathsInSvg(layerReq.SvgContent);
+
+            layerSnapshots.Add(new LayerSnapshot(
+                LayerId: layerReq.GroupId,
+                Name: layerReq.Name ?? string.Empty,
+                Order: layerReq.Order,
+                Visible: layerReq.Visible,
+                Locked: layerReq.Locked,
+                ManufacturingOperation: operation,
+                SvgAssetId: assetReady.Record.Id,
+                Color: new PaletteColorSnapshot(layerReq.ColorHex, layerReq.ColorCoverage, layerReq.ColorIsBackground, i),
+                PathCount: pathCount));
+        }
+
+        var snapshot = new DocumentSnapshot(
+            WidthMm: request.WidthMm,
+            HeightMm: request.HeightMm,
+            ViewBox: request.ViewBox,
+            SchemaVersion: request.SchemaVersion,
+            Origin: parsedOrigin.Value,
+            MetadataJson: "{}",
+            Layers: layerSnapshots,
+            IdempotencyKey: scopedKey);
+
+        try
+        {
+            var outcome = await _repository.SaveAsync(projectId, ownerId, snapshot, cancellationToken);
+            if (outcome is null)
+            {
+                return new VectorDocumentResult.NotFound("not_found", "No existe un proyecto con ese Id.");
+            }
+
+            _logger.LogInformation(
+                "Geometría del editor guardada para el proyecto {ProjectId} (versión {VersionNumber}, {LayerCount} capas, origin {Origin})",
+                outcome.ProjectId, outcome.VersionNumber, layerSnapshots.Count, request.Origin);
+
+            return new VectorDocumentResult.EditorSaved(outcome.ProjectId, outcome.VersionNumber, outcome.VersionId, outcome.SavedAt);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            _logger.LogWarning(ex, "Conflicto de concurrencia en editor-save del proyecto {ProjectId}", projectId);
+            return new VectorDocumentResult.Conflict(
+                "concurrency_conflict",
+                "El proyecto fue modificado por otro Save concurrente mientras tanto. Volvé a cargarlo e intentá de nuevo.");
+        }
+    }
+
+    /// <summary>
+    /// Cuenta cuántos elementos <c>&lt;path</c> hay en el SVG serializado de una capa --
+    /// proxy rápido del pathCount real sin parsear XML completo. Suficiente para el propósito
+    /// del campo (Inspector de objetos, "Seleccionar todo en la capa").
+    /// </summary>
+    private static int CountPathsInSvg(string svgContent) =>
+        System.Text.RegularExpressions.Regex.Matches(svgContent, @"<path\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count;
+
     public async Task<VectorDocumentResult> UpdateLayerAsync(
         Guid projectId, Guid layerId, UpdateLayerRequest request, CancellationToken cancellationToken)
     {

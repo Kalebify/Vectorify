@@ -1034,6 +1034,315 @@ public sealed class VectorDocumentEndpointsTests : IAsyncLifetime
         Assert.Equal(0, list.TotalCount);
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // M3-S13: POST /api/v2/projects/{projectId}/document/editor-save
+    // ---------------------------------------------------------------------------------------------
+
+    private const string MarkerA = "editor-save-marker-A";
+    private const string MarkerNew = "editor-save-marker-NEW";
+
+    private static string SvgWith(string marker) =>
+        $"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 320 240\"><path data-vid=\"{marker}\" d=\"M0 0 H10 V10 H0 Z\" fill=\"#ff0000\"/></svg>";
+
+    private static EditorSaveLayerRequest EditorLayer(
+        Guid groupId, string svg, string name = "Capa", int order = 0, bool visible = true, bool locked = false,
+        string? operation = null, bool isNew = false, string colorHex = "#ff0000") =>
+        new(groupId, svg, name, order, visible, locked, operation, isNew, colorHex, ColorCoverage: 50);
+
+    private static EditorSaveRequest EditorBody(
+        IEnumerable<EditorSaveLayerRequest> layers, string origin = "MANUAL_EDIT", string? idempotencyKey = null,
+        string viewBox = "0 0 320 240", double widthMm = 160, double heightMm = 120) =>
+        new(origin, idempotencyKey ?? Guid.NewGuid().ToString("n"), viewBox, widthMm, heightMm, 1, layers.ToList(), []);
+
+    private static Task<HttpResponseMessage> PostEditorSaveAsync(HttpClient client, Guid projectId, EditorSaveRequest body) =>
+        client.PostAsJsonAsync($"/api/v2/projects/{projectId}/document/editor-save", body);
+
+    [Fact]
+    public async Task EditorSave_PersistsANewVersionWithTheEditedSvgsLayerMetadataANewLayerAndTheFrame()
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        var first = await SaveFirstAsync(client, classic, "Con edición de geometría");
+        var originalGroupId = classic.Layers[0].GroupId;
+        var newGroupId = Guid.NewGuid();
+
+        var response = await PostEditorSaveAsync(client, first.ProjectId, EditorBody(
+        [
+            EditorLayer(originalGroupId, SvgWith(MarkerA), name: "Renombrada", order: 1, visible: false, locked: true, operation: "engrave"),
+            EditorLayer(newGroupId, SvgWith(MarkerNew), name: "Color #00FF00", order: 0, isNew: true, colorHex: "#00ff00"),
+        ], viewBox: "0 0 160 120", widthMm: 80, heightMm: 60));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var saved = (await response.Content.ReadFromJsonAsync<EditorSaveResponse>())!;
+        Assert.Equal(first.ProjectId, saved.ProjectId);
+        Assert.Equal(2, saved.VersionNumber);
+        Assert.NotEqual(Guid.Empty, saved.VersionId);
+
+        var document = (await client.GetFromJsonAsync<VectorDocumentResponse>($"/api/v2/projects/{first.ProjectId}/document"))!;
+        Assert.Equal(2, document.VersionNumber);
+        Assert.Equal("0 0 160 120", document.ViewBox);
+        Assert.Equal(80, document.WidthMm);
+        Assert.Equal(60, document.HeightMm);
+        Assert.Equal(2, document.Layers.Count);
+
+        var edited = document.Layers.Single(l => l.Id == originalGroupId); // el groupId se conserva entre versiones
+        Assert.Equal("Renombrada", edited.Name);
+        Assert.Equal(1, edited.Order);
+        Assert.False(edited.Visible);
+        Assert.True(edited.Locked);
+        Assert.Equal("engrave", edited.ManufacturingOperation);
+        Assert.Contains(MarkerA, await client.GetStringAsync(edited.SvgUrl));
+
+        var created = document.Layers.Single(l => l.Id == newGroupId); // la capa creada en el cliente existe ahora en el servidor
+        Assert.Equal("#00ff00", created.ColorHex, ignoreCase: true);
+        Assert.Equal("unassigned", created.ManufacturingOperation);
+        Assert.Contains(MarkerNew, await client.GetStringAsync(created.SvgUrl));
+        Assert.Equal(1, created.PathCount);
+    }
+
+    [Fact]
+    public async Task EditorSave_NeverModifiesThePreviousVersion_AndRecordsTheOrigin()
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        var first = await SaveFirstAsync(client, classic, "Inmutable");
+        var v1Before = (await client.GetFromJsonAsync<VectorDocumentResponse>($"/api/v2/projects/{first.ProjectId}/versions/1"))!;
+        var v1SvgBefore = await client.GetStringAsync(v1Before.Layers[0].SvgUrl);
+
+        (await PostEditorSaveAsync(client, first.ProjectId, EditorBody([EditorLayer(classic.Layers[0].GroupId, SvgWith(MarkerA), name: "Editada")], origin: "AUTOSAVE"))).EnsureSuccessStatusCode();
+
+        var v1After = (await client.GetFromJsonAsync<VectorDocumentResponse>($"/api/v2/projects/{first.ProjectId}/versions/1"))!;
+        Assert.Equal(v1Before.Layers[0].Name, v1After.Layers[0].Name);
+        Assert.Equal(v1Before.Layers[0].SvgAssetId, v1After.Layers[0].SvgAssetId);
+        Assert.Equal(v1Before.ViewBox, v1After.ViewBox);
+        Assert.Equal(v1SvgBefore, await client.GetStringAsync(v1After.Layers[0].SvgUrl));
+
+        var versions = (await client.GetFromJsonAsync<List<VectorDocumentVersionSummaryResponse>>($"/api/v2/projects/{first.ProjectId}/versions"))!;
+        Assert.Equal([2, 1], versions.Select(v => v.VersionNumber));
+        Assert.Equal("AUTOSAVE", versions[0].Origin);
+        Assert.Equal("MANUAL_EDIT", versions[1].Origin);
+    }
+
+    [Fact]
+    public async Task EditorSave_WithSameIdempotencyKey_ReplaysTheOriginalResultWithoutANewVersion()
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        var first = await SaveFirstAsync(client, classic, "Reintento");
+        var body = EditorBody([EditorLayer(classic.Layers[0].GroupId, SvgWith(MarkerA))], idempotencyKey: Guid.NewGuid().ToString("n"));
+
+        var firstResponse = await PostEditorSaveAsync(client, first.ProjectId, body);
+        var replay = await PostEditorSaveAsync(client, first.ProjectId, body);
+
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode); // nunca otro estado distinto en un replay
+        var original = (await firstResponse.Content.ReadFromJsonAsync<EditorSaveResponse>())!;
+        var replayed = (await replay.Content.ReadFromJsonAsync<EditorSaveResponse>())!;
+        Assert.Equal(original.VersionNumber, replayed.VersionNumber);
+        Assert.Equal(original.VersionId, replayed.VersionId);
+        var versions = (await client.GetFromJsonAsync<List<VectorDocumentVersionSummaryResponse>>($"/api/v2/projects/{first.ProjectId}/versions"))!;
+        Assert.Equal(2, versions.Count); // V1 + el editor-save, no tres
+    }
+
+    [Fact]
+    public async Task EditorSave_WithDifferentIdempotencyKeys_CreatesDistinctVersions()
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        var first = await SaveFirstAsync(client, classic, "Dos guardados");
+        var layers = new[] { EditorLayer(classic.Layers[0].GroupId, SvgWith(MarkerA)) };
+
+        var one = (await (await PostEditorSaveAsync(client, first.ProjectId, EditorBody(layers))).Content.ReadFromJsonAsync<EditorSaveResponse>())!;
+        var two = (await (await PostEditorSaveAsync(client, first.ProjectId, EditorBody(layers))).Content.ReadFromJsonAsync<EditorSaveResponse>())!;
+
+        Assert.Equal([2, 3], new[] { one.VersionNumber, two.VersionNumber });
+        Assert.NotEqual(one.VersionId, two.VersionId);
+    }
+
+    [Fact]
+    public async Task EditorSave_ThenRestoreAnEarlierVersion_AddsANewVersionAndKeepsTheEditorSaveInTheHistory()
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        var first = await SaveFirstAsync(client, classic, "Restaurar tras editar");
+        var v1 = (await client.GetFromJsonAsync<VectorDocumentResponse>($"/api/v2/projects/{first.ProjectId}/versions/1"))!;
+        (await PostEditorSaveAsync(client, first.ProjectId, EditorBody([EditorLayer(classic.Layers[0].GroupId, SvgWith(MarkerA), name: "Editada")]))).EnsureSuccessStatusCode();
+
+        var restore = await client.PostAsync($"/api/v2/projects/{first.ProjectId}/versions/1/restore", null);
+
+        Assert.Equal(HttpStatusCode.OK, restore.StatusCode);
+        var current = (await client.GetFromJsonAsync<VectorDocumentResponse>($"/api/v2/projects/{first.ProjectId}/document"))!;
+        Assert.Equal(3, current.VersionNumber);
+        Assert.Equal(v1.Layers[0].Name, current.Layers[0].Name);
+        var editedVersion = (await client.GetFromJsonAsync<VectorDocumentResponse>($"/api/v2/projects/{first.ProjectId}/versions/2"))!;
+        Assert.Equal("Editada", editedVersion.Layers[0].Name); // la versión del editor-save sigue ahí: restaurar nunca borra historia
+        var versions = (await client.GetFromJsonAsync<List<VectorDocumentVersionSummaryResponse>>($"/api/v2/projects/{first.ProjectId}/versions"))!;
+        Assert.Equal("RESTORE", versions[0].Origin);
+        Assert.Equal(3, versions.Count);
+    }
+
+    [Theory]
+    [InlineData("unknown-origin")]
+    [InlineData("empty-origin")]
+    [InlineData("restore-origin")] // RESTORE/VECTORIZE/AI_EDIT los decide el servidor: el cliente solo manda MANUAL_EDIT o AUTOSAVE
+    [InlineData("missing-idempotency-key")]
+    [InlineData("viewbox-not-numeric")]
+    [InlineData("viewbox-wrong-arity")]
+    [InlineData("viewbox-zero-width")]
+    [InlineData("viewbox-negative-height")]
+    [InlineData("width-mm-zero")]
+    [InlineData("height-mm-negative")]
+    [InlineData("schema-version-zero")]
+    [InlineData("no-layers")]
+    [InlineData("duplicate-group-id")]
+    [InlineData("empty-group-id")]
+    [InlineData("empty-svg")]
+    [InlineData("svg-too-large")]
+    [InlineData("missing-color")]
+    [InlineData("too-many-layers")]
+    public async Task EditorSave_WithAnInvalidRequest_ReturnsBadRequest_AndCreatesNoVersion(string scenario)
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+        var classic = await DetectConfirmAndGenerateLayersAsync(client);
+        var first = await SaveFirstAsync(client, classic, "Validaciones");
+        var groupId = classic.Layers[0].GroupId;
+        EditorSaveLayerRequest Layer(string? svg = null, Guid? id = null, string colorHex = "#ff0000") =>
+            EditorLayer(id ?? groupId, svg ?? SvgWith(MarkerA), colorHex: colorHex);
+        var valid = EditorBody([Layer()]);
+
+        var body = scenario switch
+        {
+            "unknown-origin" => valid with { Origin = "SOMETHING_ELSE" },
+            "empty-origin" => valid with { Origin = "" },
+            "restore-origin" => valid with { Origin = "RESTORE" },
+            "missing-idempotency-key" => valid with { IdempotencyKey = " " },
+            "viewbox-not-numeric" => valid with { ViewBox = "0 0 wide tall" },
+            "viewbox-wrong-arity" => valid with { ViewBox = "0 0 320" },
+            "viewbox-zero-width" => valid with { ViewBox = "0 0 0 240" },
+            "viewbox-negative-height" => valid with { ViewBox = "0 0 320 -5" },
+            "width-mm-zero" => valid with { WidthMm = 0 },
+            "height-mm-negative" => valid with { HeightMm = -1 },
+            "schema-version-zero" => valid with { SchemaVersion = 0 },
+            "no-layers" => valid with { Layers = [] },
+            "duplicate-group-id" => valid with { Layers = [Layer(), Layer()] },
+            "empty-group-id" => valid with { Layers = [Layer(id: Guid.Empty)] },
+            "empty-svg" => valid with { Layers = [Layer(svg: "  ")] },
+            "svg-too-large" => valid with { Layers = [Layer(svg: "<svg>" + new string('a', 2 * 1024 * 1024) + "</svg>")] },
+            "missing-color" => valid with { Layers = [Layer(colorHex: "")] },
+            "too-many-layers" => valid with { Layers = Enumerable.Range(0, 501).Select(_ => Layer(id: Guid.NewGuid())).ToList() },
+            _ => throw new ArgumentOutOfRangeException(nameof(scenario)),
+        };
+
+        var response = await PostEditorSaveAsync(client, first.ProjectId, body);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var versions = (await client.GetFromJsonAsync<List<VectorDocumentVersionSummaryResponse>>($"/api/v2/projects/{first.ProjectId}/versions"))!;
+        Assert.Single(versions); // sigue solo la V1
+    }
+
+    [Fact]
+    public async Task EditorSave_WhenTheProjectDoesNotExistOrBelongsToAnotherOwner_ReturnsNotFound()
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        await using var factory = CreateFactory(pythonServer.BaseUrl);
+        var client = factory.CreateClient();
+        var body = EditorBody([EditorLayer(Guid.NewGuid(), SvgWith(MarkerA))]);
+
+        Guid foreignProjectId;
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var dbContext = scope.ServiceProvider.GetRequiredService<VectorizationDbContext>();
+            var stranger = new User { Id = Guid.NewGuid(), DisplayName = "Ajeno", CreatedAt = DateTimeOffset.UtcNow };
+            var project = new Project
+            {
+                Id = Guid.NewGuid(), OwnerId = stranger.Id, Name = "Proyecto ajeno",
+                CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            dbContext.Users.Add(stranger);
+            dbContext.Projects.Add(project);
+            await dbContext.SaveChangesAsync();
+            foreignProjectId = project.Id;
+        }
+
+        Assert.Equal(HttpStatusCode.NotFound, (await PostEditorSaveAsync(client, foreignProjectId, body)).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await PostEditorSaveAsync(client, Guid.NewGuid(), body with { IdempotencyKey = Guid.NewGuid().ToString("n") })).StatusCode);
+
+        await using var check = factory.Services.CreateAsyncScope();
+        var db = check.ServiceProvider.GetRequiredService<VectorizationDbContext>();
+        Assert.False(await db.DocumentVersions.AnyAsync(v => v.VectorDocument!.ProjectId == foreignProjectId)); // nada se escribió en el ajeno
+    }
+
+    [Fact]
+    public async Task EditorSave_WhenStorageFailsUploadingALayerSvg_ReturnsUnprocessableEntity_AndCreatesNoVersion()
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        Guid projectId;
+        Guid groupId;
+        await using (var setup = CreateFactory(pythonServer.BaseUrl))
+        {
+            var setupClient = setup.CreateClient();
+            var classic = await DetectConfirmAndGenerateLayersAsync(setupClient);
+            projectId = (await SaveFirstAsync(setupClient, classic, "Falla de storage")).ProjectId;
+            groupId = classic.Layers[0].GroupId;
+        }
+
+        // Mismo Postgres y mismo storage, pero ahora el storage falla al subir un "layer-svg" nuevo.
+        await using var factory = CreateFactory(pythonServer.BaseUrl, failLayerSvgUploads: true);
+        var client = factory.CreateClient();
+
+        var response = await PostEditorSaveAsync(client, projectId, EditorBody([EditorLayer(groupId, SvgWith(MarkerA))]));
+
+        Assert.Equal((HttpStatusCode)422, response.StatusCode);
+        var versions = (await client.GetFromJsonAsync<List<VectorDocumentVersionSummaryResponse>>($"/api/v2/projects/{projectId}/versions"))!;
+        Assert.Single(versions);
+    }
+
+    [Fact]
+    public async Task EditorSave_WhenAConcurrentWriteWinsTheRace_ReturnsConflict()
+    {
+        await using var pythonServer = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.SuccessBody()));
+        Guid projectId;
+        Guid groupId;
+        await using (var setup = CreateFactory(pythonServer.BaseUrl))
+        {
+            var setupClient = setup.CreateClient();
+            var classic = await DetectConfirmAndGenerateLayersAsync(setupClient);
+            projectId = (await SaveFirstAsync(setupClient, classic, "Conflicto")).ProjectId;
+            groupId = classic.Layers[0].GroupId;
+        }
+
+        // El repositorio simula que otro Save concurrente modificó el Project entre la lectura y la escritura (xmin).
+        await using var factory = CreateFactory(pythonServer.BaseUrl, overrideRepositoryWithConflictingFake: true);
+        var client = factory.CreateClient();
+
+        var response = await PostEditorSaveAsync(client, projectId, EditorBody([EditorLayer(groupId, SvgWith(MarkerA))]));
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<ApiErrorResponse>();
+        Assert.Equal("concurrency_conflict", error!.Code);
+    }
+
     private static async Task<VectorDocumentSaveResponse> SaveFirstAsync(HttpClient client, ClassicSessionInfo classic, string name)
     {
         var saveResponse = await client.PostAsJsonAsync("/api/v2/workspaces/save", new VectorDocumentSaveRequest(
@@ -1095,7 +1404,7 @@ public sealed class VectorDocumentEndpointsTests : IAsyncLifetime
 
     private WebApplicationFactory<Program> CreateFactory(
         string pythonBaseUrl, bool failLayerSvgUploads = false, bool overrideRepositoryWithThrowingFake = false,
-        bool failThumbnailUploads = false, bool failThumbnailReads = false) =>
+        bool failThumbnailUploads = false, bool failThumbnailReads = false, bool overrideRepositoryWithConflictingFake = false) =>
         new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
             builder.ConfigureAppConfiguration((_, config) =>
@@ -1118,6 +1427,12 @@ public sealed class VectorDocumentEndpointsTests : IAsyncLifetime
                     services.AddSingleton<IFileStorage>(sp =>
                         new SelectivelyFailingFileStorage(
                             ActivatorUtilities.CreateInstance<LocalFileStorage>(sp), failLayerSvgUploads, failThumbnailUploads));
+                }
+
+                if (overrideRepositoryWithConflictingFake)
+                {
+                    services.RemoveAll<IVectorDocumentRepository>();
+                    services.AddScoped<IVectorDocumentRepository, ConflictingVectorDocumentRepository>();
                 }
 
                 if (overrideRepositoryWithThrowingFake)
@@ -1176,6 +1491,35 @@ public sealed class VectorDocumentEndpointsTests : IAsyncLifetime
         public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken) => _inner.ExistsAsync(key, cancellationToken);
 
         public Task DeleteAsync(string key, CancellationToken cancellationToken) => _inner.DeleteAsync(key, cancellationToken);
+    }
+
+    /// <summary>
+    /// Simula una escritura concurrente ganadora (M3-S13): no hay una versión previa con esa idempotencyKey y, al persistir, el
+    /// repositorio detecta que otro Save modificó el Project entre la lectura y la escritura (xmin) -- lo que EF Core reporta como
+    /// <see cref="DbUpdateConcurrencyException"/> y el servicio traduce a 409.
+    /// </summary>
+    private sealed class ConflictingVectorDocumentRepository : IVectorDocumentRepository
+    {
+        public Task<VectorDocumentSaveOutcome?> SaveAsync(Guid projectId, Guid ownerId, DocumentSnapshot snapshot, CancellationToken cancellationToken) =>
+            throw new DbUpdateConcurrencyException("conflicto de concurrencia simulado");
+
+        public Task<VectorDocumentSaveOutcome?> FindByIdempotencyKeyAsync(Guid ownerId, string idempotencyKey, CancellationToken cancellationToken) =>
+            Task.FromResult<VectorDocumentSaveOutcome?>(null);
+
+        public Task<(VectorDocument Document, DocumentVersion Version)?> FindCurrentDocumentAsync(Guid projectId, Guid ownerId, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("no usado en este escenario");
+
+        public Task<(VectorDocument Document, DocumentVersion Version)?> FindVersionAsync(Guid projectId, Guid ownerId, int versionNumber, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("no usado en este escenario");
+
+        public Task<IReadOnlyList<DocumentVersion>?> ListVersionsAsync(Guid projectId, Guid ownerId, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("no usado en este escenario");
+
+        public Task<VectorDocumentSaveOutcome?> RestoreAsync(Guid projectId, Guid ownerId, int versionNumber, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("no usado en este escenario");
+
+        public Task<Layer?> UpdateLayerAsync(Guid projectId, Guid ownerId, Guid layerId, LayerPatch patch, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("no usado en este escenario");
     }
 
     /// <summary>

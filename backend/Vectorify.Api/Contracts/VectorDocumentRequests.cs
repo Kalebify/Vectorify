@@ -49,3 +49,46 @@ public sealed record UpdateLayerRequest(
     bool? Visible,
     bool? Locked,
     string? ManufacturingOperation);
+
+/// <summary>
+/// Una capa dentro de <see cref="EditorSaveRequest"/> (M3-S13): el SVG serializado de la
+/// capa + su metadata. <see cref="ColorHex"/>/<see cref="ColorCoverage"/>/
+/// <see cref="ColorIsBackground"/> son la info de paleta necesaria para reconstruir la fila
+/// <see cref="Vectorify.Api.Data.PaletteColor"/> -- el cliente siempre los tiene (los leyó del
+/// servidor para capas existentes; los generó al crear la capa para <see cref="IsNew"/>).
+/// Supuesto documentado en IMPL.md: el spec no los listaba explícitamente pero son necesarios
+/// para que el repositorio pueda escribir las filas PaletteColor requeridas por el esquema.
+/// </summary>
+public sealed record EditorSaveLayerRequest(
+    Guid GroupId,
+    string SvgContent,
+    string Name,
+    int Order,
+    bool Visible,
+    bool Locked,
+    string? ManufacturingOperation,
+    bool IsNew,
+    string ColorHex,
+    double ColorCoverage = 0,
+    bool ColorIsBackground = false);
+
+/// <summary>
+/// Body de <c>POST /api/v2/projects/{projectId}/document/editor-save</c> (M3-S13): persiste
+/// el estado completo de geometría del editor como una nueva <see cref="Vectorify.Api.Data.DocumentVersion"/>.
+/// Difiere de <see cref="VectorDocumentSaveRequest"/> en que el cliente manda directamente el
+/// SVG serializado de cada capa (resultado de <c>serializeEditableLayer</c>), sin resolver el
+/// estado clásico en el servidor. <see cref="Origin"/> debe ser "MANUAL_EDIT" o "AUTOSAVE".
+/// <see cref="IdempotencyKey"/>: mismo criterio que <see cref="VectorDocumentSaveRequest.IdempotencyKey"/>
+/// -- se genera UNA vez por intento lógico y se reenvía en cada reintento de ESE mismo intento.
+/// <see cref="RemovedLayerGroupIds"/>: capas que el usuario eliminó en el editor -- el servidor
+/// simplemente omite esas capas del snapshot (no las incluye en la nueva versión).
+/// </summary>
+public sealed record EditorSaveRequest(
+    string Origin,
+    string IdempotencyKey,
+    string ViewBox,
+    double WidthMm,
+    double HeightMm,
+    int SchemaVersion,
+    IReadOnlyList<EditorSaveLayerRequest> Layers,
+    IReadOnlyList<string>? RemovedLayerGroupIds = null);

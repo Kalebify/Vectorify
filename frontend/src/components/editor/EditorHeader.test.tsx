@@ -123,6 +123,51 @@ describe("EditorHeader", () => {
     expect(onSave).toHaveBeenCalled();
   });
 
+  describe("guardado de geometría (M3-S13)", () => {
+    it("muestra el estado REAL del guardado de geometría: Guardando… (con el botón deshabilitado), error con su mensaje y Geometría guardada", () => {
+      const { rerender } = render(
+        <EditorHeader projectName="p.svg" onClose={vi.fn()} saveState="idle" saveErrorMessage={null} canSave onSave={vi.fn()} geometryDirty geometrySaveState="saving" />,
+      );
+      expect(screen.getByText("Guardando geometría…")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^Guardar$/ })).toBeDisabled();
+
+      rerender(
+        <EditorHeader projectName="p.svg" onClose={vi.fn()} saveState="idle" saveErrorMessage={null} canSave onSave={vi.fn()} geometryDirty geometrySaveState="error" geometrySaveErrorMessage="Sin conexión." />,
+      );
+      expect(screen.getByText("Sin conexión.")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Reintentar guardar/ })).toBeEnabled();
+
+      rerender(<EditorHeader projectName="p.svg" onClose={vi.fn()} saveState="idle" saveErrorMessage={null} canSave onSave={vi.fn()} geometryDirty={false} geometrySaveState="saved" />);
+      expect(screen.getByText("Geometría guardada")).toBeInTheDocument();
+    });
+
+    it("nunca dice 'guardada' si quedaron ediciones posteriores al envío (geometryDirty sigue true)", () => {
+      render(
+        <EditorHeader projectName="p.svg" onClose={vi.fn()} saveState="idle" saveErrorMessage={null} canSave onSave={vi.fn()} geometryDirty geometrySaveState="saved" />,
+      );
+      expect(screen.queryByText("Geometría guardada")).not.toBeInTheDocument();
+      expect(screen.getByText("Cambios de geometría sin guardar")).toBeInTheDocument();
+    });
+
+    it("con el guardado de geometría en 'idle' manda el indicador clásico", () => {
+      renderHeader({ saveState: "saved", geometryDirty: false, geometrySaveState: "idle" });
+      expect(screen.getByText("Guardado")).toBeInTheDocument();
+    });
+
+    it("el botón Versiones solo existe con onToggleVersionHistory, expone aria-expanded/aria-controls y lo dispara", () => {
+      const { rerender } = render(<EditorHeader projectName="p.svg" onClose={vi.fn()} saveState="idle" saveErrorMessage={null} canSave onSave={vi.fn()} />);
+      expect(screen.queryByRole("button", { name: /Versiones/ })).not.toBeInTheDocument();
+
+      const onToggleVersionHistory = vi.fn();
+      rerender(<EditorHeader projectName="p.svg" onClose={vi.fn()} saveState="idle" saveErrorMessage={null} canSave onSave={vi.fn()} onToggleVersionHistory={onToggleVersionHistory} versionHistoryOpen />);
+      const button = screen.getByRole("button", { name: /Versiones/ });
+      expect(button).toHaveAttribute("aria-expanded", "true");
+      expect(button).toHaveAttribute("aria-controls", "editor-version-history-panel");
+      fireEvent.click(button);
+      expect(onToggleVersionHistory).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("historial (M3-S12)", () => {
     it("sin onToggleHistory no hay botón de Historial", () => {
       renderHeader();

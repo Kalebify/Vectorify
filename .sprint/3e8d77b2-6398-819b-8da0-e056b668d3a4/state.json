@@ -1,0 +1,21 @@
+{
+  "card_id": "3e8d77b2-6398-819b-8da0-e056b668d3a4",
+  "card_url": "https://app.notion.com/p/3e8d77b26398819b8da0e056b668d3a4",
+  "title": "M3-S13 · Autosave + Version History",
+  "stack": "Frontend, ASP.NET Core -- persistencia de geometría editada (nuevo endpoint editor-save), autosave con debounce + retry + conflicto, Version History panel con restore",
+  "branch": "sprint/3e8d77b2-m3-s13-autosave-version-history",
+  "column": "Doing",
+  "phase": "verification",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "pr_url": null,
+  "started_at": "2026-10-13T00:00:00Z",
+  "exceptions": [
+    "Corrida autonoma de MVP 3 (S01..S16) confirmada por el usuario: mergea el orquestador; ante un error la tarjeta pasa a Bloqueado y se sigue.",
+    "DECISION: endpoint editor-save crea nueva DocumentVersion; layers isNew se crean en el servidor con el groupId del cliente.",
+    "DECISION: autosave debounce 3s tras commitGesture; estado saving/saved/error en header; retry x3 backoff exponencial.",
+    "DECISION: historial de undo/redo (S12) se reinicia al restaurar una version (mismo mecanismo reset de S12).",
+    "DECISION: Version History panel es distinto del HistoryPanel de S12; GET/POST /versions ya existen desde M2.2-S06.",
+    "DECISION (implementacion): geometryDirty = difiere de lo ultimo confirmado (saveMark/markSaved), el undo no se reinicia al guardar; con proyecto guardado SAVE es siempre editor-save (el save clasico pisaria la geometria). Detalle en IMPL.md."
+  ]
+}

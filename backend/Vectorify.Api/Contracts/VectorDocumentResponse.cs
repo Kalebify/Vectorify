@@ -10,6 +10,15 @@ namespace Vectorify.Api.Contracts;
 public sealed record VectorDocumentSaveResponse(Guid ProjectId, int VersionNumber, DateTimeOffset SavedAt);
 
 /// <summary>
+/// Respuesta de <c>POST /api/v2/projects/{projectId}/document/editor-save</c> (M3-S13):
+/// confirmación de que la versión de geometría del editor se persistió. Incluye
+/// <see cref="VersionId"/> (el <see cref="Vectorify.Api.Data.DocumentVersion.Id"/>) para
+/// que el frontend pueda referenciar la versión exacta, a diferencia de
+/// <see cref="VectorDocumentSaveResponse"/> que solo expone el número secuencial.
+/// </summary>
+public sealed record EditorSaveResponse(Guid ProjectId, int VersionNumber, Guid VersionId, DateTimeOffset CreatedAt);
+
+/// <summary>
 /// Una entrada de <c>GET /api/v2/projects/{projectId}/versions</c> (M2.2-S06): metadata de UNA
 /// <see cref="Vectorify.Api.Data.DocumentVersion"/>, SIN su array de layers (eso es carga
 /// completa, ver <see cref="VectorDocumentResponse"/>).
