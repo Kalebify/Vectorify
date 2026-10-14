@@ -1,0 +1,18 @@
+{
+  "card_id": "3e8d77b2-6398-81bc-a442-ecd88ac6220a",
+  "card_url": "https://app.notion.com/p/3e8d77b2639881bca442ecd88ac6220a",
+  "title": "M3-S16 · E2E + Release Candidate MVP 3",
+  "stack": "Frontend, ASP.NET Core, Python, Vector, Laser, Infra -- gate E2E (HTTP + jsdom + recorrido manual en navegador) y documentacion de release",
+  "branch": "sprint/3e8d77b2-m3-s16-e2e-release-candidate",
+  "column": "Doing",
+  "phase": "implementation",
+  "fix_rounds": 0,
+  "preview_url": "http://localhost:5174 (pila RC local aislada, proyecto compose vectorify-s16-rc)",
+  "started_at": "2026-10-14T00:00:00Z",
+  "exceptions": [
+    "Corrida autonoma de MVP 3 (S01..S16) confirmada por el usuario: mergea el orquestador; ante un error la tarjeta pasa a Bloqueado y se sigue.",
+    "DECISION: pila RC aislada con docker compose -p vectorify-s16-rc (puertos 5180/5174/8101/5532); no se toca el proyecto vectify del usuario (5080/5173).",
+    "NOTA: Docker volvio a estar disponible durante S16; los E2E de backend de S13 se ejecutan con dotnet test completo.",
+    "NOTA: el recorrido en navegador real lo hace el orquestador (browser integrado) y se registra en docs/MVP3_RELEASE.md."
+  ]
+}
