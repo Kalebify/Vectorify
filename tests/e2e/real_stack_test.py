@@ -66,7 +66,7 @@ def main():
         try:
             engine = start(engine_cmd, ROOT / "services/python-engine", env, log)
             ready(engine, python_url + "/health")
-            api = start(["dotnet", str(ROOT / "backend/Vectorify.Api/bin/Debug/net9.0/Vectorify.Api.dll")], ROOT / "backend/Vectorify.Api", env, log)
+            api = start(["dotnet", str(ROOT / "backend/Vectorify.Api/bin/Debug/net10.0/Vectorify.Api.dll")], ROOT / "backend/Vectorify.Api", env, log)
             ready(api, api_url + "/health")
             verify(api_url, python_url, origin=origin)
             body = read_json(api_url + "/api/v1/system/health")
