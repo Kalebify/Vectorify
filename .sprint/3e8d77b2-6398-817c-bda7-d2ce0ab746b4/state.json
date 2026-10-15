@@ -1,0 +1,17 @@
+{
+  "card_id": "3e8d77b2-6398-817c-bda7-d2ce0ab746b4",
+  "card_url": "https://app.notion.com/p/3e8d77b26398817cbda7d2ce0ab746b4",
+  "title": "M3.1-S01 · Arquitectura Identity/Auth + spike de proveedor",
+  "stack": "ASP.NET Core, Frontend, Infra -- ADR + PoC agnostico del proveedor en backend/spikes/AuthPoc (sin cambios de producto)",
+  "branch": "sprint/3e8d77b2-m31-s01-arquitectura-auth",
+  "column": "Doing",
+  "phase": "implementation",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "started_at": "2026-10-14T00:00:00Z",
+  "exceptions": [
+    "El usuario pidio seguir con MVP 3.1 (10 sprints). La autonomia de merge sin preguntar fue concedida para MVP 3 (S01..S16); para 3.1 se asume la misma dinamica de trabajo pero la DECISION de proveedor de identidad es de la persona dueña del producto: se recomienda en el ADR y se pide confirmacion antes de S02.",
+    "DECISION: PoC agnostico (emisor OIDC simulado + ASP.NET Core Identity con cookie) en backend/spikes/AuthPoc; no se crean cuentas ni claves de proveedores reales.",
+    "HALLAZGO: .NET 8 y .NET 9 terminan soporte el 2026-11-10 (verificado en la politica oficial); el backend esta en net9.0 -> el ADR recomienda migrar a .NET 10 LTS antes de S02."
+  ]
+}
