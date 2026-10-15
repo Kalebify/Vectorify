@@ -1,8 +1,8 @@
 # ADR — Identidad y autenticación de MVP 3.1 (M3.1-S01 … M3.1-S10)
 
-Estado: **Recomendada — pendiente de confirmación de la persona dueña del producto** (M3.1-S01, 2026-10-15).
-Este ADR **recomienda** y demuestra con un PoC; **no** decide por la persona dueña ni contrata nada. Hasta que confirme (o elija otra
-opción en «Preguntas abiertas»), S02–S10 **no deben empezar**: cada una implementa la opción confirmada, sin mezclar estrategias.
+Estado: **CONFIRMADA por la persona dueña del producto el 2026-10-15** (opción A: ASP.NET Core Identity + cookie). Decisiones confirmadas, ver «Decisión confirmada» más abajo.
+Las preguntas abiertas que no figuran allí siguen pendientes y se resuelven en la tarjeta que las necesita (S02/S05/S07/S08/S09).
+Este ADR **recomienda** y demuestra con un PoC; **no** decide por la persona dueña ni contrata nada. S02–S10 implementan la opción confirmada, sin mezclar estrategias. Orden fijado: **migración a .NET 10 primero**, luego S02.
 Dónde está el código del PoC: `backend/spikes/AuthPoc/` (README con cómo correrlo). El producto **no cambió** en esta tarjeta.
 
 ## Resumen para la persona dueña del producto (una página)
@@ -158,7 +158,7 @@ Todas las cifras: **verificar antes de contratar** (los planes cambian; las pág
 
 ### D1. Recomendación: A — ASP.NET Core Identity con sesión en cookie, dentro de la API
 
-> **Estado: Recomendada — pendiente de confirmación de la persona dueña del producto.** (No confirmada. Ver «Preguntas abiertas».)
+> **Estado: CONFIRMADA (2026-10-15).** Ver «Decisión confirmada».
 
 Justificación, con sus datos: (1) **encaje técnico**: las URL directas de imágenes/descargas **[C]** funcionan con cookie y obligarían a rehacer el cliente con bearer **[A]**; (2) **coste**: los topes gratuitos de gestionados **[V]** no discriminan a 1 k–25 k MAU,
 pero A no tiene licencia ni tercero **[A]**; (3) **residencia y dependencia**: sin evidencia oficial de UE en Clerk/Entra y solo secundaria en Auth0 **[V]/[S]**, A es la única donde la residencia depende solo de vosotros **[A]**;
@@ -207,6 +207,19 @@ Detalles que el PoC fija y S02 hereda:
 ### D4. Camino de salida / segunda fuente
 Añadir un proveedor gestionado más adelante = `AddJwtBearer` (SPA con bearer; **[P]**) o `AddOpenIdConnect` + cookie (BFF; **[A]**) + una fila en `UserIdentity` por persona. Las cuentas existentes **no migran solas**: un proveedor nuevo emite otro `Subject`;
 vincular exige un flujo explícito con email verificado (T14). Importar hashes de contraseña desde Identity a un gestionado: soporte **no verificado** en ninguno.
+
+## Decisión confirmada (2026-10-15)
+
+La persona dueña del producto respondió a las preguntas bloqueantes:
+
+| Pregunta | Respuesta | Consecuencia |
+|---|---|---|
+| Estrategia de identidad | **ASP.NET Core Identity + cookie** (opción A) | S02–S10 construyen sobre Identity propio; el dominio no cambia (PoC) |
+| Residencia de datos en la UE (P3) | **Obligatoria** | Hosting de Postgres, backups y **logs** en la UE; el **proveedor de email transaccional también debe tratar datos personales en la UE** (con DPA) — requisito para S02/S08; descarta Clerk y Entra mientras no se verifique su residencia |
+| MFA / login social (P6) | **No por ahora**: email + contraseña alcanza | Fuera de alcance de S02–S10; el diseño deja abierta la puerta (segunda fuente de identidad / TOTP) sin reescribir el dominio |
+| Migrar a .NET 10 antes de S02 | **Sí, primer paso** | PR solo de migración, antes de cualquier código de auth; fecha límite 2026-11-10 |
+
+Siguen **abiertas** (se resuelven en su tarjeta, con los valores propuestos como default hasta que se diga otra cosa): presupuesto y MAU (P1–P2), dependencia de terceros (P4, ya resuelta de hecho por A), operador y remitente del email (P5, **debe ser UE**), dominio de despliegue (P7), SSO (P8, no previsto), verificación de email y política de contraseñas (P9), destino de los datos existentes (P10), supresión de cuenta y retención (P11), duración de sesión y bloqueo (P12).
 
 ## Diagramas
 
