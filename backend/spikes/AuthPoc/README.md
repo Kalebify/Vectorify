@@ -29,7 +29,7 @@ PoC **desechable pero ejecutable** que respalda `docs/ADR_AUTH_MVP31.md`. Demues
 
 ## Cómo correrlo
 
-Requisitos: SDK .NET 9 y **Docker en marcha** (Testcontainers levanta un `postgres:17-alpine` efímero, igual que los tests del producto).
+Requisitos: SDK .NET 10 y **Docker en marcha** (Testcontainers levanta un `postgres:17-alpine` efímero, igual que los tests del producto).
 
 ```bash
 cd backend

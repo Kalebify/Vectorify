@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
@@ -15,11 +15,11 @@
     <!-- PostgreSQL/EF Core (M2.2-S01): primera infraestructura de base de datos
          relacional real del proyecto, en paralelo a los registries de archivos JSON
          existentes bajo App_Data/ (que esta tarjeta no toca). -->
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
     <!-- Solo para el tooling de diseño (dotnet ef migrations add / database update),
          nunca se necesita en runtime: PrivateAssets evita que se propague como
          dependencia a proyectos que referencien este. -->
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.20">
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.13">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>

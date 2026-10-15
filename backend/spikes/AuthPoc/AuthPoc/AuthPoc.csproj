@@ -3,7 +3,7 @@
   <!-- SPIKE de M3.1-S01 (ver docs/ADR_AUTH_MVP31.md). NO forma parte de Vectorify.sln ni de la imagen Docker:
        el Dockerfile solo copia Vectorify.Api/ y restaura Vectorify.Api.csproj. Los paquetes de auth entran SOLO aca. -->
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <IsPackable>false</IsPackable>
@@ -13,13 +13,13 @@
 
   <ItemGroup>
     <!-- Validacion de JWT/OIDC (fuente A: stand-in de un proveedor gestionado). -->
-    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.20" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.13" />
     <!-- ASP.NET Core Identity + EF (fuente B: autoalojado). -->
-    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="9.0.20" />
+    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="10.0.13" />
     <!-- Mismas versiones de EF/Npgsql que el producto resuelve (ver Vectorify.Api.csproj). -->
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="9.0.20" />
-    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.20" />
-    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.13" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.13" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
   </ItemGroup>
 
   <ItemGroup>

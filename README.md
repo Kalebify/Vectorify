@@ -377,7 +377,7 @@ configuración adicional.
 
 Tooling: `dotnet ef` (paquete `Microsoft.EntityFrameworkCore.Design`, referenciado
 como `PrivateAssets="all"` porque solo hace falta en tiempo de diseño). Si no
-tenés el tool global instalado: `dotnet tool install --global dotnet-ef --version 9.0.20`.
+tenés el tool global instalado: `dotnet tool install --global dotnet-ef --version 10.0.13`.
 
 ```bash
 cd backend/Vectorify.Api
