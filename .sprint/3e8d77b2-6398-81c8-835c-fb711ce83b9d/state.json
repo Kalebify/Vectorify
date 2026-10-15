@@ -1,0 +1,17 @@
+{
+  "card_id": "3e8d77b2-6398-81c8-835c-fb711ce83b9d",
+  "card_url": "https://app.notion.com/p/3e8d77b2639881c8835cfb711ce83b9d",
+  "title": "M3.1-S02 · Registro + creación/vinculación de User",
+  "stack": "ASP.NET Core, Frontend, Infra -- ASP.NET Core Identity + cookie (ADR confirmado), .NET 10",
+  "branch": "sprint/3e8d77b2-m31-s02-registro-user",
+  "column": "Doing",
+  "phase": "implement",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "started_at": "2026-10-16T00:00:00Z",
+  "exceptions": [
+    "Pipeline web-oriented del skill sprint no aplica: sin fase de diseño (no hay UI), sin preview de Vercel ni Lighthouse; QA = dotnet build/test + revision del orquestador.",
+    "La rama se corta de sprint/3e8d77b2-m31-net10-migracion (PR #65 abierto, sin mergear) para tener .NET 10; el merge a main lo hace el usuario.",
+    "Decision del usuario (2026-10-16): migracion .NET 10 como PR #65 y S02 encima."
+  ]
+}
