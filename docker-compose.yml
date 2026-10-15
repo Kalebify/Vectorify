@@ -57,6 +57,15 @@ services:
       PythonEngine__TimeoutSeconds: ${PYTHON_ENGINE_TIMEOUT_SECONDS:-5}
       # Orígenes del NAVEGADOR autorizados a llamar a la Web API (donde se sirve React).
       Cors__AllowedOrigins: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      # Identidad (M3.1-S02, ADR docs/ADR_AUTH_MVP31.md). Valores NO secretos. Mientras no exista login en la UI
+      # (S03/S05) el compose de desarrollo sigue sirviendo la API con el usuario de desarrollo: Auth__Mode=Development,
+      # que SOLO se permite con ASPNETCORE_ENVIRONMENT=Development|Testing|Test (en otro entorno la API NO arranca).
+      # Para un despliegue real: AUTH_MODE=Authenticated, AUTH_COOKIE_NAME=__Host-vectorify.session y
+      # AUTH_COOKIE_SECURE_POLICY=Always (ver .env.example).
+      Auth__Mode: ${AUTH_MODE:-Development}
+      Auth__Cookie__Name: ${AUTH_COOKIE_NAME:-vectorify.session}
+      Auth__Cookie__SecurePolicy: ${AUTH_COOKIE_SECURE_POLICY:-SameAsRequest}
+      Auth__Password__MinLength: ${AUTH_PASSWORD_MIN_LENGTH:-12}
       # Nombre del servicio "postgres" en la red de docker-compose, no localhost ni el
       # puerto publicado en el host. Nunca hardcodeado -- viene de variables de entorno
       # con el mismo criterio que PythonEngine__BaseUrl (ver .env.example).

@@ -16,6 +16,11 @@
          relacional real del proyecto, en paralelo a los registries de archivos JSON
          existentes bajo App_Data/ (que esta tarjeta no toca). -->
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+    <!-- Identidad propia (M3.1-S02, ADR docs/ADR_AUTH_MVP31.md, decisión confirmada: ASP.NET Core Identity + cookie).
+         UserManager/SignInManager/AddIdentityCookies ya vienen en el shared framework Microsoft.AspNetCore.App; este
+         paquete añade SOLO el almacén EF (IdentityDbContext, UserStore) para el AuthDbContext (esquema "auth"). Misma
+         línea 10.0.13 que EF Core, que es lo que resuelve el resto del proyecto. -->
+    <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" Version="10.0.13" />
     <!-- Solo para el tooling de diseño (dotnet ef migrations add / database update),
          nunca se necesita en runtime: PrivateAssets evita que se propague como
          dependencia a proyectos que referencien este. -->

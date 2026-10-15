@@ -46,6 +46,8 @@ public sealed class VectorizationDbContext : DbContext
 
     public DbSet<PaletteColor> PaletteColors => Set<PaletteColor>();
 
+    public DbSet<UserIdentity> UserIdentities => Set<UserIdentity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<SchemaProbe>(entity =>
@@ -62,6 +64,27 @@ public sealed class VectorizationDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.DisplayName).IsRequired();
             entity.Property(e => e.CreatedAt).IsRequired();
+        });
+
+        // Vínculo (Provider, Subject) -> User (M3.1-S02, ADR «Modelo definitivo del vínculo de identidad»).
+        modelBuilder.Entity<UserIdentity>(entity =>
+        {
+            entity.ToTable("user_identities");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Provider).IsRequired().HasMaxLength(UserIdentity.MaxProviderLength);
+            entity.Property(e => e.Subject).IsRequired().HasMaxLength(UserIdentity.MaxSubjectLength);
+            entity.Property(e => e.CreatedAt).IsRequired();
+
+            // El invariante que hace idempotente y concurrente el mapeo: UNA persona del proveedor X = UN User.
+            entity.HasIndex(e => new { e.Provider, e.Subject }).IsUnique();
+            entity.HasIndex(e => e.UserId);
+
+            // Cascade: el vínculo no tiene sentido sin el usuario. Project -> User sigue siendo Restrict (borrar una
+            // cuenta exige una rutina explícita que gestione sus proyectos, S07).
+            entity.HasOne(e => e.User)
+                .WithMany(u => u.Identities)
+                .HasForeignKey(e => e.UserId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<Project>(entity =>

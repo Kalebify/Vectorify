@@ -20,4 +20,7 @@ public sealed class User
     public DateTimeOffset CreatedAt { get; set; }
 
     public ICollection<Project> Projects { get; set; } = new List<Project>();
+
+    /// <summary>Identidades (proveedor + sujeto) vinculadas a este usuario (M3.1-S02). <see cref="ExternalIdentityId"/> queda obsoleta y sin uso.</summary>
+    public ICollection<UserIdentity> Identities { get; set; } = new List<UserIdentity>();
 }

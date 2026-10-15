@@ -8,6 +8,7 @@ using Vectorify.Api.ColorPalette;
 using Vectorify.Api.Components;
 using Vectorify.Api.Contracts;
 using Vectorify.Api.Data;
+using Vectorify.Api.Data.Auth;
 using Vectorify.Api.Dimensioning;
 using Vectorify.Api.Endpoints;
 using Vectorify.Api.Export;
@@ -107,9 +108,18 @@ builder.Services.AddScoped<IDatabaseHealthChecker, DatabaseHealthChecker>();
 // nunca hardcodeados, y se resuelven de forma diferida (igual que PythonEngineOptions)
 // para respetar overrides de entorno y de WebApplicationFactory en los tests.
 // Se expone X-Correlation-Id para que el frontend pueda leerlo.
+//
+// M3.1-S02: la sesión es una cookie, así que la política pasa a CORS CON CREDENCIALES (T8 del ADR): orígenes
+// explícitos (sin comodines, validados al arrancar por FrontendCorsOptions) y cabeceras/métodos enumerados -- ya no
+// AllowAnyHeader/AllowAnyMethod, que junto a AllowCredentials ampliarían la superficie. Cabeceras: las que el frontend
+// envía hoy (Content-Type, Accept, Idempotency-Key) y el correlation ID; métodos: los que la API expone (GET/POST/PATCH/DELETE).
 builder.Services
     .AddOptions<FrontendCorsOptions>()
-    .Bind(builder.Configuration.GetSection(FrontendCorsOptions.SectionName));
+    .Bind(builder.Configuration.GetSection(FrontendCorsOptions.SectionName))
+    .Validate(
+        o => o.GetOrigins().All(FrontendCorsOptions.IsExplicitOrigin),
+        "Cors:AllowedOrigins solo admite orígenes explícitos (http(s)://host[:puerto]); sin comodines, rutas ni valores relativos, porque la política usa credenciales.")
+    .ValidateOnStart();
 
 builder.Services.AddCors();
 builder.Services
@@ -117,8 +127,9 @@ builder.Services
     .Configure<IOptions<FrontendCorsOptions>>((cors, frontend) =>
         cors.AddPolicy(FrontendCorsOptions.PolicyName, policy => policy
             .WithOrigins(frontend.Value.GetOrigins())
-            .AllowAnyHeader()
-            .AllowAnyMethod()
+            .WithHeaders("Content-Type", "Accept", ProjectEndpoints.IdempotencyHeaderName, CorrelationIdMiddleware.HeaderName)
+            .WithMethods("GET", "POST", "PATCH", "DELETE")
+            .AllowCredentials()
             .WithExposedHeaders(CorrelationIdMiddleware.HeaderName)));
 
 // Carga y almacenamiento de imágenes (M1-S02): validación configurable (Upload:*),
@@ -566,6 +577,12 @@ builder.Services.AddScoped<IExportService, ExportService>();
 // (colisión real de ruta con el upload multipart existente -- ver spec.md, "Conflicto real
 // detectado", e IMPL.md).
 UserContextRegistration.Register(builder.Services, builder.Environment, builder.Configuration);
+
+// Identidad propia (M3.1-S02, ADR docs/ADR_AUTH_MVP31.md): ASP.NET Core Identity + cookie sobre AuthDbContext (esquema "auth"),
+// IUserProvisioner (Provider, Subject) -> User y opciones Auth:* validadas al arrancar. El pipeline (UseAuthentication /
+// UseAuthorization / UserProvisioningMiddleware) se monta más abajo, después de CORS. IUserContext lo decide Auth:Mode
+// (arriba): Authenticated por default; Development (usuario fijo, sin login) solo en entornos de desarrollo.
+builder.Services.AddVectorifyAuth(builder.Configuration);
 builder.Services.AddScoped<IProjectRepository, ProjectRepository>();
 builder.Services.AddScoped<IProjectService, ProjectService>();
 
@@ -640,15 +657,23 @@ using (var migrationScope = app.Services.CreateScope())
             var dbContext = migrationScope.ServiceProvider.GetRequiredService<VectorizationDbContext>();
             migrationLogger.LogInformation("Aplicando migraciones de PostgreSQL en {Target}...", target);
             dbContext.Database.Migrate();
+
+            // Tablas de ASP.NET Core Identity (M3.1-S02): esquema "auth" con su propio historial de migraciones, en la
+            // misma base. Después de las del dominio y en el mismo intento tolerante a fallos.
+            migrationScope.ServiceProvider.GetRequiredService<AuthDbContext>().Database.Migrate();
             migrationLogger.LogInformation("Migraciones de PostgreSQL aplicadas correctamente en {Target}.", target);
 
             // Siembra el User "dev" (DevelopmentUser:*) que DevelopmentUserContext siempre
             // devuelve -- acá, al arrancar, y no lazily en el primer request, para que la FK
             // Project.OwnerId -> Users.Id nunca falle al crear el primer proyecto de una
-            // sesión de desarrollo nueva. Idempotente (ver DevelopmentUserSeeder).
-            var developmentUserOptions = migrationScope.ServiceProvider
-                .GetRequiredService<IOptions<DevelopmentUserOptions>>().Value;
-            DevelopmentUserSeeder.EnsureSeededAsync(dbContext, developmentUserOptions).GetAwaiter().GetResult();
+            // sesión de desarrollo nueva. Idempotente (ver DevelopmentUserSeeder). SOLO con
+            // Auth:Mode=Development: en modo Authenticated no existe usuario fijo que sembrar.
+            if (app.Services.GetRequiredService<IOptions<AuthOptions>>().Value.Mode == AuthMode.Development)
+            {
+                var developmentUserOptions = migrationScope.ServiceProvider
+                    .GetRequiredService<IOptions<DevelopmentUserOptions>>().Value;
+                DevelopmentUserSeeder.EnsureSeededAsync(dbContext, developmentUserOptions).GetAwaiter().GetResult();
+            }
         }
         catch (Exception ex)
         {
@@ -689,6 +714,14 @@ if (app.Environment.IsDevelopment())
         options.RoutePrefix = "swagger";
     });
 }
+
+// Autenticación (M3.1-S02), DESPUÉS de CORS y de Swagger (los preflight y la UI no necesitan sesión): la cookie de Identity se
+// descifra en UseAuthentication; UseAuthorization aplica las políticas (todavía sin FallbackPolicy: la denegación por
+// defecto de los endpoints del flujo existente es S06); UserProvisioningMiddleware mapea (Provider, Subject) -> User.Id
+// una vez por request autenticada. Las requests anónimas lo atraviesan sin tocar la base.
+app.UseAuthentication();
+app.UseAuthorization();
+app.UseMiddleware<UserProvisioningMiddleware>();
 
 // Liveness simple de la propia Web API: no depende de Python. Si esto responde,
 // ASP.NET Core está arriba, sin importar el estado del motor.
@@ -758,6 +791,7 @@ app.MapGet("/api/v1/system/health", async (
 .WithName("GetSystemHealth")
 .WithTags("Health");
 
+app.MapAuthEndpoints();
 app.MapProjectEndpoints();
 app.MapPreprocessEndpoints();
 app.MapThresholdEndpoints();

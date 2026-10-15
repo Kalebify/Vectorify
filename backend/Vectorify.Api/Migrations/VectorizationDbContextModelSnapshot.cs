@@ -17,7 +17,7 @@ namespace Vectorify.Api.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "9.0.20")
+                .HasAnnotation("ProductVersion", "10.0.13")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -305,6 +305,38 @@ namespace Vectorify.Api.Migrations
                     b.ToTable("users", (string)null);
                 });
 
+            modelBuilder.Entity("Vectorify.Api.Data.UserIdentity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("Provider", "Subject")
+                        .IsUnique();
+
+                    b.ToTable("user_identities", (string)null);
+                });
+
             modelBuilder.Entity("Vectorify.Api.Data.VectorDocument", b =>
                 {
                     b.Property<Guid>("Id")
@@ -412,6 +444,17 @@ namespace Vectorify.Api.Migrations
                     b.Navigation("ThumbnailAsset");
                 });
 
+            modelBuilder.Entity("Vectorify.Api.Data.UserIdentity", b =>
+                {
+                    b.HasOne("Vectorify.Api.Data.User", "User")
+                        .WithMany("Identities")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
             modelBuilder.Entity("Vectorify.Api.Data.VectorDocument", b =>
                 {
                     b.HasOne("Vectorify.Api.Data.Project", "Project")
@@ -444,6 +487,8 @@ namespace Vectorify.Api.Migrations
 
             modelBuilder.Entity("Vectorify.Api.Data.User", b =>
                 {
+                    b.Navigation("Identities");
+
                     b.Navigation("Projects");
                 });
 

@@ -6,22 +6,24 @@ using Vectorify.Api.Users;
 namespace Vectorify.Api.Tests.Users;
 
 /// <summary>
-/// Reglas de arquitectura de M2.2-S09: la aplicación depende SOLO de <see cref="IUserContext"/>
+/// Reglas de arquitectura de M2.2-S09 (M3.1-S02: el invariante incluye <see cref="AuthenticatedUserContext"/>; solo Users/ y
+/// Program.cs pueden mencionar DevelopmentUserContext, DevelopmentUserSeeder y AuthenticatedUserContext): la aplicación depende SOLO de <see cref="IUserContext"/>
 /// (cambiar DevelopmentUserContext por un AuthenticatedUserContext en MVP 3.1 no toca
 /// Project/Asset/VectorDocument) y los requests nunca llevan un owner enviado por el cliente.
 /// </summary>
 public sealed class UserContextArchitectureTests
 {
-    private static readonly string[] ConcreteUserTypes = [nameof(DevelopmentUserContext), nameof(DevelopmentUserSeeder)];
+    private static readonly string[] ConcreteUserTypes =
+        [nameof(DevelopmentUserContext), nameof(DevelopmentUserSeeder), nameof(AuthenticatedUserContext)];
 
     private const BindingFlags AllMembers =
         BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
 
     [Fact]
-    public void NoTypeOutsideTheUsersNamespace_ReferencesTheDevelopmentImplementationInItsSignatures()
+    public void NoTypeOutsideTheUsersNamespace_ReferencesAConcreteUserContextImplementationInItsSignatures()
     {
         var offenders = new List<string>();
-        var concreteTypes = new[] { typeof(DevelopmentUserContext), typeof(DevelopmentUserSeeder) };
+        var concreteTypes = new[] { typeof(DevelopmentUserContext), typeof(DevelopmentUserSeeder), typeof(AuthenticatedUserContext) };
 
         foreach (var type in typeof(Program).Assembly.GetTypes())
         {
@@ -43,7 +45,7 @@ public sealed class UserContextArchitectureTests
     }
 
     [Fact]
-    public void NoSourceFileOutsideUsersAndProgram_MentionsTheDevelopmentImplementationInCode()
+    public void NoSourceFileOutsideUsersAndProgram_MentionsAConcreteUserContextImplementationInCode()
     {
         var apiDirectory = FindApiProjectDirectory();
         var offenders = new List<string>();

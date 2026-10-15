@@ -22,4 +22,17 @@ public sealed class FrontendCorsOptions
         .Select(origin => origin.TrimEnd('/'))
         .Distinct(StringComparer.OrdinalIgnoreCase)
         .ToArray();
+
+    /// <summary>
+    /// true si <paramref name="origin"/> es un origen explícito: URL absoluta http(s) sin ruta, query ni fragmento. Rechaza
+    /// <c>*</c> y cualquier comodín: con <c>AllowCredentials</c> un origen abierto dejaría a cualquier web actuar con la sesión (T8).
+    /// </summary>
+    public static bool IsExplicitOrigin(string origin) =>
+        Uri.TryCreate(origin, UriKind.Absolute, out var uri)
+        && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+        && !origin.Contains('*')
+        && string.IsNullOrEmpty(uri.Query)
+        && string.IsNullOrEmpty(uri.Fragment)
+        && (uri.AbsolutePath == "/" || string.IsNullOrEmpty(uri.AbsolutePath))
+        && string.IsNullOrEmpty(uri.UserInfo);
 }

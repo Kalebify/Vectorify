@@ -25,8 +25,12 @@ public sealed class MigrationChainTests : IAsyncLifetime
 {
     // Fijan "la última" y "la anterior" a propósito: si alguien agrega una migración, ESTE test debe actualizarse
     // (sembrar con el esquema nuevo N-1 y verificar la migración nueva) en vez de seguir probando un upgrade viejo.
-    private const string LatestMigration = "20261004100837_AddProjectClassicTriple";
-    private const string PreviousMigration = "20261003230452_AddDocumentVersionIdempotencyKey";
+    private const string LatestMigration = "20261015221543_AddUserIdentities";
+    private const string PreviousMigration = "20261004100837_AddProjectClassicTriple";
+
+    // Esquema sobre el que el test de upgrade siembra datos representativos: DOS migraciones antes de la ultima
+    // (M3.1-S02 agrego AddUserIdentities encima de AddProjectClassicTriple, asi que el upgrade cubre ambas).
+    private const string SeedBaselineMigration = "20261003230452_AddDocumentVersionIdempotencyKey";
 
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
 
@@ -76,19 +80,21 @@ public sealed class MigrationChainTests : IAsyncLifetime
         Assert.Empty(await dbContext.Layers.ToListAsync());
         Assert.Empty(await dbContext.PaletteColors.ToListAsync());
         Assert.Empty(await dbContext.SchemaProbes.ToListAsync());
+        Assert.Empty(await dbContext.UserIdentities.ToListAsync());
     }
 
     [Fact]
-    public async Task Upgrade_FromThePreviousMigrationWithRepresentativeData_KeepsEveryRowIntact()
+    public async Task Upgrade_FromTheSeedBaselineWithRepresentativeData_KeepsEveryRowIntact()
     {
         await using var dbContext = CreateDbContext();
         var migrator = dbContext.GetService<IMigrator>();
         var all = dbContext.Database.GetMigrations().ToList();
         Assert.Equal(LatestMigration, all[^1]);
         Assert.Equal(PreviousMigration, all[^2]);
+        Assert.Equal(SeedBaselineMigration, all[^3]);
 
-        await migrator.MigrateAsync(PreviousMigration);
-        Assert.Equal(PreviousMigration, (await dbContext.Database.GetAppliedMigrationsAsync()).Last());
+        await migrator.MigrateAsync(SeedBaselineMigration);
+        Assert.Equal(SeedBaselineMigration, (await dbContext.Database.GetAppliedMigrationsAsync()).Last());
 
         var seed = await SeedRepresentativeDataAtPreviousSchemaAsync(dbContext);
 
@@ -100,6 +106,7 @@ public sealed class MigrationChainTests : IAsyncLifetime
         Assert.True(exception is null, $"El upgrade a {LatestMigration} falló con datos reales: {exception?.Message}");
         Assert.Empty(await dbContext.Database.GetPendingMigrationsAsync());
         Assert.Contains("ClassicProjectId", await ProjectColumnsAsync(dbContext));
+        Assert.Empty(await dbContext.UserIdentities.ToListAsync()); // la tabla de M3.1-S02 existe tras el upgrade y arranca vacia
 
         await using var read = CreateDbContext();
 
