@@ -1,0 +1,16 @@
+{
+  "card_id": "3e8d77b2-6398-8160-9ec9-d6f1eb9e279b",
+  "card_url": "https://app.notion.com/p/3e8d77b2639881609ec9d6f1eb9e279b",
+  "title": "M3.1-S03 · Login + Logout",
+  "stack": "Frontend, ASP.NET Core -- ASP.NET Core Identity + cookie (ADR confirmado), .NET 10",
+  "branch": "sprint/3e8d77b2-m31-s03-login-logout",
+  "column": "Doing",
+  "phase": "implement",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "started_at": "2026-10-16T00:00:00Z",
+  "exceptions": [
+    "Pipeline web-oriented del skill sprint no aplica: sin fase de diseño (las pantallas son S05), sin preview ni Lighthouse; QA = dotnet build/test + npm test/build + revision del orquestador.",
+    "La rama se corta de sprint/3e8d77b2-m31-s02-registro-user (apilada: PR #65 migracion .NET 10 -> S02 -> S03); los merges los hace el usuario."
+  ]
+}
