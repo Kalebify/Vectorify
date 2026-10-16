@@ -1,8 +1,10 @@
 using System.Net.Mail;
+using System.Security.Claims;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using Vectorify.Api.Contracts;
+using Vectorify.Api.Data;
 using Vectorify.Api.Data.Auth;
 using Vectorify.Api.Options;
 using Vectorify.Api.Users;
@@ -10,13 +12,25 @@ using Vectorify.Api.Users;
 namespace Vectorify.Api.Endpoints;
 
 /// <summary>
-/// Endpoints de autenticación propios (M3.1-S02: registro; login/logout/me llegan en S03), bajo <c>/api/v1/auth</c>. Usan
-/// <c>UserManager</c> de ASP.NET Core Identity (NO <c>MapIdentityApi</c>, ADR D1). Son ANÓNIMOS: nadie tiene sesión antes de
-/// registrarse. Ningún log de este archivo incluye el correo ni la contraseña.
+/// Endpoints de autenticación propios bajo <c>/api/v1/auth</c>: registro (M3.1-S02), login, logout y usuario actual (M3.1-S03).
+/// Usan <c>UserManager</c>/<c>SignInManager</c> de ASP.NET Core Identity (NO <c>MapIdentityApi</c>, ADR D1). Register y login son
+/// ANÓNIMOS (nadie tiene sesión antes de entrar); logout es idempotente y tolera la sesión ya caducada; <c>me</c> exige la cookie.
+/// Ningún log de este archivo incluye el correo ni la contraseña.
 /// </summary>
 public static class AuthEndpoints
 {
     public const string RegisterPath = "/api/v1/auth/register";
+    public const string LoginPath = "/api/v1/auth/login";
+    public const string LogoutPath = "/api/v1/auth/logout";
+    public const string MePath = "/api/v1/auth/me";
+
+    /// <summary>Código del 401 de login: IDÉNTICO para cuenta inexistente, contraseña errónea y cuenta bloqueada (T5/T6).</summary>
+    public const string InvalidCredentialsCode = "invalid_credentials";
+
+    /// <summary>Mensaje del 401 de login: el MISMO en los tres casos, para que el cuerpo no delate si la cuenta existe o está bloqueada.</summary>
+    public const string InvalidCredentialsMessage = "Correo o contraseña incorrectos.";
+
+    public const string LogoutIncompleteCode = "logout_incomplete";
 
     /// <summary>Valor de <see cref="RegisterResponse.Status"/>: el MISMO para cuenta nueva y para correo ya registrado.</summary>
     public const string RegisterAcceptedStatus = "accepted";
@@ -36,7 +50,175 @@ public static class AuthEndpoints
                 "Respuesta UNIFORME (202 {status:'accepted'}) exista o no el correo: no revela si una cuenta ya existe. " +
                 "Solo los errores de validación (email inválido, contraseña < 12 caracteres) son visibles y no dependen de " +
                 "si el correo existe. La verificación por email llega en M3.1-S08.");
+
+        app.MapPost(LoginPath, LoginAsync)
+            .AllowAnonymous()
+            .WithName("Login")
+            .WithTags("Auth")
+            .Produces<CurrentUserResponse>(StatusCodes.Status200OK)
+            .Produces<ApiErrorResponse>(StatusCodes.Status401Unauthorized)
+            .WithSummary("Inicia sesión (email + contraseña) y emite la cookie de sesión de Identity.")
+            .WithDescription(
+                "Cuenta inexistente, contraseña errónea y cuenta bloqueada devuelven EXACTAMENTE el mismo 401 (código, mensaje y cabeceras). " +
+                "Bloqueo tras Auth:Lockout:MaxAttempts fallos durante Auth:Lockout:Duration. Responde 200 con el usuario actual.");
+
+        app.MapPost(LogoutPath, LogoutAsync)
+            .AllowAnonymous()
+            .WithName("Logout")
+            .WithTags("Auth")
+            .Produces(StatusCodes.Status204NoContent)
+            .WithSummary("Cierra la sesión: borra la cookie y rota el SecurityStamp de la cuenta (invalida también las copias de la cookie).")
+            .WithDescription(
+                "Idempotente: sin sesión (o con la sesión ya caducada) responde 204 igual. La invalidación de copias de la cookie se " +
+                "aplica cuando cada copia se revalida (Auth:Session:RevalidationInterval, 5 min por defecto).");
+
+        app.MapGet(MePath, MeAsync)
+            .RequireAuthorization()
+            .WithName("GetCurrentUser")
+            .WithTags("Auth")
+            .Produces<CurrentUserResponse>(StatusCodes.Status200OK)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .WithSummary("Usuario actual, resuelto SOLO desde la identidad verificada de la cookie.")
+            .WithDescription("401 sin sesión, con la cookie manipulada o tras cerrar sesión. Nada que envíe el cliente decide quién es.");
     }
+
+    private static async Task<IResult> LoginAsync(
+        LoginRequest request,
+        HttpContext http,
+        UserManager<ApplicationUser> users,
+        SignInManager<ApplicationUser> signIn,
+        IUserProvisioner provisioner,
+        VectorizationDbContext db,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken)
+    {
+        var logger = loggerFactory.CreateLogger("Vectorify.Api.Endpoints.AuthEndpoints");
+        http.Response.Headers.CacheControl = "no-store";
+
+        var email = request.Email?.Trim();
+        var password = request.Password;
+        if (string.IsNullOrEmpty(email) || email.Length > MaxEmailLength
+            || string.IsNullOrEmpty(password) || password.Length > AuthPasswordOptions.MaxLength)
+        {
+            // Entrada que no puede ser válida (vacía o desmesurada): mismo 401, sin tocar la base ni hashear contraseñas gigantes.
+            return InvalidCredentials();
+        }
+
+        var account = await users.FindByEmailAsync(email);
+        if (account is null)
+        {
+            // Misma carga de CPU que una verificación real (el hash adaptativo es lo caro), para que el tiempo no delate
+            // que la cuenta no existe (T5). El resultado se descarta. Riesgo residual [N]: tiempo no medido.
+            _ = users.PasswordHasher.HashPassword(new ApplicationUser(), password);
+            logger.LogInformation("Login: credenciales rechazadas.");
+            return InvalidCredentials();
+        }
+
+        // lockoutOnFailure: cada fallo suma al contador; al llegar a Auth:Lockout:MaxAttempts la cuenta queda bloqueada
+        // Auth:Lockout:Duration. Una cuenta bloqueada NO comprueba la contraseña (ni siquiera la correcta entra).
+        var result = await signIn.CheckPasswordSignInAsync(account, password, lockoutOnFailure: true);
+        if (!result.Succeeded)
+        {
+            if (result.IsLockedOut)
+            {
+                logger.LogWarning("Login: cuenta {AccountId} bloqueada por intentos fallidos.", account.Id);
+            }
+            else
+            {
+                logger.LogInformation("Login: credenciales rechazadas.");
+            }
+
+            return InvalidCredentials();
+        }
+
+        // El User interno se resuelve (o se crea) ANTES de abrir la sesión: si Postgres falla acá, no queda cookie emitida.
+        var provisioned = await provisioner.EnsureUserAsync(
+            new ExternalIdentity(VectorifyClaimTypes.AspNetIdentityProvider, account.Id.ToString(), account.Email, DisplayName: null),
+            cancellationToken);
+
+        // Sesión de navegador (sin «recordarme»: S04). Emite la cookie con los atributos de Auth:Cookie (HttpOnly, SameSite=Lax, Secure según opciones).
+        await signIn.SignInAsync(account, isPersistent: false);
+        logger.LogInformation("Login: sesión iniciada para la cuenta {AccountId}.", account.Id);
+
+        return Results.Ok(await LoadCurrentUserAsync(db, provisioned.UserId, account.Email, cancellationToken));
+    }
+
+    private static async Task<IResult> LogoutAsync(
+        ClaimsPrincipal principal,
+        HttpContext http,
+        UserManager<ApplicationUser> users,
+        SignInManager<ApplicationUser> signIn,
+        ILoggerFactory loggerFactory)
+    {
+        var logger = loggerFactory.CreateLogger("Vectorify.Api.Endpoints.AuthEndpoints");
+        http.Response.Headers.CacheControl = "no-store";
+
+        // Decisión de S03 (ADR D3.7): el logout ROTA el SecurityStamp de la cuenta, así que cualquier copia de la cookie anterior
+        // (robada, o de otra pestaña/dispositivo) deja de valer en cuanto se revalida (SecurityStampValidator, cada
+        // Auth:Session:RevalidationInterval). Es "cerrar sesión en todos lados". En el navegador que hace logout la cookie se borra abajo.
+        var rotationFailed = false;
+        if (principal.Identity?.IsAuthenticated == true
+            && ClaimsIdentityReader.TryRead(principal, VectorifyClaimTypes.AspNetIdentityProvider, out var identity))
+        {
+            try
+            {
+                var account = await users.FindByIdAsync(identity.Subject);
+                if (account is not null)
+                {
+                    var rotated = await users.UpdateSecurityStampAsync(account);
+                    rotationFailed = !rotated.Succeeded;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogError(ex, "Logout: no se pudo rotar el SecurityStamp de la cuenta; la cookie se borra igualmente.");
+                rotationFailed = true;
+            }
+        }
+
+        // La cookie del navegador se borra SIEMPRE, incluso si la rotación falló.
+        await signIn.SignOutAsync();
+
+        return rotationFailed
+            ? Results.Json(
+                new ApiErrorResponse(LogoutIncompleteCode, "La sesión de este navegador se cerró, pero no se pudo invalidar el resto. Intentá de nuevo."),
+                statusCode: StatusCodes.Status503ServiceUnavailable)
+            : Results.NoContent();
+    }
+
+    private static async Task<IResult> MeAsync(
+        ClaimsPrincipal principal,
+        HttpContext http,
+        VectorizationDbContext db,
+        CancellationToken cancellationToken)
+    {
+        http.Response.Headers.CacheControl = "no-store";
+
+        // El id sale SOLO de la identidad interna que agregó el servidor tras verificar la cookie (nunca de query, cuerpo ni cabeceras).
+        if (!InternalIdentityReader.TryGetUserId(principal, out var userId))
+        {
+            return Results.Unauthorized();
+        }
+
+        var emailClaim = principal.FindFirst(ClaimTypes.Email)?.Value;
+        return Results.Ok(await LoadCurrentUserAsync(db, userId, emailClaim, cancellationToken));
+    }
+
+    private static async Task<CurrentUserResponse> LoadCurrentUserAsync(
+        VectorizationDbContext db, Guid userId, string? fallbackEmail, CancellationToken cancellationToken)
+    {
+        var user = await db.Users.AsNoTracking()
+            .Where(u => u.Id == userId)
+            .Select(u => new { u.Email, u.DisplayName })
+            .SingleOrDefaultAsync(cancellationToken);
+
+        return new CurrentUserResponse(userId, user?.Email ?? fallbackEmail, user?.DisplayName ?? string.Empty);
+    }
+
+    private static IResult InvalidCredentials() =>
+        Results.Json(
+            new ApiErrorResponse(InvalidCredentialsCode, InvalidCredentialsMessage),
+            statusCode: StatusCodes.Status401Unauthorized);
 
     private static async Task<IResult> RegisterAsync(
         RegisterRequest request,

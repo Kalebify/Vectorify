@@ -20,7 +20,7 @@ namespace Vectorify.Api.Tests.EndToEnd;
 /// <c>UserProvisioningMiddleware</c> ((Provider, Subject) -&gt; <c>User.Id</c>) -&gt; <see cref="AuthenticatedUserContext"/> -&gt;
 /// los servicios de dominio SIN CAMBIOS (<c>/api/v2/projects</c> filtra por <c>OwnerId</c>). Cubre también la RESTRICCIÓN de no romper el
 /// producto: con <c>Auth:Mode=Development</c> (lo que fija el entorno de desarrollo) todo sigue siendo el usuario de desarrollo.
-/// Login (S03) no existe todavía: la cookie se emite en el test con el mismo formato de ticket protegido que usará S03.
+/// Aquí la cookie se fabrica en el test (ticket protegido con el formato de Identity); el login real de S03 y las cookies emitidas por el servidor se prueban en <see cref="AuthLoginLogoutTests"/>. Desde S03 el cliente envía la cabecera anti-CSRF y un Origin permitido (CsrfGuard).
 /// </summary>
 public sealed class AuthenticatedModePipelineTests : IClassFixture<AuthApiFixture>
 {
@@ -38,7 +38,7 @@ public sealed class AuthenticatedModePipelineTests : IClassFixture<AuthApiFixtur
     {
         var connectionString = await _fixture.CreateDatabaseAsync();
         await using var factory = _fixture.CreateFactory(connectionString, authenticated: true);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithCsrf();
         var alice = await RegisterAndSignInAsync(factory, client, NewEmail());
         var bob = await RegisterAndSignInAsync(factory, client, NewEmail());
 
@@ -63,7 +63,7 @@ public sealed class AuthenticatedModePipelineTests : IClassFixture<AuthApiFixtur
     {
         var connectionString = await _fixture.CreateDatabaseAsync();
         await using var factory = _fixture.CreateFactory(connectionString, authenticated: true, testScheme: true);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithCsrf();
         var subject = Guid.NewGuid().ToString();
         var email = NewEmail();
 
@@ -86,7 +86,7 @@ public sealed class AuthenticatedModePipelineTests : IClassFixture<AuthApiFixtur
     {
         var connectionString = await _fixture.CreateDatabaseAsync();
         await using var factory = _fixture.CreateFactory(connectionString, authenticated: true, testScheme: true);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithCsrf();
         var subject = Guid.NewGuid().ToString();
         var email = NewEmail();
         using var gate = new ManualResetEventSlim(false);
@@ -116,7 +116,7 @@ public sealed class AuthenticatedModePipelineTests : IClassFixture<AuthApiFixtur
     {
         var connectionString = await _fixture.CreateDatabaseAsync();
         await using var factory = _fixture.CreateFactory(connectionString, authenticated: true, testScheme: true);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithCsrf();
         var victim = await SendWithTestIdentityAsync(client, HttpMethod.Post, "/api/v2/projects", Guid.NewGuid().ToString(), NewEmail(), new CreateProjectRequest("Víctima", null));
         var victimId = (await victim.Content.ReadFromJsonAsync<ProjectResponse>())!.OwnerId;
 
@@ -138,7 +138,7 @@ public sealed class AuthenticatedModePipelineTests : IClassFixture<AuthApiFixtur
     {
         var connectionString = await _fixture.CreateDatabaseAsync();
         await using var factory = _fixture.CreateFactory(connectionString, authenticated: true, testScheme: true);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithCsrf();
         var usersBefore = await _fixture.ScalarAsync<long>(connectionString, "SELECT count(*) FROM users");
 
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v2/projects");
@@ -154,7 +154,7 @@ public sealed class AuthenticatedModePipelineTests : IClassFixture<AuthApiFixtur
     {
         var connectionString = await _fixture.CreateDatabaseAsync();
         await using var factory = _fixture.CreateFactory(connectionString, authenticated: true);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithCsrf();
 
         var health = await client.GetAsync("/health");
         var register = await client.PostAsJsonAsync(AuthEndpoints.RegisterPath, new RegisterRequest(NewEmail(), Password));
@@ -175,7 +175,7 @@ public sealed class AuthenticatedModePipelineTests : IClassFixture<AuthApiFixtur
     {
         var connectionString = await _fixture.CreateDatabaseAsync();
         await using var factory = _fixture.CreateFactory(connectionString);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithCsrf();
 
         var created = await client.PostAsJsonAsync("/api/v2/projects", new CreateProjectRequest("Sin sesión", null));
         var list = await client.GetAsync("/api/v2/projects");
@@ -195,7 +195,7 @@ public sealed class AuthenticatedModePipelineTests : IClassFixture<AuthApiFixtur
     {
         var connectionString = await _fixture.CreateDatabaseAsync();
         await using var factory = _fixture.CreateFactory(connectionString);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateClient().WithCsrf();
         var session = await RegisterAndSignInAsync(factory, client, NewEmail());
 
         var created = await SendAsync(client, HttpMethod.Post, "/api/v2/projects", session.Cookie, new CreateProjectRequest("Con cookie en modo dev", null));

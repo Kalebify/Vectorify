@@ -112,7 +112,7 @@ builder.Services.AddScoped<IDatabaseHealthChecker, DatabaseHealthChecker>();
 // M3.1-S02: la sesión es una cookie, así que la política pasa a CORS CON CREDENCIALES (T8 del ADR): orígenes
 // explícitos (sin comodines, validados al arrancar por FrontendCorsOptions) y cabeceras/métodos enumerados -- ya no
 // AllowAnyHeader/AllowAnyMethod, que junto a AllowCredentials ampliarían la superficie. Cabeceras: las que el frontend
-// envía hoy (Content-Type, Accept, Idempotency-Key) y el correlation ID; métodos: los que la API expone (GET/POST/PATCH/DELETE).
+// envía hoy (Content-Type, Accept, Idempotency-Key), el correlation ID y, desde M3.1-S03, X-Vectorify-Request (CsrfGuard); métodos: los que la API expone (GET/POST/PATCH/DELETE).
 builder.Services
     .AddOptions<FrontendCorsOptions>()
     .Bind(builder.Configuration.GetSection(FrontendCorsOptions.SectionName))
@@ -127,9 +127,10 @@ builder.Services
     .Configure<IOptions<FrontendCorsOptions>>((cors, frontend) =>
         cors.AddPolicy(FrontendCorsOptions.PolicyName, policy => policy
             .WithOrigins(frontend.Value.GetOrigins())
-            .WithHeaders("Content-Type", "Accept", ProjectEndpoints.IdempotencyHeaderName, CorrelationIdMiddleware.HeaderName)
+            .WithHeaders("Content-Type", "Accept", ProjectEndpoints.IdempotencyHeaderName, CorrelationIdMiddleware.HeaderName, CsrfGuardMiddleware.HeaderName)
             .WithMethods("GET", "POST", "PATCH", "DELETE")
             .AllowCredentials()
+            .SetPreflightMaxAge(TimeSpan.FromMinutes(10)) // el cliente envía X-Vectorify-Request en todo fetch: sin esto cada GET cross-origin duplicaría requests
             .WithExposedHeaders(CorrelationIdMiddleware.HeaderName)));
 
 // Carga y almacenamiento de imágenes (M1-S02): validación configurable (Upload:*),
@@ -704,6 +705,14 @@ app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseMiddleware<DependencyFailureMiddleware>();
 
 app.UseCors(FrontendCorsOptions.PolicyName);
+
+// CSRF (M3.1-S03, T3): en Auth:Mode=Authenticated exige X-Vectorify-Request + Origin permitido en todo método no seguro (403 si
+// falta o es ajeno). DESPUÉS de CORS (el 403 lleva sus cabeceras y el preflight ya se resolvió) y ANTES de autenticar. En modo
+// Development no se aplica (sin sesiones: el flujo de desarrollo y los E2E anónimos siguen igual).
+app.UseMiddleware<CsrfGuardMiddleware>();
+
+// Red de seguridad hasta S06: una request sin sesión que llega a IUserContext (falla cerrado) responde 401 y no 500.
+app.UseMiddleware<UnauthenticatedUserMiddleware>();
 
 if (app.Environment.IsDevelopment())
 {

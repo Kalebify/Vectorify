@@ -5,6 +5,27 @@
 
 export const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:5080";
 
+/**
+ * Cabecera anti-CSRF (M3.1-S03, T3): la sesión es una cookie, y el backend (modo Authenticated) exige esta cabecera
+ * personalizada en todo método no seguro, junto con un Origin permitido. Un formulario o una imagen de otro sitio no pueden
+ * añadirla. Se envía en TODA request del cliente (no cuesta nada y evita decidir por método).
+ */
+export const CSRF_HEADER_NAME = "X-Vectorify-Request";
+export const CSRF_HEADER_VALUE = "1";
+
+/**
+ * Añade la cabecera anti-CSRF a las cabeceras de una request conservando la forma en que el llamador las pasó
+ * (objeto plano, Headers o lista de pares).
+ */
+function withCsrfHeader(headers: HeadersInit): HeadersInit {
+  if (headers instanceof Headers || Array.isArray(headers)) {
+    const merged = new Headers(headers);
+    merged.set(CSRF_HEADER_NAME, CSRF_HEADER_VALUE);
+    return merged;
+  }
+  return { ...headers, [CSRF_HEADER_NAME]: CSRF_HEADER_VALUE };
+}
+
 export class ApiClientError extends Error {
   readonly cause?: unknown;
   /** Cuerpo de error tipado (ApiErrorResponse) cuando la Web API respondió 4xx/5xx con JSON. */
@@ -35,8 +56,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
-      headers: { Accept: "application/json" },
       ...init,
+      // Sesión por cookie HttpOnly (M3.1-S03): el navegador debe enviarla y aceptarla también hacia otro origen (CORS con
+      // credenciales en el backend). Va DESPUÉS de ...init a propósito: ningún llamador puede desactivarla por accidente.
+      credentials: "include",
+      // Cabeceras por defecto (Accept) solo si el llamador no pasó las suyas, como antes; la cabecera anti-CSRF siempre.
+      headers: withCsrfHeader(init?.headers ?? { Accept: "application/json" }),
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
@@ -126,7 +151,10 @@ export function uploadFile<T>(path: string, file: File, options?: UploadFileOpti
     formData.append(fieldName, file);
 
     xhr.open("POST", url);
+    // Misma política que `request`: cookie de sesión también hacia otro origen y cabecera anti-CSRF (M3.1-S03).
+    xhr.withCredentials = true;
     xhr.setRequestHeader("Accept", "application/json");
+    xhr.setRequestHeader(CSRF_HEADER_NAME, CSRF_HEADER_VALUE);
     for (const [key, value] of Object.entries(options?.headers ?? {})) {
       xhr.setRequestHeader(key, value);
     }

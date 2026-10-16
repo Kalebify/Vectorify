@@ -16,6 +16,8 @@ export class FakeXMLHttpRequest {
   responseText = "";
   url = "";
   aborted = false;
+  /** Réplica de XMLHttpRequest.withCredentials: uploadFile debe activarlo (cookie de sesión, M3.1-S03). */
+  withCredentials = false;
 
   private readonly headers: Record<string, string> = {};
 

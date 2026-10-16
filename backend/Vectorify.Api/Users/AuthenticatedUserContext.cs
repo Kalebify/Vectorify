@@ -47,22 +47,7 @@ public sealed class AuthenticatedUserContext : IUserContext
                 "La request no tiene un usuario autenticado y resuelto (falta la identidad interna). " +
                 "Los endpoints deben exigir autorización (401) antes de llegar acá.");
 
-    private bool TryGetUserId(out Guid userId)
-    {
-        userId = Guid.Empty;
-        var principal = _principal();
-        if (principal?.Identity?.IsAuthenticated != true)
-        {
-            return false;
-        }
-
-        var raw = principal.Identities
-            .Where(i => i.AuthenticationType == VectorifyClaimTypes.InternalAuthenticationType && i.IsAuthenticated)
-            .Select(i => i.FindFirst(VectorifyClaimTypes.InternalUserId)?.Value)
-            .FirstOrDefault(v => v is not null);
-
-        return Guid.TryParse(raw, out userId) && userId != Guid.Empty;
-    }
+    private bool TryGetUserId(out Guid userId) => InternalIdentityReader.TryGetUserId(_principal(), out userId);
 }
 
 /// <summary>Se pidió el usuario efectivo sin identidad resuelta: es un error de cableado (faltó exigir autorización), nunca un caso de uso.</summary>

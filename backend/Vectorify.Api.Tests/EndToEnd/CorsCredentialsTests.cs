@@ -52,6 +52,9 @@ public sealed class CorsCredentialsTests : IDisposable
     [InlineData("POST", "content-type,idempotency-key")]
     [InlineData("PATCH", "content-type,x-correlation-id")]
     [InlineData("DELETE", "x-correlation-id")]
+    [InlineData("POST", "content-type,x-vectorify-request")]
+    [InlineData("PATCH", "content-type,x-vectorify-request,idempotency-key")]
+    [InlineData("DELETE", "x-vectorify-request")]
     public async Task Preflight_ForWhatTheFrontendSendsToday_IsAccepted(string method, string headers)
     {
         using var client = _factory.CreateClient();
@@ -99,6 +102,23 @@ public sealed class CorsCredentialsTests : IDisposable
             : string.Empty;
         Assert.DoesNotContain(method, allowed, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("*", allowed);
+    }
+
+    [Fact]
+    public async Task Preflight_ForTheCsrfHeader_IsAccepted_AndCachedByTheBrowser_ForLoginAndLogout()
+    {
+        using var client = _factory.CreateClient();
+
+        foreach (var path in new[] { "/api/v1/auth/login", "/api/v1/auth/logout", "/api/v1/auth/me", "/api/v2/projects" })
+        {
+            var response = await client.SendAsync(Preflight(path, "POST", "content-type,x-vectorify-request"));
+
+            Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+            Assert.Contains("x-vectorify-request", string.Join(",", response.Headers.GetValues("Access-Control-Allow-Headers")), StringComparison.OrdinalIgnoreCase);
+            Assert.Equal("true", Assert.Single(response.Headers.GetValues("Access-Control-Allow-Credentials")));
+            // El cliente envía la cabecera en TODO fetch: el preflight se cachea para no duplicar cada GET cross-origin.
+            Assert.Equal("600", Assert.Single(response.Headers.GetValues("Access-Control-Max-Age")));
+        }
     }
 
     [Fact]
