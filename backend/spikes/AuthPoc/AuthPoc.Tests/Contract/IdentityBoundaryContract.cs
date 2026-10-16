@@ -8,6 +8,9 @@ using Vectorify.Api.ProjectManagement;
 using Vectorify.Api.Projects.Persistence;
 using Vectorify.Api.Users;
 
+// El producto (M3.1-S02) tiene un AuthenticatedUserContext homonimo: aqui se prueba el del PoC.
+using AuthenticatedUserContext = AuthPoc.Users.AuthenticatedUserContext;
+
 namespace AuthPoc.Tests.Contract;
 
 /// <summary>

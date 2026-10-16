@@ -5,6 +5,9 @@ using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
 using Vectorify.Api.Data;
 
+// El producto (M3.1-S02) tiene un UserIdentity homonimo: aqui manda el del PoC (esquema poc_auth).
+using UserIdentity = AuthPoc.Persistence.UserIdentity;
+
 namespace AuthPoc.Users;
 
 /// <summary>Resultado de <see cref="IUserProvisioner.EnsureUserAsync"/>.</summary>

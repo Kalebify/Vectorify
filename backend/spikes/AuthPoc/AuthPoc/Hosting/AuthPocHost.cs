@@ -11,6 +11,11 @@ using Vectorify.Api.ProjectManagement;
 using Vectorify.Api.Projects.Persistence;
 using Vectorify.Api.Users;
 
+// Desde M3.1-S02 el producto tiene tipos con el mismo nombre (copiados de este PoC): aqui mandan los del PoC.
+using AuthenticatedUserContext = AuthPoc.Users.AuthenticatedUserContext;
+using IUserProvisioner = AuthPoc.Users.IUserProvisioner;
+using UserProvisioner = AuthPoc.Users.UserProvisioner;
+
 namespace AuthPoc.Hosting;
 
 /// <summary>

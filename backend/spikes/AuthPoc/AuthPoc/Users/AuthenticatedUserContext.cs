@@ -2,6 +2,9 @@ using System.Security.Claims;
 using AuthPoc.Identity;
 using Vectorify.Api.Users;
 
+// El producto (M3.1-S02) tiene un VectorifyClaimTypes homonimo: aqui manda el del PoC.
+using VectorifyClaimTypes = AuthPoc.Identity.VectorifyClaimTypes;
+
 namespace AuthPoc.Users;
 
 /// <summary>

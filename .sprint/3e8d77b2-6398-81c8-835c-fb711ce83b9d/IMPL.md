@@ -36,7 +36,7 @@ Tests modificados: `UserContextRegistrationTests`, `UserContextArchitectureTests
 
 ## No verificado / pendiente
 - `.env.example` no se pudo modificar (regla de denegación del entorno sobre ese archivo): ver las 4 variables a añadir a mano en el comentario de Notion.
-- El PoC `backend/spikes/AuthPoc` dejó de compilar (6 CS0104 por tipos con el mismo nombre que los copiados al producto). No está en la solución ni en la imagen. El ADR lo quería vivo hasta S10: hace falta decidir arreglarlo o retirarlo.
+- El PoC `backend/spikes/AuthPoc` dejó de compilar (7 CS0104 por tipos con el mismo nombre que los copiados al producto). ARREGLADO después por el orquestador con alias `using` en 4 archivos (AuthPocHost, AuthenticatedUserContext, UserProvisioner, IdentityBoundaryContract): `AuthPoc.Tests` 38/38 verdes en net10.0.
 - En modo `Authenticated` los endpoints existentes no tienen `RequireAuthorization` (S06): una request anónima lanza `UnauthenticatedUserException` (falla cerrado). El flujo clásico `/api/v1/projects/...` sigue sin comprobar dueño.
 - Login, cookie emitida por el servidor y revalidación de `SecurityStamp` (S03/S04). Timing de registro existente/no existente no medido (T5 [N]).
 - `npm test` / `npm run build`: sin cambios de frontend, no se corrieron.
