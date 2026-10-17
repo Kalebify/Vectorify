@@ -1,0 +1,16 @@
+{
+  "card_id": "3e8d77b2-6398-81e1-ac16-f85c9543a936",
+  "card_url": "https://app.notion.com/p/3e8d77b2639881e1ac16f85c9543a936",
+  "title": "M3.1-S05 · React Auth State + rutas protegidas",
+  "stack": "Frontend -- React 19 + TypeScript + Vite existentes; backend Identity + cookie (S02-S04)",
+  "branch": "sprint/3e8d77b2-m31-s05-react-auth",
+  "column": "Doing",
+  "phase": "design",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "started_at": "2026-10-18T00:00:00Z",
+  "exceptions": [
+    "Sin preview de Vercel: la verificacion visual se hace con la pila local aislada (docker compose -p) en modo Authenticated y el navegador integrado; Lighthouse solo si es viable en local.",
+    "La rama se corta de sprint/3e8d77b2-m31-s04-sesiones (apilada: PR #65 .NET 10 -> S02 -> S03 -> S04 -> S05); los merges los hace el usuario."
+  ]
+}
