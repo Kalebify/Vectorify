@@ -19,5 +19,7 @@ public sealed record LoginRequest(string? Email, string? Password, bool? Remembe
 /// <summary>
 /// Usuario actual (M3.1-S03): respuesta de <c>GET /api/v1/auth/me</c> y de un login correcto. <see cref="Id"/> es el
 /// <c>Users.Id</c> INTERNO que el servidor resolvió desde la identidad verificada de la cookie, nunca algo enviado por el cliente.
+/// <see cref="AuthMode"/> (M3.1-S05) es el nombre de <c>Auth:Mode</c> (<c>Authenticated</c> o <c>Development</c>): en <c>Development</c> no hay
+/// login y la SPA oculta el formulario y «Salir» (ver <c>GET /api/v1/auth/me</c>).
 /// </summary>
-public sealed record CurrentUserResponse(Guid Id, string? Email, string DisplayName);
+public sealed record CurrentUserResponse(Guid Id, string? Email, string DisplayName, string AuthMode);

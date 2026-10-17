@@ -38,6 +38,8 @@ interface ProjectsDashboardProps {
   onOpenProject: (location: WorkspaceLocation) => void;
   /** Avisos de App (deep-link inválido, "Continuar donde quedaste") que se muestran arriba de todo. */
   notices?: ReactNode;
+  /** Slot del menú de cuenta (M3.1-S05): lo inyecta quien compone la app; esta pantalla no conoce la autenticación. */
+  accountSlot?: ReactNode;
   pageSize?: number;
 }
 
@@ -104,6 +106,7 @@ export function ProjectsDashboard({
   onNewProject,
   onOpenProject,
   notices,
+  accountSlot,
   pageSize = PROJECTS_PAGE_SIZE,
 }: ProjectsDashboardProps) {
   const [searchInput, setSearchInput] = useState("");
@@ -347,9 +350,12 @@ export function ProjectsDashboard({
     <div className="projects-dashboard">
       <header className="projects-header">
         <h1 className="projects-header__brand">VECTORiZE</h1>
-        <button type="button" className="upload-actions__button upload-actions__button--primary" onClick={onNewProject}>
-          New Project
-        </button>
+        <div className="projects-header__actions">
+          <button type="button" className="upload-actions__button upload-actions__button--primary" onClick={onNewProject}>
+            New Project
+          </button>
+          {accountSlot}
+        </div>
       </header>
 
       <main className="projects-main">

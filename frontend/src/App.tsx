@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { getColorPalette } from "./api/colorPaletteApi";
 import { ApiClientError } from "./api/httpClient";
 import { getOriginalImageUrl, getProjectImage } from "./api/projectsApi";
@@ -199,7 +199,15 @@ function buildExportSources(
   return sources;
 }
 
-function App() {
+interface AppProps {
+  /**
+   * Menú de cuenta (M3.1-S05), construido por quien compone la app (AppRoot) y colocado acá en las cabeceras de producto. App no
+   * importa nada del módulo de autenticación: solo sabe dónde ubicar este slot.
+   */
+  userMenu?: ReactNode;
+}
+
+function App({ userMenu }: AppProps = {}) {
   const { status, response, errorMessage, lastCheckedAt } = useSystemHealth();
   const [activeProject, setActiveProject] = useState<UploadImageResponse | null>(null);
   const [confirmedPalette, setConfirmedPalette] = useState<ColorPaletteResponse | null>(null);
@@ -514,6 +522,7 @@ function App() {
         savedProjectId={savedProjectId}
         dimensionId={readyDimension?.dimensionId ?? null}
         dimensionWidthMm={readyDimension?.widthMm ?? null}
+        accountSlot={userMenu}
         onSaved={(newSavedProjectId) => {
           setSavedProjectId(newSavedProjectId);
           // Agrega savedProjectId a la URL SIN recargar la página (M2.2-S05, "Reapertura") --
@@ -575,6 +584,7 @@ function App() {
         onNewProject={handleNewProject}
         onOpenProject={handleOpenSavedProject}
         notices={workspaceNotices}
+        accountSlot={userMenu}
       />
     );
   }
@@ -596,6 +606,7 @@ function App() {
           >
             Mis proyectos
           </a>
+          {userMenu}
         </nav>
       </header>
 

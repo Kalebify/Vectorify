@@ -875,3 +875,29 @@ describe("ProjectsDashboard — avisos de App", () => {
     await screen.findByText("Todavía no tenés proyectos");
   });
 });
+
+describe("ProjectsDashboard — slot de cuenta (M3.1-S05)", () => {
+  it("coloca el slot en el header, después de «New Project», sin que la pantalla conozca la autenticación", async () => {
+    installProjectsApi([]);
+    render(
+      <ProjectsDashboard
+        onNewProject={vi.fn()}
+        onOpenProject={vi.fn()}
+        accountSlot={<button type="button">Cuenta de prueba</button>}
+      />,
+    );
+
+    const slot = await screen.findByRole("button", { name: "Cuenta de prueba" });
+    const newProject = screen.getByRole("button", { name: "New Project" });
+    expect(within(screen.getByRole("banner")).getByRole("button", { name: "Cuenta de prueba" })).toBe(slot);
+    expect(newProject.compareDocumentPosition(slot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("sin slot el header queda como antes (solo «New Project»)", async () => {
+    installProjectsApi([]);
+    renderDashboard();
+
+    await screen.findByRole("heading", { name: "Mis proyectos" });
+    expect(within(screen.getByRole("banner")).getAllByRole("button")).toHaveLength(1);
+  });
+});

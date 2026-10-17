@@ -24,9 +24,17 @@ export interface LoginRequest {
   rememberMe?: boolean;
 }
 
+/**
+ * Valor de `Auth:Mode` del servidor (M3.1-S05). `Development`: usuario de desarrollo fijo, sin login (la UI oculta formularios y «Salir»);
+ * `Authenticated`: sesión real por cookie.
+ */
+export type AuthMode = "Authenticated" | "Development";
+
 /** Usuario actual: `id` es el Users.Id INTERNO que resolvió el servidor desde la cookie verificada. */
 export interface CurrentUser {
   id: string;
   email: string | null;
   displayName: string;
+  /** Modo de autenticación del servidor (M3.1-S05). Un servidor anterior que no lo envíe se interpreta como `Authenticated`. */
+  authMode: AuthMode;
 }

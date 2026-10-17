@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useCanvasTransform } from "../../hooks/useCanvasTransform";
 import { useClipboard } from "../../hooks/useClipboard";
 import { describeEditFailure, useDrawEraseTools } from "../../hooks/useDrawEraseTools";
@@ -196,6 +196,8 @@ export interface EditorShellProps {
   historyLimit?: number;
   /** Puntos de inyección del export (M3-S15): la descarga (Blob + `<a download>`), el rasterizado del PNG (`<canvas>`) y el cede-control entre layers. Inyectables en tests. */
   exportSeams?: { download?: DownloadFile; rasterize?: Rasterizer; yieldToEventLoop?: () => Promise<void> };
+  /** Slot del menú de cuenta (M3.1-S05): lo construye quien compone la app; el Workspace solo lo coloca al final de las acciones del header, sin conocer la autenticación. */
+  accountSlot?: ReactNode;
 }
 
 const EMPTY_LAYERS: VectorDocumentLayer[] = [];
@@ -339,6 +341,7 @@ export function EditorShell({
   createId,
   historyLimit,
   exportSeams,
+  accountSlot,
 }: EditorShellProps) {
   // M2.2-S07: `useVectorDocument`/`useManufacturingOperations` necesitan `trackPatch` (expuesto
   // por `useWorkspaceSave`, declarado más abajo) para conectar cada PATCH-por-edición al
@@ -1956,6 +1959,7 @@ export function EditorShell({
         onToggleLaserCheck={status === "ready" && document ? () => (laserCheckOpen ? closeLaserCheck() : setLaserCheckOpen(true)) : undefined}
         exportOpen={exportOpen}
         onExport={status === "ready" && document ? () => setExportOpen(true) : undefined}
+        accountSlot={accountSlot}
       />
       {historyOpen && (
         <HistoryPanel

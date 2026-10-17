@@ -283,6 +283,7 @@ public sealed class AuthLoginLogoutTests : IClassFixture<AuthApiFixture>, IAsync
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(loggedIn, await response.Content.ReadFromJsonAsync<CurrentUserResponse>());
+        Assert.Equal("Authenticated", loggedIn.AuthMode); // M3.1-S05: el indicador de modo viaja en login y en me
         var raw = await response.Content.ReadAsStringAsync();
         Assert.DoesNotContain("passwordHash", raw, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("securityStamp", raw, StringComparison.OrdinalIgnoreCase);
@@ -684,7 +685,7 @@ public sealed class AuthLoginLogoutTests : IClassFixture<AuthApiFixture>, IAsync
     }
 
     [Fact]
-    public async Task DevelopmentMode_MeReflectsTheCookie_WhileTheProjectsStayThoseOfTheDevelopmentUser()
+    public async Task DevelopmentMode_MeReturnsTheDevelopmentUser_WithoutLoginOrCookie_AndIgnoresAnyCookie_WhileTheProjectsStayThoseOfTheDevelopmentUser()
     {
         await using var factory = _fixture.CreateFactory(_connectionString, settings: ImmediateRevalidation);
         using var client = factory.CreateClient(NoCookieJar);
@@ -693,6 +694,9 @@ public sealed class AuthLoginLogoutTests : IClassFixture<AuthApiFixture>, IAsync
         var login = await client.PostAsJsonAsync(AuthEndpoints.LoginPath, new LoginRequest(email, Password));
         var cookie = CookieOf(login);
 
+        // M3.1-S05: en Development /me NO depende de la cookie. Sin cookie y con cookie responde el MISMO usuario de desarrollo
+        // (el dueño real de los datos en este modo), con authMode=Development.
+        var meWithoutCookie = await client.GetAsync(AuthEndpoints.MePath);
         using var meRequest = new HttpRequestMessage(HttpMethod.Get, AuthEndpoints.MePath);
         meRequest.Headers.Add("Cookie", cookie);
         var me = await client.SendAsync(meRequest);
@@ -700,10 +704,32 @@ public sealed class AuthLoginLogoutTests : IClassFixture<AuthApiFixture>, IAsync
         createRequest.Headers.Add("Cookie", cookie);
         var created = await client.SendAsync(createRequest);
 
+        Assert.Equal(HttpStatusCode.OK, meWithoutCookie.StatusCode);
+        var devUser = (await meWithoutCookie.Content.ReadFromJsonAsync<CurrentUserResponse>())!;
+        Assert.Equal(DevelopmentUserOptions.DefaultUserId, devUser.Id);
+        Assert.Equal("Development", devUser.AuthMode);
+        Assert.False(string.IsNullOrWhiteSpace(devUser.Email));
+        Assert.NotEqual(email, devUser.Email);
+        Assert.Empty(SessionCookieHeaders(meWithoutCookie));
+        Assert.StartsWith("no-store", meWithoutCookie.Headers.CacheControl?.ToString() ?? string.Empty, StringComparison.Ordinal);
+
         Assert.Equal(HttpStatusCode.OK, me.StatusCode);
-        Assert.Equal(email, (await me.Content.ReadFromJsonAsync<CurrentUserResponse>())!.Email);
+        Assert.Equal(devUser, await me.Content.ReadFromJsonAsync<CurrentUserResponse>());
         Assert.Equal(DevelopmentUserOptions.DefaultUserId, (await created.Content.ReadFromJsonAsync<ProjectResponse>())!.OwnerId);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync(AuthEndpoints.MePath)).StatusCode); // sin cookie: 401 también en dev
+    }
+
+    [Fact]
+    public async Task DevelopmentMode_Login_ReportsAuthModeDevelopment()
+    {
+        await using var factory = _fixture.CreateFactory(_connectionString, settings: ImmediateRevalidation);
+        using var client = factory.CreateClient(NoCookieJar);
+        var email = NewEmail();
+        await client.PostAsJsonAsync(AuthEndpoints.RegisterPath, new RegisterRequest(email, Password));
+
+        var login = await client.PostAsJsonAsync(AuthEndpoints.LoginPath, new LoginRequest(email, Password));
+
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+        Assert.Equal("Development", (await login.Content.ReadFromJsonAsync<CurrentUserResponse>())!.AuthMode);
     }
 
     // ------------------------------------------------------------------------------------------------ helpers

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { WorkspaceSaveState } from "../../hooks/useWorkspaceSave";
 import type { GeometrySaveState } from "../../hooks/useGeometrySave";
 
@@ -40,6 +41,8 @@ interface EditorHeaderProps {
   /** Diálogo de export (M3-S15). Sin `onExport` (documento sin cargar) el botón EXPORT queda deshabilitado. */
   exportOpen?: boolean;
   onExport?: () => void;
+  /** Slot del menú de cuenta (M3.1-S05): se coloca al final de las acciones; el header no sabe qué contiene. */
+  accountSlot?: ReactNode;
 }
 
 const DIRTY_STATE_COPY: Record<WorkspaceSaveState, string> = {
@@ -111,6 +114,7 @@ export function EditorHeader({
   onToggleLaserCheck,
   exportOpen = false,
   onExport,
+  accountSlot,
 }: EditorHeaderProps) {
   const isSaving = saveState === "saving" || geometrySaveState === "saving";
 
@@ -264,6 +268,7 @@ export function EditorHeader({
         >
           EXPORT
         </button>
+        {accountSlot && <div className="editor-header__account">{accountSlot}</div>}
       </div>
     </header>
   );

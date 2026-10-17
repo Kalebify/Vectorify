@@ -89,7 +89,10 @@ Sin «refresh» explícito: la SPA no hace nada para renovar; basta con seguir u
 | `POST /api/v1/auth/login` | anónimo | `{email, password, rememberMe?}` | 200 `CurrentUserResponse` + `Set-Cookie`; 401 uniforme; 400 si `rememberMe` no es booleano |
 | `POST /api/v1/auth/logout` | opcional | — | 204 (rota el stamp si había sesión) / 503 `logout_incomplete` |
 | `POST /api/v1/auth/logout-all` | **sesión** | — | 204 / 401 / 503 `logout_incomplete` |
-| `GET /api/v1/auth/me` | sesión | — | 200 / 401 |
+| `GET /api/v1/auth/me` | sesión (en modo Development, anónimo) | — | 200 `CurrentUserResponse` (incluye `authMode`) / 401 |
+
+**`/me` en modo Development (M3.1-S05).** Con `Auth:Mode=Development` no hay login: `/me` es anónimo y devuelve SIEMPRE el usuario de `IUserContext` (el usuario de desarrollo, dueño real de los datos en ese modo) con `authMode="Development"`, ignorando cualquier cookie.
+Así la SPA no queda bloqueada en la pantalla de login en desarrollo y puede ocultar «Salir» y mostrar la pastilla «Modo desarrollo». En modo `Authenticated` nada cambia: 401 sin identidad verificada. `login` también devuelve `authMode`.
 
 ## 8. Frontend: frontera de autenticación
 
@@ -99,7 +102,9 @@ Sin «refresh» explícito: la SPA no hace nada para renovar; basta con seguir u
 - El aviso se vuelve a armar (`rearmSessionBoundary`) tras un **login correcto** o un `GET /auth/me` con usuario (sesión nueva o restaurada). Un login fallido no lo rearma.
 - `me` ⇒ 401 es el estado normal sin sesión (`getCurrentUser` devuelve `null`) y no emite evento.
 - Si nadie está suscrito, un 401 no consume el aviso. Un suscriptor que lance una excepción no impide avisar a los demás.
-- **No incluye**: pantallas, contexto de React ni navegación a `/login` conservando la ruta (M3.1-S05, que se suscribe aquí). Sin persistencia: el estado vive en memoria y se pierde al recargar (correcto: el servidor es la fuente de verdad).
+- Esta frontera no navega por sí sola: la consume el `AuthProvider` de M3.1-S05 (`frontend/src/auth/`), que al recibir el evento pasa a «sin sesión» y lleva a `?view=login&returnUrl=…` con el aviso «Tu sesión terminó». Sin persistencia: el estado vive en memoria y se pierde al recargar (correcto: el servidor es la fuente de verdad).
+- **Estados de sesión en React (S05):** `unknown` (no se monta contenido privado: sin flash), `authenticated`, `unauthenticated` y `error`. Un fallo de red o 5xx al consultar `/me` es `error` («No pudimos comprobar tu sesión», con «Reintentar»; no cierra la sesión), nunca `unauthenticated`. 401 ⇒ sesión; 403 ⇒ prohibido/CSRF (no redirige a login).
+- **`returnUrl`**: solo ruta y consulta de la propia app (mismo origen), ≤ 2048 caracteres, sin `//`, esquemas, barras invertidas, fragmento ni vistas de login/registro; cualquier otro valor se ignora. Test de arquitectura: las pantallas de producto no importan `auth/` ni gestionan 401.
 - `authApi.login` envía `rememberMe` tal cual; `authApi.logoutAll()` llama al endpoint nuevo.
 
 ## 9. Límites conocidos y qué NO está verificado
@@ -111,6 +116,8 @@ Sin «refresh» explícito: la SPA no hace nada para renovar; basta con seguir u
 - **No se probó en navegadores reales**: `Secure`/`__Host-`/`SameSite=Lax` sobre `http://localhost`, comportamiento de `Max-Age`/`Expires` por navegador y restauración de sesión del navegador al reabrir. Solo se verificaron las cabeceras `Set-Cookie` y el comportamiento del servidor con `TestServer`.
 - **Verificado a mano con un compose aislado** (proyecto `vectorify-s04`, puertos distintos, `AUTH_MODE=Authenticated`): login con `rememberMe` ⇒ cookie con `expires` y `max-age=2591999`; `docker compose restart backend` y la **misma cookie** sigue dando 200 en `/auth/me`; el volumen contiene el key ring. En el mismo experimento, `logout-all` ⇒ 204 pero `/auth/me` con esa cookie seguía dando **200** justo después: es la ventana de §5 (la cookie se revalidó hace segundos), no un fallo.
   Con el compose en modo Development (sin login) los E2E anónimos `mvp3_release_e2e_test.mjs` (10/10) y `full_pipeline_e2e_test.mjs` (6/6) siguen pasando.
+- **Recorrido manual de S05** (2026-10-18, navegador integrado de Claude Desktop, compose aislado `vectorify-s05`, `AUTH_MODE=Authenticated`, SPA `:25173` contra API `:25080`): deep link sin sesión ⇒ login con aviso y `returnUrl`; registro ⇒ «Registro recibido» (sin mencionar correo); credenciales erróneas ⇒ mensaje uniforme; login ⇒ vuelta a la app (el deep link, con ids inexistentes, mostró el aviso propio del producto «el proyecto de esta URL ya no existe»); recargar mantiene la sesión; «Salir» ⇒ login con «Cerraste sesión» y Atrás no muestra contenido privado; sesión invalidada en el servidor + una petición de la SPA ⇒ 401 ⇒ login con «Tu sesión terminó»; backend detenido ⇒ «No pudimos comprobar tu sesión / Reintentar» (no login); `returnUrl=//evil.example.com/x` ⇒ ignorado; login a 375 px sin desbordamiento horizontal. Solo Chromium del panel; la consola solo muestra los 401/404 esperados que el navegador registra por sí mismo.
+  **No se verificó** en ese recorrido: «Cerrar sesión en todos lados» (diálogo), «Recordarme», registro con correo ya existente, axe/Lighthouse, 360/768/1920 px, zoom 200 %, teclado completo del menú, el Workspace/Editor real con sesión, ni otros navegadores.
 - **No se probó** un clúster con almacenamiento compartido, ni cambio de contraseña (no existe aún), ni carga/rendimiento de `RevalidationInterval=0`, ni `docker compose` con `ASPNETCORE_ENVIRONMENT=Production`.
 - El rate limiting del login y las cabeceras de seguridad (HSTS, CSP) son S09; el key ring sin cifrar en reposo, ver §6.
 - `Auth__Session__ClockSkew` solo acota el desfase *hacia el futuro* de los tickets emitidos; no corrige un reloj del servidor mal ajustado en general.

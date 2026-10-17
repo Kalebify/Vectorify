@@ -87,14 +87,18 @@ public static class AuthEndpoints
                 "Exige sesión válida (401 si no) y el mismo CSRF que el resto de métodos no seguros. Las demás cookies de la cuenta dejan de valer al revalidarse " +
                 "(Auth:Session:RevalidationInterval, 5 min por defecto; 0 = en cada request). Si la rotación falla: cookie de este navegador borrada y 503 logout_incomplete.");
 
+        // AllowAnonymous a propósito (M3.1-S05): en Auth:Mode=Development no hay login y la SPA necesita un 200 sin cookie; en modo
+        // Authenticated MeAsync responde 401 por sí mismo cuando no hay identidad verificada (mismo resultado que antes).
         app.MapGet(MePath, MeAsync)
-            .RequireAuthorization()
+            .AllowAnonymous()
             .WithName("GetCurrentUser")
             .WithTags("Auth")
             .Produces<CurrentUserResponse>(StatusCodes.Status200OK)
             .Produces(StatusCodes.Status401Unauthorized)
             .WithSummary("Usuario actual, resuelto SOLO desde la identidad verificada de la cookie.")
-            .WithDescription("401 sin sesión, con la cookie manipulada o tras cerrar sesión. Nada que envíe el cliente decide quién es.");
+            .WithDescription(
+                "Auth:Mode=Authenticated: 401 sin sesión, con la cookie manipulada o tras cerrar sesión; nada que envíe el cliente decide quién es. " +
+                "Auth:Mode=Development (solo entornos de desarrollo): 200 con el usuario de desarrollo (IUserContext) y authMode=Development, sin cookie.");
     }
 
     private static async Task<IResult> LoginAsync(
@@ -159,7 +163,8 @@ public static class AuthEndpoints
         await signIn.SignInAsync(account, SessionCookie.CreateProperties(rememberMe, time.GetUtcNow(), authOptions.Value.Cookie));
         logger.LogInformation("Login: sesión iniciada para la cuenta {AccountId} (persistente: {RememberMe}).", account.Id, rememberMe);
 
-        return Results.Ok(await LoadCurrentUserAsync(db, provisioned.UserId, account.Email, cancellationToken));
+        return Results.Ok(await LoadCurrentUserAsync(
+            db, provisioned.UserId, account.Email, authOptions.Value.Mode, cancellationToken));
     }
 
     private static async Task<IResult> LogoutAsync(
@@ -249,9 +254,20 @@ public static class AuthEndpoints
         ClaimsPrincipal principal,
         HttpContext http,
         VectorizationDbContext db,
+        IUserContext userContext,
+        Microsoft.Extensions.Options.IOptions<AuthOptions> authOptions,
         CancellationToken cancellationToken)
     {
         http.Response.Headers.CacheControl = "no-store";
+
+        // Auth:Mode=Development (M3.1-S05): no hay login; quien responde IUserContext es el usuario de desarrollo fijo. Se devuelve ESE
+        // usuario (el dueño real de los datos en este modo), con el indicador de modo para que la SPA oculte login/«Salir». Este modo
+        // solo existe en Development/Testing/Test (guardrail de arranque), así que nunca se alcanza en Production.
+        if (authOptions.Value.Mode == AuthMode.Development)
+        {
+            return Results.Ok(await LoadCurrentUserAsync(
+                db, userContext.GetEffectiveUserId(), userContext.Email, AuthMode.Development, cancellationToken));
+        }
 
         // El id sale SOLO de la identidad interna que agregó el servidor tras verificar la cookie (nunca de query, cuerpo ni cabeceras).
         if (!InternalIdentityReader.TryGetUserId(principal, out var userId))
@@ -260,18 +276,18 @@ public static class AuthEndpoints
         }
 
         var emailClaim = principal.FindFirst(ClaimTypes.Email)?.Value;
-        return Results.Ok(await LoadCurrentUserAsync(db, userId, emailClaim, cancellationToken));
+        return Results.Ok(await LoadCurrentUserAsync(db, userId, emailClaim, AuthMode.Authenticated, cancellationToken));
     }
 
     private static async Task<CurrentUserResponse> LoadCurrentUserAsync(
-        VectorizationDbContext db, Guid userId, string? fallbackEmail, CancellationToken cancellationToken)
+        VectorizationDbContext db, Guid userId, string? fallbackEmail, AuthMode mode, CancellationToken cancellationToken)
     {
         var user = await db.Users.AsNoTracking()
             .Where(u => u.Id == userId)
             .Select(u => new { u.Email, u.DisplayName })
             .SingleOrDefaultAsync(cancellationToken);
 
-        return new CurrentUserResponse(userId, user?.Email ?? fallbackEmail, user?.DisplayName ?? string.Empty);
+        return new CurrentUserResponse(userId, user?.Email ?? fallbackEmail, user?.DisplayName ?? string.Empty, mode.ToString());
     }
 
     private static IResult InvalidCredentials() =>

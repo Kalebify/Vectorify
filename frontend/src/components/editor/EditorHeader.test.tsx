@@ -258,3 +258,17 @@ describe("EditorHeader", () => {
     });
   });
 });
+
+describe("EditorHeader — slot de cuenta (M3.1-S05)", () => {
+  it("sin slot no agrega ningún contenedor de cuenta; con slot lo coloca al FINAL de las acciones, después de EXPORT", () => {
+    const { unmount } = renderHeader();
+    expect(document.querySelector(".editor-header__account")).toBeNull();
+    unmount();
+
+    renderHeader({ accountSlot: <button type="button">Cuenta de prueba</button> });
+    const slot = screen.getByRole("button", { name: "Cuenta de prueba" });
+    const exportButton = screen.getByRole("button", { name: /Exportar/ });
+    expect(slot.closest(".editor-header__actions")).not.toBeNull();
+    expect(exportButton.compareDocumentPosition(slot) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});

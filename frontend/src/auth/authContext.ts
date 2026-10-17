@@ -1,0 +1,59 @@
+import { createContext, useContext } from "react";
+import type { CurrentUser, LoginRequest } from "../types/auth";
+
+/**
+ * Estado de la sesión en el cliente (M3.1-S05):
+ *  - `unknown`: todavía no se sabe (primera consulta a `GET /api/v1/auth/me` en curso). Nunca se muestra contenido privado.
+ *  - `authenticated`: hay usuario (en modo Development, el usuario de desarrollo; ver `isDevelopmentMode`).
+ *  - `unauthenticated`: el servidor dijo 401. `returnUrl` = a dónde volver tras el login (null = Mis proyectos).
+ *  - `error`: no se pudo comprobar (red o 5xx). NO equivale a «sesión cerrada».
+ */
+export type AuthState =
+  | { status: "unknown" }
+  | { status: "authenticated"; user: CurrentUser }
+  | { status: "unauthenticated"; returnUrl: string | null }
+  | { status: "error"; failure: SessionFailure };
+
+export interface SessionFailure {
+  kind: "network" | "server";
+  /** Código HTTP si el servidor respondió (5xx u otro inesperado). */
+  httpStatus?: number;
+  /** Número del fallo (1, 2, ...): permite remontar el aviso para que se anuncie de nuevo aunque el texto sea idéntico. */
+  attempt: number;
+}
+
+/** Motivo de llegada al login que viaja EN MEMORIA (nunca en la URL: un enlace no puede fabricar un «Tu sesión terminó»). */
+export type AuthNotice = "expired" | "signed-out" | "signed-out-all" | "registered";
+
+export interface AuthContextValue {
+  state: AuthState;
+  /** Usuario actual, o null si no hay sesión resuelta. */
+  user: CurrentUser | null;
+  /** true si el servidor está en `Auth:Mode=Development`: sin login, sin «Salir». */
+  isDevelopmentMode: boolean;
+  notice: AuthNotice | null;
+  /** Correo del último registro recibido, para precargar el login (la contraseña nunca). */
+  registeredEmail: string | null;
+  /** true mientras un reintento de `/me` está en curso. */
+  isRetrying: boolean;
+  /** Vuelve a consultar la sesión (desde el estado `error`). */
+  retry: () => void;
+  /** Inicia sesión. Propaga el `ApiClientError` para que el formulario muestre el mensaje; no guarda credenciales. */
+  signIn: (request: LoginRequest, signal?: AbortSignal) => Promise<void>;
+  /** «Salir». Falla (propaga) ante red/5xx: la sesión NO se da por cerrada. Un 401 sí (ya no había sesión). */
+  signOut: () => Promise<void>;
+  /** «Cerrar sesión en todos lados». Un 401 equivale a sesión expirada. */
+  signOutAll: () => Promise<void>;
+  /** Recuerda en memoria que el registro fue recibido (aviso + correo precargado en el login). */
+  announceRegistered: (email: string) => void;
+}
+
+export const AuthContext = createContext<AuthContextValue | null>(null);
+
+export function useAuth(): AuthContextValue {
+  const value = useContext(AuthContext);
+  if (!value) {
+    throw new Error("useAuth debe usarse dentro de <AuthProvider>.");
+  }
+  return value;
+}
