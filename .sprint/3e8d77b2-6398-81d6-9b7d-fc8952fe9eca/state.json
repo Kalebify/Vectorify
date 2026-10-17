@@ -1,0 +1,16 @@
+{
+  "card_id": "3e8d77b2-6398-81d6-9b7d-fc8952fe9eca",
+  "card_url": "https://app.notion.com/p/3e8d77b2639881d69b7dfc8952fe9eca",
+  "title": "M3.1-S04 · Sesiones, cookies/tokens y renovación",
+  "stack": "ASP.NET Core, Frontend, Infra -- ASP.NET Core Identity + cookie (ADR confirmado), .NET 10",
+  "branch": "sprint/3e8d77b2-m31-s04-sesiones",
+  "column": "Doing",
+  "phase": "implement",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "started_at": "2026-10-17T00:00:00Z",
+  "exceptions": [
+    "Pipeline web-oriented del skill sprint no aplica: sin fase de diseño, sin preview ni Lighthouse; QA = dotnet build/test + npm test/build + revision del orquestador.",
+    "La rama se corta de sprint/3e8d77b2-m31-s03-login-logout (apilada: PR #65 .NET 10 -> S02 -> S03 -> S04); los merges los hace el usuario."
+  ]
+}
