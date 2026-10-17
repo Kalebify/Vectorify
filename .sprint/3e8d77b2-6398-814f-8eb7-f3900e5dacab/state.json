@@ -1,0 +1,17 @@
+{
+  "card_id": "3e8d77b2-6398-814f-8eb7-f3900e5dacab",
+  "card_url": "https://app.notion.com/p/3e8d77b26398814f8eb7f3900e5dacab",
+  "title": "M3.1-S06 · Autorización y aislamiento multiusuario",
+  "stack": "ASP.NET Core, Infra -- ASP.NET Core Identity + cookie (ADR confirmado), .NET 10",
+  "branch": "sprint/3e8d77b2-m31-s06-autorizacion",
+  "column": "Doing",
+  "phase": "implement",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "started_at": "2026-10-18T00:00:00Z",
+  "exceptions": [
+    "Pipeline web-oriented del skill sprint no aplica: sin UI ni preview; QA = dotnet build/test + revision del orquestador.",
+    "La rama se corta de sprint/3e8d77b2-m31-s05-react-auth (apilada: PR #65 .NET 10 -> S02 -> S03 -> S04 -> S05 -> S06); los merges los hace el usuario.",
+    "Tarjeta de mayor riesgo de regresion de MVP 3.1 (ADR): ~52 rutas del flujo clasico sin comprobacion de dueño."
+  ]
+}
