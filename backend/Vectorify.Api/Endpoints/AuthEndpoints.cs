@@ -22,6 +22,9 @@ public static class AuthEndpoints
     public const string RegisterPath = "/api/v1/auth/register";
     public const string LoginPath = "/api/v1/auth/login";
     public const string LogoutPath = "/api/v1/auth/logout";
+
+    /// <summary>«Cerrar sesión en todos lados» (M3.1-S04): requiere sesión y rota el SecurityStamp de la cuenta autenticada.</summary>
+    public const string LogoutAllPath = "/api/v1/auth/logout-all";
     public const string MePath = "/api/v1/auth/me";
 
     /// <summary>Código del 401 de login: IDÉNTICO para cuenta inexistente, contraseña errónea y cuenta bloqueada (T5/T6).</summary>
@@ -72,6 +75,18 @@ public static class AuthEndpoints
                 "Idempotente: sin sesión (o con la sesión ya caducada) responde 204 igual. La invalidación de copias de la cookie se " +
                 "aplica cuando cada copia se revalida (Auth:Session:RevalidationInterval, 5 min por defecto).");
 
+        app.MapPost(LogoutAllPath, LogoutAllAsync)
+            .RequireAuthorization()
+            .WithName("LogoutAll")
+            .WithTags("Auth")
+            .Produces(StatusCodes.Status204NoContent)
+            .Produces(StatusCodes.Status401Unauthorized)
+            .Produces<ApiErrorResponse>(StatusCodes.Status503ServiceUnavailable)
+            .WithSummary("Cierra la sesión en TODOS los navegadores: rota el SecurityStamp de la cuenta autenticada y borra la cookie de este.")
+            .WithDescription(
+                "Exige sesión válida (401 si no) y el mismo CSRF que el resto de métodos no seguros. Las demás cookies de la cuenta dejan de valer al revalidarse " +
+                "(Auth:Session:RevalidationInterval, 5 min por defecto; 0 = en cada request). Si la rotación falla: cookie de este navegador borrada y 503 logout_incomplete.");
+
         app.MapGet(MePath, MeAsync)
             .RequireAuthorization()
             .WithName("GetCurrentUser")
@@ -89,6 +104,8 @@ public static class AuthEndpoints
         SignInManager<ApplicationUser> signIn,
         IUserProvisioner provisioner,
         VectorizationDbContext db,
+        Microsoft.Extensions.Options.IOptions<AuthOptions> authOptions,
+        TimeProvider time,
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
@@ -136,9 +153,11 @@ public static class AuthEndpoints
             new ExternalIdentity(VectorifyClaimTypes.AspNetIdentityProvider, account.Id.ToString(), account.Email, DisplayName: null),
             cancellationToken);
 
-        // Sesión de navegador (sin «recordarme»: S04). Emite la cookie con los atributos de Auth:Cookie (HttpOnly, SameSite=Lax, Secure según opciones).
-        await signIn.SignInAsync(account, isPersistent: false);
-        logger.LogInformation("Login: sesión iniciada para la cuenta {AccountId}.", account.Id);
+        // Sin «recordarme»: cookie de sesión del navegador (caducidad deslizante por inactividad, Auth:Cookie:Lifetime). Con él: cookie
+        // persistente con tope ABSOLUTO (Auth:Cookie:RememberMeLifetime). Atributos de Auth:Cookie (HttpOnly, SameSite=Lax, Secure según opciones).
+        var rememberMe = request.RememberMe == true;
+        await signIn.SignInAsync(account, SessionCookie.CreateProperties(rememberMe, time.GetUtcNow(), authOptions.Value.Cookie));
+        logger.LogInformation("Login: sesión iniciada para la cuenta {AccountId} (persistente: {RememberMe}).", account.Id, rememberMe);
 
         return Results.Ok(await LoadCurrentUserAsync(db, provisioned.UserId, account.Email, cancellationToken));
     }
@@ -156,25 +175,7 @@ public static class AuthEndpoints
         // Decisión de S03 (ADR D3.7): el logout ROTA el SecurityStamp de la cuenta, así que cualquier copia de la cookie anterior
         // (robada, o de otra pestaña/dispositivo) deja de valer en cuanto se revalida (SecurityStampValidator, cada
         // Auth:Session:RevalidationInterval). Es "cerrar sesión en todos lados". En el navegador que hace logout la cookie se borra abajo.
-        var rotationFailed = false;
-        if (principal.Identity?.IsAuthenticated == true
-            && ClaimsIdentityReader.TryRead(principal, VectorifyClaimTypes.AspNetIdentityProvider, out var identity))
-        {
-            try
-            {
-                var account = await users.FindByIdAsync(identity.Subject);
-                if (account is not null)
-                {
-                    var rotated = await users.UpdateSecurityStampAsync(account);
-                    rotationFailed = !rotated.Succeeded;
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                logger.LogError(ex, "Logout: no se pudo rotar el SecurityStamp de la cuenta; la cookie se borra igualmente.");
-                rotationFailed = true;
-            }
-        }
+        var rotationFailed = await RotateSecurityStampAsync(principal, users, logger);
 
         // La cookie del navegador se borra SIEMPRE, incluso si la rotación falló.
         await signIn.SignOutAsync();
@@ -184,6 +185,64 @@ public static class AuthEndpoints
                 new ApiErrorResponse(LogoutIncompleteCode, "La sesión de este navegador se cerró, pero no se pudo invalidar el resto. Intentá de nuevo."),
                 statusCode: StatusCodes.Status503ServiceUnavailable)
             : Results.NoContent();
+    }
+
+    private static async Task<IResult> LogoutAllAsync(
+        ClaimsPrincipal principal,
+        HttpContext http,
+        UserManager<ApplicationUser> users,
+        SignInManager<ApplicationUser> signIn,
+        ILoggerFactory loggerFactory)
+    {
+        var logger = loggerFactory.CreateLogger("Vectorify.Api.Endpoints.AuthEndpoints");
+        http.Response.Headers.CacheControl = "no-store";
+
+        // Misma rotación que el logout (S03), pero como acción explícita y con sesión obligatoria (RequireAuthorization): quien llega acá
+        // está autenticado, y es SU cuenta (identidad de la cookie verificada) la que se rota; nada del cliente decide cuál.
+        var rotationFailed = await RotateSecurityStampAsync(principal, users, logger);
+        await signIn.SignOutAsync();
+
+        if (rotationFailed)
+        {
+            logger.LogWarning("Logout-all: no se pudo invalidar el resto de las sesiones.");
+            return Results.Json(
+                new ApiErrorResponse(LogoutIncompleteCode, "La sesión de este navegador se cerró, pero no se pudo invalidar el resto. Intentá de nuevo."),
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+
+        logger.LogInformation("Logout-all: sesiones de la cuenta invalidadas.");
+        return Results.NoContent();
+    }
+
+    /// <summary>
+    /// Rota el <c>SecurityStamp</c> de la cuenta del principal autenticado (invalida todas las cookies emitidas antes, al revalidarse).
+    /// Devuelve true si FALLÓ; false si se rotó o no había cuenta autenticada que rotar. Nunca lanza salvo cancelación.
+    /// </summary>
+    private static async Task<bool> RotateSecurityStampAsync(
+        ClaimsPrincipal principal, UserManager<ApplicationUser> users, ILogger logger)
+    {
+        if (principal.Identity?.IsAuthenticated != true
+            || !ClaimsIdentityReader.TryRead(principal, VectorifyClaimTypes.AspNetIdentityProvider, out var identity))
+        {
+            return false;
+        }
+
+        try
+        {
+            var account = await users.FindByIdAsync(identity.Subject);
+            if (account is null)
+            {
+                return false;
+            }
+
+            var rotated = await users.UpdateSecurityStampAsync(account);
+            return !rotated.Succeeded;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogError(ex, "No se pudo rotar el SecurityStamp de la cuenta; la cookie se borra igualmente.");
+            return true;
+        }
     }
 
     private static async Task<IResult> MeAsync(

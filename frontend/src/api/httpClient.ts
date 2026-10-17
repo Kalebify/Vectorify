@@ -3,6 +3,8 @@
  * Web API pasa por acá — el navegador nunca llama directamente a Python.
  */
 
+import { reportUnauthorized } from "./sessionBoundary";
+
 export const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:5080";
 
 /**
@@ -76,6 +78,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const body = await response.json().catch(() => undefined);
+    // Frontera de autenticación (M3.1-S04): un 401 fuera de /api/v1/auth/ = sesión caducada o revocada. Se notifica UNA vez
+    // (ver sessionBoundary) y el error se propaga igual: sin reintento automático de la request.
+    if (response.status === 401) {
+      reportUnauthorized(path);
+    }
     throw new ApiClientError(
       `La Web API respondió con código ${response.status} en ${path}`,
       { body, status: response.status },
@@ -175,6 +182,9 @@ export function uploadFile<T>(path: string, file: File, options?: UploadFileOpti
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(body as T);
       } else {
+        if (xhr.status === 401) {
+          reportUnauthorized(path);
+        }
         reject(new ApiClientError(`La Web API respondió con código ${xhr.status} en ${path}`, { body }));
       }
     };

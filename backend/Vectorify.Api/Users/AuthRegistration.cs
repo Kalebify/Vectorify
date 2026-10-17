@@ -1,5 +1,8 @@
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
+using Microsoft.AspNetCore.DataProtection.Repositories;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -19,6 +22,12 @@ namespace Vectorify.Api.Users;
 /// </summary>
 public static class AuthRegistration
 {
+    /// <summary>
+    /// Nombre de aplicación de Data Protection (aislamiento de propósito): FIJO, no el path del contenido (default), para que todas las
+    /// instancias y reinicios que comparten el key ring descifren la misma cookie. Cambiarlo invalida todas las sesiones.
+    /// </summary>
+    public const string DataProtectionApplicationName = "Vectorify";
+
     public static IServiceCollection AddVectorifyAuth(this IServiceCollection services, IConfiguration configuration)
     {
         services
@@ -64,12 +73,33 @@ public static class AuthRegistration
             identity.Lockout.DefaultLockoutTimeSpan = options.Lockout.Duration;
         });
 
-        services.AddOptions<SecurityStampValidatorOptions>().Configure<IOptions<AuthOptions>>(
-            (stamp, auth) => stamp.ValidationInterval = auth.Value.Session.RevalidationInterval);
-
-        services.AddOptions<CookieAuthenticationOptions>(IdentityConstants.ApplicationScheme).Configure<IOptions<AuthOptions>>(
-            (cookie, auth) =>
+        // Key ring PERSISTENTE (S04): sin él, cada reinicio de la API genera claves nuevas y TODAS las cookies de sesión dejan de
+        // descifrarse. La ruta se lee de forma diferida (respeta overrides de entorno y de WebApplicationFactory); vacía = default de
+        // ASP.NET (solo Development/Testing/Test, ver AuthOptionsValidator).
+        services.AddDataProtection().SetApplicationName(DataProtectionApplicationName);
+        services.AddOptions<KeyManagementOptions>().Configure<IOptions<AuthOptions>, ILoggerFactory>(
+            (keys, auth, loggerFactory) =>
             {
+                var path = auth.Value.DataProtection.KeysPath;
+                if (!string.IsNullOrWhiteSpace(path))
+                {
+                    keys.XmlRepository = new FileSystemXmlRepository(new DirectoryInfo(path), loggerFactory);
+                }
+            });
+
+        // El MISMO TimeProvider del host para el ticket de la cookie y para el validador del SecurityStamp: en producción es el reloj
+        // del sistema; los tests inyectan uno controlable para probar expiración y renovación sin dormir.
+        services.AddOptions<SecurityStampValidatorOptions>().Configure<IOptions<AuthOptions>, TimeProvider>(
+            (stamp, auth, time) =>
+            {
+                stamp.ValidationInterval = auth.Value.Session.RevalidationInterval;
+                stamp.TimeProvider = time;
+            });
+
+        services.AddOptions<CookieAuthenticationOptions>(IdentityConstants.ApplicationScheme).Configure<IOptions<AuthOptions>, TimeProvider>(
+            (cookie, auth, time) =>
+            {
+                cookie.TimeProvider = time;
                 var options = auth.Value.Cookie;
                 cookie.Cookie.Name = options.Name;
                 cookie.Cookie.HttpOnly = true;               // JavaScript (XSS) no puede leer la sesión
@@ -78,6 +108,14 @@ public static class AuthRegistration
                 cookie.Cookie.Path = "/";
                 cookie.ExpireTimeSpan = options.Lifetime;
                 cookie.SlidingExpiration = true;
+
+                // Ciclo de vida de la sesión (S04): tope absoluto de «recordarme», revalidación acotada por el desfase de reloj y
+                // Max-Age en la cookie persistente. AddIdentityCookies ya fijó OnValidatePrincipal = validador de SecurityStamp.
+                var securityStampValidator = cookie.Events.OnValidatePrincipal;
+                var sessionOptions = auth.Value.Session;
+                cookie.Events.OnValidatePrincipal = context =>
+                    SessionCookie.ValidatePrincipalAsync(context, securityStampValidator, sessionOptions, time);
+                cookie.Events.OnSigningIn = context => SessionCookie.OnSigningIn(context, time);
 
                 // Una API no redirige a una página de login: responde 401/403 y que la SPA decida.
                 cookie.Events.OnRedirectToLogin = context =>

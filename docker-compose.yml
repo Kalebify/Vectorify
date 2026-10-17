@@ -49,6 +49,11 @@ services:
       # declarar un volumen por subcarpeta. Sin este volumen se pierden en cada
       # `docker compose down`/restart.
       - vectorify_backend_data:/app/App_Data
+      # Key ring de Data Protection (M3.1-S04): con él se cifra la cookie de sesión. Volumen PROPIO y separado de App_Data a propósito:
+      # es un SECRETO (quien lo lee puede forjar sesiones) con otra política de acceso y de respaldo que los datos de usuario
+      # (scripts/backup.* NO lo incluyen; ver docs/AUTH_SESSION_LIFECYCLE.md). Si se pierde, todas las sesiones dejan de valer
+      # (la gente vuelve a iniciar sesión); nada más se rompe. Sin este volumen, cada recreación del contenedor las invalidaría.
+      - vectorify_dataprotection_keys:/var/lib/vectorify/dataprotection-keys
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
       ASPNETCORE_URLS: http://+:8080
@@ -66,6 +71,14 @@ services:
       Auth__Cookie__Name: ${AUTH_COOKIE_NAME:-vectorify.session}
       Auth__Cookie__SecurePolicy: ${AUTH_COOKIE_SECURE_POLICY:-SameAsRequest}
       Auth__Password__MinLength: ${AUTH_PASSWORD_MIN_LENGTH:-12}
+      # Sesión (M3.1-S04, ver docs/AUTH_SESSION_LIFECYCLE.md). Lifetime = inactividad máxima (deslizante); RememberMeLifetime = tope
+      # ABSOLUTO de «recordarme»; RevalidationInterval = ventana máxima en que una sesión revocada sigue viva en otro navegador.
+      Auth__Cookie__Lifetime: ${AUTH_COOKIE_LIFETIME:-08:00:00}
+      Auth__Cookie__RememberMeLifetime: ${AUTH_COOKIE_REMEMBER_ME_LIFETIME:-30.00:00:00}
+      Auth__Session__RevalidationInterval: ${AUTH_SESSION_REVALIDATION_INTERVAL:-00:05:00}
+      Auth__Session__ClockSkew: ${AUTH_SESSION_CLOCK_SKEW:-00:00:30}
+      # Ruta DENTRO del contenedor del key ring (coincide con el volumen montado arriba; no la cambies sin cambiar el volumen).
+      Auth__DataProtection__KeysPath: /var/lib/vectorify/dataprotection-keys
       # Nombre del servicio "postgres" en la red de docker-compose, no localhost ni el
       # puerto publicado en el host. Nunca hardcodeado -- viene de variables de entorno
       # con el mismo criterio que PythonEngine__BaseUrl (ver .env.example).
@@ -95,3 +108,4 @@ services:
 volumes:
   vectorify_backend_data:
   vectorify_postgres_data:
+  vectorify_dataprotection_keys:

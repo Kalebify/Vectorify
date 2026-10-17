@@ -17,6 +17,11 @@ export interface RegisterResponse {
 export interface LoginRequest {
   email: string;
   password: string;
+  /**
+   * «Recordarme» (M3.1-S04, opcional; ausente = false). true: el servidor emite una cookie persistente con tope absoluto
+   * (30 días por defecto). false/ausente: cookie de sesión del navegador, con caducidad deslizante por inactividad (8 h).
+   */
+  rememberMe?: boolean;
 }
 
 /** Usuario actual: `id` es el Users.Id INTERNO que resolvió el servidor desde la cookie verificada. */

@@ -209,7 +209,13 @@ public sealed class UserContextRegistrationTests
     public async Task Host_InProductionWithDefaultAuthentication_StartsAndServesHealth()
     {
         // El camino real de producción: sin Auth:Mode ⇒ Authenticated; cookie __Host- + Secure Always (defaults).
-        using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder => builder.UseEnvironment("Production"));
+        // Desde M3.1-S04 Production exige un key ring persistente (Auth:DataProtection:KeysPath); aquí un directorio temporal.
+        var keys = Path.Combine(Path.GetTempPath(), "vectorify-prod-keys-" + Guid.NewGuid().ToString("N"));
+        using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.UseEnvironment("Production");
+            builder.UseSetting("Auth:DataProtection:KeysPath", keys);
+        });
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync("/health");

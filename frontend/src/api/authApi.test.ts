@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AUTH_LOGIN_PATH,
+  AUTH_LOGOUT_ALL_PATH,
   AUTH_LOGOUT_PATH,
   AUTH_ME_PATH,
   AUTH_REGISTER_PATH,
@@ -8,6 +9,7 @@ import {
   isUnauthorizedError,
   login,
   logout,
+  logoutAll,
   register,
 } from "./authApi";
 import { API_BASE_URL, ApiClientError, CSRF_HEADER_NAME, CSRF_HEADER_VALUE } from "./httpClient";
@@ -40,6 +42,39 @@ describe("authApi", () => {
     expect(AUTH_LOGIN_PATH).toBe("/api/v1/auth/login");
     expect(AUTH_LOGOUT_PATH).toBe("/api/v1/auth/logout");
     expect(AUTH_ME_PATH).toBe("/api/v1/auth/me");
+    expect(AUTH_LOGOUT_ALL_PATH).toBe("/api/v1/auth/logout-all");
+  });
+
+  it("login envía rememberMe cuando se indica (cookie persistente con tope absoluto en el servidor)", async () => {
+    const fetchMock = stubFetch(json(user));
+
+    await login({ email: "ana@vectorify.test", password: "una-contrasena-larga-1", rememberMe: true });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      email: "ana@vectorify.test",
+      password: "una-contrasena-larga-1",
+      rememberMe: true,
+    });
+  });
+
+  it("login sin rememberMe no lo inventa (el servidor lo trata como false)", async () => {
+    const fetchMock = stubFetch(json(user));
+
+    await login({ email: "ana@vectorify.test", password: "una-contrasena-larga-1" });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).not.toHaveProperty("rememberMe");
+  });
+
+  it("logoutAll hace POST al endpoint propio con credentials include y la cabecera anti-CSRF", async () => {
+    const fetchMock = stubFetch(new Response(null, { status: 204 }));
+
+    await logoutAll();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe(`${API_BASE_URL}/api/v1/auth/logout-all`);
+    expect(init?.method).toBe("POST");
+    expect(init?.credentials).toBe("include");
+    expect(headerOf(init, CSRF_HEADER_NAME)).toBe(CSRF_HEADER_VALUE);
   });
 
   it("register hace POST JSON con email y contraseña y devuelve la respuesta uniforme", async () => {
