@@ -1,0 +1,18 @@
+{
+  "card_id": "3e8d77b2-6398-8182-85f8-f3c43f0a6065",
+  "card_url": "https://app.notion.com/p/3e8d77b26398818285f8f3c43f0a6065",
+  "title": "M3.1-S08 · Recuperación de acceso + verificación",
+  "stack": "Frontend, ASP.NET Core, Infra -- ASP.NET Core Identity + cookie (ADR confirmado), React 19, .NET 10",
+  "branch": "sprint/3e8d77b2-m31-s08-recuperacion",
+  "column": "Doing",
+  "phase": "design",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "started_at": "2026-10-18T00:00:00Z",
+  "exceptions": [
+    "Sin preview de Vercel: verificacion visual con pila local aislada (docker compose -p) en modo Authenticated y el navegador integrado.",
+    "La rama se corta de sprint/3e8d77b2-m31-s07-perfil (apilada: PR #65 .NET 10 -> S02 -> ... -> S07 -> S08); los merges los hace el usuario.",
+    "Proveedor de correo y remitente (ADR P5, con residencia UE y DPA) es decision humana: se entrega SMTP generico + modo Log solo para Development; la entrega real no se puede verificar sin proveedor.",
+    "Verificacion de correo implementada pero NO obligatoria para entrar (ADR P9 abierta): Auth:RequireConfirmedEmail=false por defecto."
+  ]
+}
