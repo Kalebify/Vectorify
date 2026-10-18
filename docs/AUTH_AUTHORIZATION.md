@@ -42,8 +42,8 @@ desarrollo. Este modo solo existe en `Development/Testing/Test` (guardrail de ar
 
 ## 3. Matriz de recursos protegidos
 
-Inventario real del `EndpointDataSource` (**72** rutas `/api/*` + `/health`; ver §5): **43** en el grupo central del flujo clásico, **13** con dueño en el
-repositorio/servicio, **10** sin recurso ajeno que direccionar y **6** anónimas.
+Inventario real del `EndpointDataSource` (**74** rutas `/api/*` + `/health`; ver §5): **43** en el grupo central del flujo clásico, **13** con dueño en el
+repositorio/servicio, **12** sin recurso ajeno que direccionar (incluye `GET`/`PATCH /api/v1/me`, S07) y **6** anónimas.
 
 | Recurso | Rutas | Mecanismo | Ajeno / inexistente |
 |---|---|---|---|
@@ -57,6 +57,7 @@ repositorio/servicio, **10** sin recurso ajeno que direccionar y **6** anónimas
 | **VectorDocument / DocumentVersion**: documento, versiones, versión *n*, **restaurar versión**, editor-save, **mutación de capa** (`PATCH layers/{id}`) | 6 | `OwnerId` en el repositorio | 404 uniforme |
 | **Alta y listado** (`POST /api/v1/projects`, `POST|GET /api/v2/projects`, `POST /api/v2/workspaces/save`) | 4 | Dueño = `IUserContext`; en `workspaces/save` tanto `ProjectId` como el triple clásico del body se resuelven con el dueño del servidor | 404 uniforme (el triple clásico **inexistente** y el **ajeno** responden igual) |
 | **Geometría sin estado** (`/api/v2/geometry/*`) | 5 | Solo `FallbackPolicy` (no leen ni escriben recursos) | — |
+| **Perfil propio** (`GET`/`PATCH /api/v1/me`, S07) | 2 | `FallbackPolicy` + usuario SOLO de `IUserContext`; la ruta no recibe ids y el cuerpo no puede nombrar a otro usuario | — (no direcciona recursos ajenos) |
 
 **404 uniforme, no 403:** no se revela que un `projectId` ajeno existe. Para el flujo clásico el cuerpo y las cabeceras son idénticos por construcción (los emite el mismo
 middleware); para `/api/v2` los verifica la suite (§5). Quien sí recibe un 403/409 es siempre el **dueño** (p. ej. conflicto de concurrencia), nunca un tercero.
@@ -134,6 +135,7 @@ console.log(`${changed} registro(s)`);
 | **Aislamiento UserA/UserB** (Postgres real, tres cuentas reales por `/register` + `/login`, cookies emitidas por el servidor, `WithCsrf()`) | Matriz por **cada ruta del `EndpointDataSource`** del flujo clásico (B y C sobre ids reales de A, ids inexistentes y A sobre B: 404 con estado/cabeceras/cuerpo idénticos y estado de A intacto), la misma matriz para `/api/v2` (GET, PATCH, DELETE, descarga, duplicado, restauración, mutaciones de capa, editor-save, assets), listado y búsquedas con comodines, `workspaces/save` con proyecto o triple ajeno, descargas por URL directa (dueño 200 / otro 404 / anónimo 401), anónimo ⇒ 401 en **todas** las rutas protegidas, cookie basura, tras logout, `ownerId` del cliente ignorado, registro legado sin dueño inaccesible, una sola resolución de dueño por request. | `EndToEnd/MultiUserIsolationTests.cs` |
 | **Modo Development** | Flujo anónimo completo intacto, política satisfecha por el usuario de desarrollo en toda ruta, dueño ajeno ⇒ 404, legado sin dueño accesible solo para él. | `EndToEnd/DevelopmentModeAuthorizationTests.cs` |
 | **Arquitectura** (reflexión sobre el `EndpointDataSource`) | Toda ruta `/api/*` hereda la denegación por defecto y tiene dueño (grupo central) o figura en una lista blanca justificada; las listas no pueden quedar desactualizadas. Con **controles** que demuestran que el auditor detecta una ruta nueva sin proteger, una ruta que pierde la metadata del grupo, una ruta convertida en anónima y una entrada de lista obsoleta. | `EndToEnd/EndpointAuthorizationArchitectureTests.cs`, `TestSupport/EndpointAuthorizationAudit.cs` |
+| **Perfil propio** (S07) | `GET`/`PATCH /api/v1/me`: lectura, edición, validación 1–80/unicode/control, campos prohibidos sin efecto (contra la base), 401, CSRF 403, `no-store`, sin filtrar identidad interna, aislamiento (C no toca a A ni a B ni con ids en cuerpo/query/cabeceras) y modo Development (`/auth/me` lee `Users.DisplayName`; sobrevive a un reinicio). | `EndToEnd/ProfileEndpointsTests.cs`, `EndToEnd/ProfileDevelopmentModeTests.cs`, `EndToEnd/MultiUserIsolationTests.cs` (`Profile_*`) |
 | Regla de dueño (unidad) | `ProjectRecord.IsAccessibleBy` y `ClassicProjectAccess` por modo, dueño y sesión. | `Projects/ClassicProjectAccessTests.cs`, `Projects/PersistentProjectRegistryTests.cs` |
 
 **Cómo añadir una ruta nueva.** Del flujo clásico: mapearla con path **relativo** dentro de `classicProject` en `Program.cs` (queda protegida sola). De `/api/v2` o sin
@@ -147,3 +149,35 @@ recurso: añadirla a la lista blanca de `EndpointAuthorizationAudit` **con su ju
 - Canales fuera de la API (acceso directo a Postgres o al disco `App_Data`, backups) no pasan por esta autorización; su control es operativo.
 - Concurrencia entre dos sesiones del mismo usuario sobre el mismo recurso (conflictos `xmin`/409) conserva el comportamiento anterior; no se alteró.
 - Tiempo de respuesta como oráculo de existencia (el 404 de un ajeno y de un inexistente del flujo clásico cuestan lo mismo —un lookup en memoria—; en v2 ambos hacen la misma consulta indexada): no medido.
+
+## 7. Perfil propio (M3.1-S07)
+
+`GET /api/v1/me` y `PATCH /api/v1/me` (distintos de `GET /api/v1/auth/me`, la consulta de sesión de S03/S05). El usuario sale SOLO de `IUserContext`; no hay ids en la ruta.
+
+| | |
+|---|---|
+| Respuesta (ambos métodos) | `{ id, email, displayName, createdAt, managedFields }`. `id` = `Users.Id` interno; `email` es de **solo lectura**; `managedFields = ["email"]` indica qué gestiona la cuenta/identidad. Nunca proveedor, subject, hash ni stamp. `Cache-Control: no-store`. |
+| `PATCH` | Acepta SOLO `displayName`: recortado, 1–80 caracteres (unidades UTF-16, igual que el cliente), sin caracteres de control (U+0000–U+001F, U+007F–U+009F). Error: `400 { "code": "invalid_display_name", "message": "…" }` en español. |
+| **Decisión: campos ajenos IGNORADOS, no 400** | `id`, `userId`, `ownerId`, `email`, `provider`, `subject`, `createdAt`, `authMode`… no se enlazan ni tienen efecto (el contrato de entrada `UpdateProfileRequest` solo declara `displayName`); un cuerpo sin `displayName` es 400. Se ignoran (en vez de rechazar) para que un cliente que reenvíe el perfil completo no falle, y está demostrado contra la base. |
+| Seguridad | 401 sin sesión (`FallbackPolicy`); 403 `csrf_rejected` sin cabecera anti-CSRF u Origin permitido (modo Authenticated, como el resto de métodos no seguros); el log no incluye nombre ni correo. |
+| Lista del auditor | `NoProjectResourceAllowlist`: perfil PROPIO, el usuario no es un parámetro. |
+| Nombre compartido | `Users.DisplayName` (dominio, no Identity). `GET /api/v1/auth/me` lo lee de ahí también en `Auth:Mode=Development` (no del valor de configuración `DevelopmentUser:DisplayName`, que solo siembra la fila la primera vez), así que el nombre editado sobrevive a una recarga y a un reinicio de la API. |
+| No implementado (declarado) | Cambio de correo (requiere reverificación por correo: S08), cambio de contraseña (S08), avatar, locale/preferencias. |
+
+## 8. Pendiente de decisión: supresión de cuenta y exportación de datos (P11) — SIN CÓDIGO
+
+El ADR asignaba a S07 la **supresión de cuenta** y la **exportación de datos** (derechos UE de supresión y portabilidad). No están en el texto de la tarjeta, son destructivas
+e irreversibles, y dependen de la pregunta abierta **P11** (plazo de retención, qué se borra y qué se conserva, destino de los `Project` por la FK `Restrict`). **No se
+implementaron** ni hay endpoint, UI ni migración para ellas. Diseño PROPUESTO para decidir (no vinculante hasta que lo apruebe la persona dueña del producto):
+
+**Exportación (portabilidad).** `GET /api/v1/me/export` (solo el propio usuario; reautenticación reciente con contraseña): un archivo (JSON + los assets referenciados, en ZIP) con
+perfil, proyectos, documentos vectoriales, versiones y capas. Si el volumen lo exige, generación asíncrona con descarga de un solo uso. Va a la lista del auditor de rutas.
+
+**Supresión.** `DELETE /api/v1/me` con confirmación explícita (reautenticación + escribir el correo):
+1. Inmediato: cuenta bloqueada para entrar y todas las sesiones invalidadas (rotación del `SecurityStamp`, como `logout-all`).
+2. Plazo de gracia (propuesta: 30 días, **a decidir**) en el que se puede cancelar (el enlace de cancelación depende del envío de correo de S08).
+3. Purga, **en este orden por las FK**: assets en el storage y sidecars JSON clásicos con su `OwnerId` → `projects` (con `vector_documents`, `document_versions`, `layers`) → `user_identities` (Cascade) y la cuenta de Identity → la fila de `users` al final (la FK `Project → User` es `Restrict`, por eso los proyectos van antes).
+4. Se conservan solo registros mínimos sin datos personales (p. ej. un hash del id y la fecha de borrado) y los logs de seguridad con retención corta; las copias de seguridad caducan según `docs/BACKUP_RESTORE.md`. El usuario de desarrollo no es borrable.
+
+**Preguntas que decidir (P11):** plazo de gracia y de retención; qué se conserva (logs, auditoría) y por cuánto; si los backups deben purgarse o caducar; si se exige correo de confirmación;
+formato de la exportación y si incluye los binarios; qué pasa con los datos legados sin dueño (ADR P10). Cuando se decida, se implementa en una tarjeta propia con su matriz UserA/UserB (el borrado de A no puede tocar a B).

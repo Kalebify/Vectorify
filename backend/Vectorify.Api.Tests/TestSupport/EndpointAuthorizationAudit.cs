@@ -49,6 +49,8 @@ public static partial class EndpointAuthorizationAudit
         ["GET /api/v2/projects"] = "Listado: WHERE OwnerId = IUserContext.",
         ["POST /api/v2/workspaces/save"] = "Los ids del body se resuelven con el dueño del servidor: ProjectId (v2) por repositorio y el triple clásico por IClassicProjectAccess; ajeno e inexistente = 404.",
         ["POST /api/v1/auth/logout-all"] = "Opera sobre la cuenta de la propia sesión (RequireAuthorization); no recibe ids.",
+        ["GET /api/v1/me"] = "Perfil PROPIO: el usuario sale solo de IUserContext (FallbackPolicy: 401 sin sesión); la ruta no recibe ids ni puede direccionar a otro usuario.",
+        ["PATCH /api/v1/me"] = "Perfil PROPIO: el usuario sale solo de IUserContext; el cuerpo solo lleva displayName y cualquier id/userId/email se ignora. Cubierto por la matriz UserA/UserB de MultiUserIsolationTests.",
         ["POST /api/v2/geometry/boolean"] = "Cálculo SIN estado: recibe y devuelve coordenadas; no lee ni escribe recursos.",
         ["POST /api/v2/geometry/offset"] = "Cálculo SIN estado: recibe y devuelve coordenadas; no lee ni escribe recursos.",
         ["POST /api/v2/geometry/split"] = "Cálculo SIN estado: recibe y devuelve coordenadas; no lee ni escribe recursos.",

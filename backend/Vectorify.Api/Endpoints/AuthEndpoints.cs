@@ -263,6 +263,8 @@ public static class AuthEndpoints
         // Auth:Mode=Development (M3.1-S05): no hay login; quien responde IUserContext es el usuario de desarrollo fijo. Se devuelve ESE
         // usuario (el dueño real de los datos en este modo), con el indicador de modo para que la SPA oculte login/«Salir». Este modo
         // solo existe en Development/Testing/Test (guardrail de arranque), así que nunca se alcanza en Production.
+        // El nombre sale de Users.DisplayName (dominio; editable con PATCH /api/v1/me, S07), NUNCA de DevelopmentUser:DisplayName: esa
+        // opción solo siembra la fila la primera vez, y el nombre editado debe sobrevivir a una recarga.
         if (authOptions.Value.Mode == AuthMode.Development)
         {
             return Results.Ok(await LoadCurrentUserAsync(

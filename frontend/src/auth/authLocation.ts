@@ -20,6 +20,24 @@ export function readAuthView(search: string = window.location.search): AuthView 
   return view === "login" || view === "register" ? view : null;
 }
 
+/** true si es un clic izquierdo sin modificadores (el resto —clic central, Ctrl/Cmd/Mayús+clic— lo resuelve el navegador, p. ej. otra pestaña). */
+export function isPlainLeftClick(event: { button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }): boolean {
+  return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
+}
+
+/** Ruta de la pantalla «Mi cuenta» (M3.1-S07): `?view=account`. Es una vista protegida (detrás de `AuthBoundary`), no una vista pública de auth. */
+const ACCOUNT_VIEW = "account";
+
+/** true si la query string es la de «Mi cuenta». */
+export function isAccountView(search: string = window.location.search): boolean {
+  return new URLSearchParams(search).get(VIEW_PARAM) === ACCOUNT_VIEW;
+}
+
+/** `href` real de «Mi cuenta» (abrible en otra pestaña): ruta de la app + `?view=account`. */
+export function accountHref(): string {
+  return `${window.location.pathname}?${VIEW_PARAM}=${ACCOUNT_VIEW}`;
+}
+
 /** `returnUrl` de una query string, ya validado (anti open redirect), o `null`. */
 export function readReturnUrl(search: string = window.location.search): string | null {
   return sanitizeReturnUrl(new URLSearchParams(search).get(RETURN_URL_PARAM));
@@ -70,6 +88,27 @@ function writeHistory(url: string, options: NavigateOptions): void {
 /** Navega (sin recargar) a una vista de auth. */
 export function navigateAuth(view: AuthView, returnUrl: string | null, options: NavigateOptions = {}): void {
   writeHistory(`${window.location.pathname}${buildAuthSearch(view, returnUrl)}`, options);
+}
+
+/** Navega (sin recargar) a «Mi cuenta», pidiendo foco en su encabezado. */
+export function navigateToAccount(): void {
+  writeHistory(accountHref(), { focusHeading: true });
+}
+
+/** Mueve el foco al `h1` de la pantalla actual (estando ya en «Mi cuenta»). */
+export function focusPageHeading(): void {
+  document.querySelector<HTMLElement>("main h1[tabindex='-1']")?.focus();
+}
+
+/**
+ * Antes de una navegación interna que desmonta la app (p. ej. del Editor a «Mi cuenta»): consulta a los avisos de «salir sin guardar» que la
+ * propia app ya registra en `beforeunload` (Editor y guardado del Workspace) disparando un evento sintético CANCELABLE; no muestra el diálogo
+ * del navegador. Si alguno lo cancela hay trabajo sin guardar y se pide confirmación. Devuelve true si se puede navegar.
+ */
+export function confirmLeaveIfUnsaved(message: string): boolean {
+  const probe = new Event("beforeunload", { cancelable: true });
+  window.dispatchEvent(probe);
+  return !probe.defaultPrevented || window.confirm(message);
 }
 
 /** Sale de las vistas de auth hacia `returnUrl` (ya validado) o, si no hay, a «Mis proyectos». */

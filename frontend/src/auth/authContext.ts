@@ -44,6 +44,11 @@ export interface AuthContextValue {
   signOut: () => Promise<void>;
   /** «Cerrar sesión en todos lados». Un 401 equivale a sesión expirada. */
   signOutAll: () => Promise<void>;
+  /**
+   * Actualiza el nombre para mostrar del usuario en memoria (M3.1-S07) con el valor que confirmó el servidor al guardar el perfil, para que el
+   * menú lo refleje sin volver a pedir `GET /api/v1/auth/me`. No hace nada sin sesión resuelta.
+   */
+  updateDisplayName: (displayName: string) => void;
   /** Recuerda en memoria que el registro fue recibido (aviso + correo precargado en el login). */
   announceRegistered: (email: string) => void;
 }

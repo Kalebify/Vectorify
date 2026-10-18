@@ -810,6 +810,7 @@ app.MapGet("/api/v1/system/health", async (
 .WithTags("Health");
 
 app.MapAuthEndpoints();
+app.MapProfileEndpoints(); // GET/PATCH /api/v1/me (M3.1-S07): perfil propio resuelto por IUserContext
 app.MapProjectEndpoints(); // POST /api/v1/projects (alta: el dueño lo pone el servidor)
 app.MapGeometryEndpoints(); // /api/v2/geometry/*: operaciones SIN estado ni recurso; solo exigen sesión (FallbackPolicy)
 

@@ -290,6 +290,16 @@
   cursor: progress;
 }
 
+/* Inactivo (M3.1-S07): enfocable, sin opacity. Hover y activo no cambian nada. */
+.auth-button.auth-button--inactive[aria-disabled="true"],
+.auth-button.auth-button--inactive[aria-disabled="true"]:hover,
+.auth-button.auth-button--inactive[aria-disabled="true"]:active {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  cursor: not-allowed;
+}
+
 .auth-button__spinner,
 .user-menu__spinner {
   display: inline-block;
@@ -501,6 +511,73 @@
   cursor: not-allowed;
 }
 
+/* «Mi cuenta» es un enlace real (M3.1-S07): mismas reglas que el ítem, sin el color de enlace global. */
+.user-menu__item--link {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  text-decoration: none;
+  color: var(--text-h);
+}
+
+.user-menu__item--link[aria-current="page"] {
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--auth-accent);
+}
+
+/* Separador decorativo (no es un elemento: dentro de role="menu" solo hay menuitem). */
+.user-menu__item--group-start {
+  position: relative;
+  margin-top: var(--auth-space-1);
+}
+
+.user-menu__item--group-start::before {
+  content: "";
+  position: absolute;
+  top: -3px;
+  left: 8px;
+  right: 8px;
+  height: 1px;
+  background: var(--border);
+}
+
+/* Enlace de cuenta en modo Development (sin menú). */
+.user-menu__dev-link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--auth-space-2);
+  height: 32px;
+  padding: 0 var(--auth-space-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-h);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition:
+    background-color 120ms ease-out,
+    border-color 120ms ease-out;
+}
+
+.user-menu__dev-link::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+}
+
+.user-menu__dev-link:hover,
+.user-menu__dev-link:active,
+.user-menu__dev-link[aria-current="page"] {
+  border-color: var(--auth-accent);
+}
+
+.user-menu__dev-link:active,
+.user-menu__dev-link[aria-current="page"] {
+  background: var(--code-bg);
+}
+
 .user-menu__alert {
   position: absolute;
   top: calc(100% + 4px);
@@ -541,9 +618,10 @@
 
 .auth-account__header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--auth-space-4);
+  gap: var(--auth-space-2) var(--auth-space-4);
 }
 
 .auth-account__brand {
@@ -560,10 +638,129 @@
   gap: var(--auth-space-4);
 }
 
+.auth-account__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--auth-space-1);
+}
+
+.auth-account__head h1 {
+  margin: 0;
+}
+
+/* ---------- Perfil («Mi cuenta», M3.1-S07) ---------- */
+
+.profile-section {
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--auth-space-4);
+  padding: var(--auth-space-4);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.profile-section__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--auth-space-1);
+}
+
+.profile-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--auth-space-4);
+}
+
+.profile-form .auth-field {
+  max-width: 30rem;
+}
+
+/* Región viva persistente: vacía no ocupa alto (anula el gap del flex) y no se oculta con display. */
+.profile-status:empty {
+  margin-bottom: calc(-1 * var(--auth-space-4));
+}
+
+.profile-field__meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--auth-space-3);
+}
+
+.profile-field__count {
+  margin-left: auto;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.profile-field__count--over {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.profile-actions {
+  display: flex;
+  gap: var(--auth-space-3);
+  margin-top: var(--auth-space-2);
+}
+
+.profile-actions .auth-button--primary,
+.profile-load-error .auth-button--primary {
+  width: auto;
+  min-width: 11rem;
+}
+
+.profile-facts {
+  display: grid;
+  gap: var(--auth-space-4);
+  margin: 0;
+}
+
+.profile-facts dt {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.profile-facts dd {
+  display: flex;
+  flex-direction: column;
+  gap: var(--auth-space-1);
+  margin: 0;
+  font-family: var(--sans);
+  font-size: 1rem;
+  line-height: 1.4;
+  color: var(--text-h);
+  overflow-wrap: anywhere;
+}
+
+.profile-facts dt + dd {
+  margin-top: calc(-1 * var(--auth-space-3));
+}
+
+.profile-loading {
+  padding: var(--auth-space-6) 0;
+  text-align: center;
+}
+
+.profile-load-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--auth-space-4);
+}
+
 /* ---------- Responsive ---------- */
 
 @media (min-width: 401px) {
-  .auth-card {
+  .auth-card,
+  .profile-section {
     padding: var(--auth-space-5);
   }
 
@@ -579,6 +776,17 @@
 @media (min-width: 768px) {
   .auth-main {
     padding-top: var(--auth-space-6);
+  }
+
+  .profile-facts {
+    grid-template-columns: 12rem 1fr;
+    column-gap: var(--auth-space-4);
+    row-gap: var(--auth-space-4);
+    align-items: start;
+  }
+
+  .profile-facts dt + dd {
+    margin-top: 0;
   }
 }
 
@@ -606,6 +814,19 @@
 }
 
 @media (max-width: 400px) {
+  .auth-account__brand {
+    font-size: 1.375rem;
+  }
+
+  .profile-actions {
+    flex-direction: column;
+  }
+
+  .profile-actions .auth-button,
+  .profile-load-error .auth-button--primary {
+    width: 100%;
+  }
+
   .auth-dialog__actions {
     flex-direction: column-reverse;
   }

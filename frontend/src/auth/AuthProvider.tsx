@@ -146,6 +146,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStore((current) => ({ ...current, state: { status: "unauthenticated", returnUrl: null }, notice: "signed-out-all" }));
   }, []);
 
+  const updateDisplayName = useCallback((displayName: string) => {
+    setStore((current) =>
+      current.state.status === "authenticated"
+        ? { ...current, state: { status: "authenticated", user: { ...current.state.user, displayName } } }
+        : current,
+    );
+  }, []);
+
   const announceRegistered = useCallback((email: string) => {
     setStore((current) => ({ ...current, notice: "registered", registeredEmail: email }));
   }, []);
@@ -162,9 +170,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signIn,
       signOut,
       signOutAll,
+      updateDisplayName,
       announceRegistered,
     }),
-    [store, isRetrying, retry, signIn, signOut, signOutAll, announceRegistered],
+    [store, isRetrying, retry, signIn, signOut, signOutAll, updateDisplayName, announceRegistered],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

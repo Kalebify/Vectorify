@@ -37,20 +37,21 @@ describe("UserMenu — patrón menu button", () => {
     expect(trigger.querySelectorAll('[aria-hidden="true"]').length).toBeGreaterThanOrEqual(2);
   });
 
-  it("al abrir: role=menu con nombre «Cuenta», solo dos menuitem, aria-controls y el foco en el primero", async () => {
+  it("al abrir: role=menu con nombre «Cuenta», tres menuitem (Mi cuenta primero), aria-controls y el foco en el primero", async () => {
     const { trigger } = await renderMenu();
 
     fireEvent.click(trigger);
 
     const menu = await screen.findByRole("menu", { name: "Cuenta" });
     expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Mi cuenta",
       "Salir",
       "Cerrar sesión en todos lados",
     ]);
-    expect(menu.children).toHaveLength(2); // nada más que menuitems dentro del menú
+    expect(menu.children).toHaveLength(3); // nada más que menuitems dentro del menú
     expect(trigger).toHaveAttribute("aria-expanded", "true");
     expect(trigger).toHaveAttribute("aria-controls", menu.id);
-    await waitFor(() => expect(screen.getByRole("menuitem", { name: "Salir" })).toHaveFocus());
+    await waitFor(() => expect(screen.getByRole("menuitem", { name: "Mi cuenta" })).toHaveFocus());
   });
 
   it("teclado: ArrowDown abre; flechas/Inicio/Fin navegan en círculo; Escape cierra devolviendo el foco al trigger", async () => {
@@ -58,11 +59,14 @@ describe("UserMenu — patrón menu button", () => {
     trigger.focus();
 
     fireEvent.keyDown(trigger, { key: "ArrowDown" });
-    const first = await screen.findByRole("menuitem", { name: "Salir" });
+    const first = await screen.findByRole("menuitem", { name: "Mi cuenta" });
+    const middle = screen.getByRole("menuitem", { name: "Salir" });
     const second = screen.getByRole("menuitem", { name: "Cerrar sesión en todos lados" });
     const menu = screen.getByRole("menu");
     await waitFor(() => expect(first).toHaveFocus());
 
+    fireEvent.keyDown(menu, { key: "ArrowDown" });
+    expect(middle).toHaveFocus();
     fireEvent.keyDown(menu, { key: "ArrowDown" });
     expect(second).toHaveFocus();
     fireEvent.keyDown(menu, { key: "ArrowDown" });

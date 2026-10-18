@@ -24,6 +24,7 @@ function Probe() {
     <div>
       <p data-testid="status">{auth.state.status}</p>
       <p data-testid="user">{auth.user?.email ?? "-"}</p>
+      <p data-testid="display-name">{auth.user?.displayName ?? "-"}</p>
       <p data-testid="dev">{String(auth.isDevelopmentMode)}</p>
       <p data-testid="notice">{auth.notice ?? "-"}</p>
       <p data-testid="return-url">
@@ -40,6 +41,9 @@ function Probe() {
       </button>
       <button type="button" onClick={auth.retry}>
         reintentar
+      </button>
+      <button type="button" onClick={() => auth.updateDisplayName("Nombre nuevo")}>
+        renombrar
       </button>
     </div>
   );
@@ -285,6 +289,41 @@ describe("AuthProvider — evento de sesión expirada (S04)", () => {
   });
 });
 
+describe("AuthProvider — updateDisplayName (M3.1-S07)", () => {
+  it("actualiza el nombre del usuario en memoria SIN volver a pedir GET /api/v1/auth/me", async () => {
+    const api = installAuthBackend();
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(status()).toBe("authenticated"));
+    expect(screen.getByTestId("display-name")).toHaveTextContent("Ana Gómez");
+
+    fireEvent.click(screen.getByRole("button", { name: "renombrar" }));
+
+    expect(screen.getByTestId("display-name")).toHaveTextContent("Nombre nuevo");
+    expect(screen.getByTestId("user")).toHaveTextContent(ANA.email!); // el resto del usuario no cambia
+    expect(status()).toBe("authenticated");
+    expect(api.authCallsTo("GET", "/api/v1/auth/me")).toHaveLength(1);
+  });
+
+  it("sin sesión resuelta no hace nada (no inventa un usuario)", async () => {
+    installAuthBackend({ user: null });
+    render(
+      <AuthProvider>
+        <Probe />
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(status()).toBe("unauthenticated"));
+
+    fireEvent.click(screen.getByRole("button", { name: "renombrar" }));
+
+    expect(status()).toBe("unauthenticated");
+    expect(screen.getByTestId("display-name")).toHaveTextContent("-");
+  });
+});
+
 describe("AuthBoundary / AccountLayout — rutas protegidas", () => {
   it("no monta los hijos hasta que la sesión está resuelta y redirige al login con returnUrl si no hay sesión", async () => {
     window.history.pushState({}, "", "/?view=new");
@@ -327,6 +366,21 @@ describe("AuthBoundary / AccountLayout — rutas protegidas", () => {
 
     const back = screen.getByRole("link", { name: "Volver a Mis proyectos" });
     expect(back.querySelector('[aria-hidden="true"]')).toHaveTextContent("←");
+  });
+
+  it("AccountLayout con intro: el texto de apoyo va bajo el h1 dentro de la cabecera de página", async () => {
+    installAuthBackend();
+    render(
+      <AuthProvider>
+        <AuthBoundary>
+          <AccountLayout title="Tu cuenta" intro="Texto de apoyo." />
+        </AuthBoundary>
+      </AuthProvider>,
+    );
+
+    const heading = await screen.findByRole("heading", { level: 1, name: "Tu cuenta" });
+    expect(heading.parentElement).toHaveClass("auth-account__head");
+    expect(heading.nextElementSibling).toHaveTextContent("Texto de apoyo.");
   });
 
   it("AccountLayout sin sesión nunca se renderiza (lo resuelve AuthBoundary antes)", async () => {

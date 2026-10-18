@@ -445,6 +445,55 @@ public sealed class MultiUserIsolationTests : IClassFixture<IsolationWorldFixtur
         Assert.DoesNotContain(list.Items, i => i.Id == _f.WorldA.ProjectId);
     }
 
+    // =========================================================================================== perfil propio (M3.1-S07)
+
+    [Fact]
+    public async Task Profile_PatchOfOneUser_NeverTouchesAnotherUser_EvenWithTheirIdInTheBodyQueryOrHeaders()
+    {
+        var aBefore = await _f.A.Client.GetStringAsync(ProfileEndpoints.ProfilePath);
+        var bBefore = await _f.B.Client.GetStringAsync(ProfileEndpoints.ProfilePath);
+
+        // C intenta, de todas las formas posibles, escribir en el perfil de A y de B.
+        using var request = new HttpRequestMessage(
+            HttpMethod.Patch, $"{ProfileEndpoints.ProfilePath}?id={_f.A.Id}&userId={_f.B.Id}&ownerId={_f.A.Id}")
+        {
+            Content = new StringContent(
+                $$"""{"displayName":"Nombre de C","id":"{{_f.A.Id}}","userId":"{{_f.B.Id}}","ownerId":"{{_f.A.Id}}","email":"{{_f.A.Email}}"}""",
+                Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Add("X-User-Id", _f.A.Id.ToString());
+        request.Headers.Add("X-Test-User-Id", _f.B.Id.ToString());
+        var response = await _f.C.Client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var updated = (await response.Content.ReadFromJsonAsync<ProfileResponse>())!;
+        Assert.Equal(_f.C.Id, updated.Id);
+        Assert.Equal(_f.C.Email, updated.Email);
+        Assert.Equal("Nombre de C", updated.DisplayName);
+
+        // Ni A ni B cambiaron ni un byte de su perfil, y sus cuentas siguen siendo suyas.
+        Assert.Equal(aBefore, await _f.A.Client.GetStringAsync(ProfileEndpoints.ProfilePath));
+        Assert.Equal(bBefore, await _f.B.Client.GetStringAsync(ProfileEndpoints.ProfilePath));
+        Assert.Equal(_f.C.Id, (await _f.C.Client.GetFromJsonAsync<CurrentUserResponse>(AuthEndpoints.MePath))!.Id);
+        Assert.Equal("Nombre de C", (await _f.C.Client.GetFromJsonAsync<CurrentUserResponse>(AuthEndpoints.MePath))!.DisplayName);
+    }
+
+    [Fact]
+    public async Task Profile_AnonymousAndForgedCookie_Get401_OnBothMethods_AndEachUserSeesOnlyTheirOwnProfile()
+    {
+        var path = ProfileEndpoints.ProfilePath;
+        Assert.Equal(HttpStatusCode.Unauthorized, (await _f.Anonymous.GetAsync(path)).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await _f.Anonymous.PatchAsync(
+            path, new StringContent("""{"displayName":"Anónimo"}""", Encoding.UTF8, "application/json"))).StatusCode);
+
+        using var forged = _f.Factory.CreateClient().WithCsrf();
+        forged.DefaultRequestHeaders.Add("Cookie", "vectorify.session=CfDJ8-no-es-un-ticket-valido");
+        Assert.Equal(HttpStatusCode.Unauthorized, (await forged.GetAsync(path)).StatusCode);
+
+        Assert.Equal(_f.A.Id, (await _f.A.Client.GetFromJsonAsync<ProfileResponse>(path))!.Id);
+        Assert.Equal(_f.B.Id, (await _f.B.Client.GetFromJsonAsync<ProfileResponse>(path))!.Id);
+    }
+
     // =========================================================================================== sesión
 
     [Fact]

@@ -1,6 +1,6 @@
-import { useId, type MouseEvent, type ReactNode, type Ref } from "react";
+import { useId, type ReactNode, type Ref } from "react";
 import { BANNERS } from "./authCopy";
-import { navigateAuth, type AuthView } from "./authLocation";
+import { isPlainLeftClick, navigateAuth, type AuthView } from "./authLocation";
 import "./auth.css";
 
 /**
@@ -89,7 +89,7 @@ export function AuthAlert({ children, className, onDismiss, dismissLabel }: Auth
 interface TextFieldProps {
   name: string;
   label: string;
-  type: "email" | "password";
+  type: "email" | "password" | "text";
   autoComplete: string;
   value: string;
   onChange: (value: string) => void;
@@ -99,6 +99,11 @@ interface TextFieldProps {
   inputRef?: Ref<HTMLInputElement>;
   minLength?: number;
   maxLength?: number;
+  /** Solo `type="text"` (M3.1-S07): por defecto el navegador decide. */
+  autoCapitalize?: "none" | "sentences" | "words" | "characters";
+  spellCheck?: boolean;
+  /** Contador visual (`aria-hidden`) que se pinta a la derecha de la fila inferior, junto al error (M3.1-S07). */
+  counter?: ReactNode;
 }
 
 export function TextField({
@@ -114,6 +119,9 @@ export function TextField({
   inputRef,
   minLength,
   maxLength,
+  autoCapitalize,
+  spellCheck,
+  counter,
 }: TextFieldProps) {
   const id = useId();
   const hintId = `${id}-hint`;
@@ -137,8 +145,8 @@ export function TextField({
         name={name}
         type={type}
         autoComplete={autoComplete}
-        autoCapitalize={type === "email" ? "none" : undefined}
-        spellCheck={type === "email" ? false : undefined}
+        autoCapitalize={autoCapitalize ?? (type === "email" ? "none" : undefined)}
+        spellCheck={spellCheck ?? (type === "email" ? false : undefined)}
         required
         minLength={minLength}
         maxLength={maxLength}
@@ -148,10 +156,21 @@ export function TextField({
         aria-describedby={describedBy}
         onChange={(event) => onChange(event.target.value)}
       />
-      {error && (
-        <p className="auth-field__error" id={errorId}>
-          {error}
-        </p>
+      {counter === undefined ? (
+        error && (
+          <p className="auth-field__error" id={errorId}>
+            {error}
+          </p>
+        )
+      ) : (
+        <div className="profile-field__meta">
+          {error && (
+            <p className="auth-field__error" id={errorId}>
+              {error}
+            </p>
+          )}
+          {counter}
+        </div>
       )}
     </div>
   );
@@ -191,6 +210,11 @@ interface AuthButtonProps {
   type?: "submit" | "button";
   loading?: boolean;
   loadingLabel?: string;
+  /**
+   * Inactivo (M3.1-S07): `aria-disabled` SIN `disabled` (sigue enfocable y el foco no se pierde), clic y Enter ignorados, estilo de deshabilitado,
+   * sin spinner. Para «Guardar cambios» sin cambios y «Descartar cambios» durante el guardado.
+   */
+  inactive?: boolean;
   onClick?: () => void;
   buttonRef?: Ref<HTMLButtonElement>;
   children: ReactNode;
@@ -202,6 +226,7 @@ export function AuthButton({
   type = "button",
   loading = false,
   loadingLabel,
+  inactive = false,
   onClick,
   buttonRef,
   children,
@@ -210,10 +235,10 @@ export function AuthButton({
     <button
       ref={buttonRef}
       type={type}
-      className={`auth-button auth-button--${variant}${variant === "secondary" ? " upload-actions__button" : ""}`}
-      aria-disabled={loading ? true : undefined}
+      className={`auth-button auth-button--${variant}${variant === "secondary" ? " upload-actions__button" : ""}${inactive ? " auth-button--inactive" : ""}`}
+      aria-disabled={loading || inactive ? true : undefined}
       onClick={(event) => {
-        if (loading) {
+        if (loading || inactive) {
           event.preventDefault();
           return;
         }
@@ -224,10 +249,6 @@ export function AuthButton({
       <span>{loading && loadingLabel ? loadingLabel : children}</span>
     </button>
   );
-}
-
-function isPlainLeftClick(event: MouseEvent): boolean {
-  return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
 }
 
 interface AuthLinkProps {

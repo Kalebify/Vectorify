@@ -88,6 +88,10 @@ export const USER_MENU = {
   dismiss: "Cerrar aviso",
   developmentPill: "Modo desarrollo",
   fallbackName: "Usuario",
+  account: "Mi cuenta",
+  /** Prefijo oculto del enlace de cuenta en modo Development (nombre accesible: «Mi cuenta: Dev User»). */
+  accountLinkPrefix: "Mi cuenta:",
+  leaveUnsavedConfirm: "Tenés cambios sin guardar. Si abrís Mi cuenta ahora, se pierden. ¿Querés salir igual?",
 } as const;
 
 export const LOGOUT_ALL_DIALOG = {
@@ -103,4 +107,64 @@ export const LOGOUT_ALL_DIALOG = {
 
 export const ACCOUNT = {
   back: "Volver a Mis proyectos",
+} as const;
+
+/** Copy de la pantalla «Mi cuenta» (M3.1-S07, DESIGN.md §11). */
+export const PROFILE = {
+  title: "Mi cuenta",
+  documentTitle: "Mi cuenta",
+  intro: "Revisá cómo te mostramos en VECTORiZE y con qué datos entrás.",
+  profileSection: {
+    title: "Perfil",
+    intro: "Esto es de VECTORiZE: el nombre que aparece en el menú de tu cuenta.",
+  },
+  field: {
+    label: "Nombre para mostrar",
+    hint: "Entre 1 y 80 caracteres. Puede ser tu nombre o un apodo.",
+    maxLength: 80,
+  },
+  save: "Guardar cambios",
+  saving: "Guardando…",
+  discard: "Descartar cambios",
+  discarded: "Descartaste los cambios.",
+  saved: "Guardamos tu nombre para mostrar.",
+  validation: {
+    required: "Escribí un nombre para mostrar.",
+    tooLong: (length: number) => `El nombre para mostrar puede tener hasta 80 caracteres. Ahora tiene ${length}.`,
+    controlCharacters: "El nombre para mostrar no puede tener tabulaciones, saltos de línea ni otros caracteres de control.",
+  },
+  saveError: {
+    badRequest: "No pudimos guardar el nombre con esos datos. Revisalo e intentá de nuevo.",
+    network:
+      "No pudimos guardar el cambio: no hay conexión con el servidor. Lo que escribiste sigue acá; revisá tu conexión e intentá de nuevo.",
+    server: (status: number | undefined) =>
+      status === undefined
+        ? "El servidor no pudo guardar el cambio. Lo que escribiste sigue acá; intentá de nuevo en unos minutos."
+        : `El servidor no pudo guardar el cambio (código ${status}). Lo que escribiste sigue acá; intentá de nuevo en unos minutos.`,
+    forbidden: (status: number) =>
+      `El servidor rechazó el cambio (código ${status}) y no se guardó. Intentá de nuevo; si vuelve a pasar, copiá el nombre que escribiste y recargá la página.`,
+  },
+  accessSection: {
+    title: "Cuenta de acceso",
+    intro: "Son los datos con los que iniciás sesión. No forman parte de tu perfil de VECTORiZE.",
+    introDevelopment: "Son los datos del usuario de desarrollo configurado en el servidor.",
+    emailLabel: "Correo electrónico",
+    noEmail: "Sin correo asociado",
+    emailNote: "Tu correo se gestiona con tu cuenta y no se puede cambiar desde esta pantalla.",
+    emailNoteDevelopment:
+      "En modo desarrollo el correo es el del usuario de desarrollo: se gestiona con la configuración del servidor y no se puede cambiar desde esta pantalla.",
+    createdLabel: "Cuenta creada el",
+  },
+  developmentNotice:
+    "Estás en modo desarrollo: usás el usuario de desarrollo, sin iniciar sesión. Lo que cambies acá se guarda en ese usuario y lo ve cualquiera que use este entorno.",
+  loading: "Cargando tu perfil…",
+  loadError: {
+    server: (status: number | undefined) =>
+      status === undefined
+        ? "El servidor no pudo cargar tu perfil. Intentá de nuevo en unos minutos."
+        : `El servidor no pudo cargar tu perfil (código ${status}). Intentá de nuevo en unos minutos.`,
+    network: "No pudimos cargar tu perfil: no hay conexión con el servidor. Revisá tu conexión e intentá de nuevo.",
+    forbidden: (status: number) => `El servidor rechazó la solicitud (código ${status}). Recargá la página e intentá de nuevo.`,
+    other: "No pudimos cargar tu perfil. Recargá la página e intentá de nuevo.",
+  },
 } as const;

@@ -51,7 +51,16 @@ export interface AuthBackendOptions {
   /** Código HTTP con el que responde `GET /api/v2/projects` (para probar 403/5xx en pantallas de producto con sesión viva). */
   projectsStatus?: number;
   /** Retiene la respuesta de `/me` o de `/login` hasta que se resuelva la promesa (estado «cargando» / «enviando»). */
-  gates?: { me?: Promise<void>; login?: Promise<void> };
+  gates?: { me?: Promise<void>; login?: Promise<void>; profile?: Promise<void>; profileSave?: Promise<void> };
+  /** Perfil (M3.1-S07): `GET /api/v1/me` y `PATCH /api/v1/me`. Por defecto, un perfil en memoria que valida como el servidor. */
+  profile?: {
+    /** Sobrescribe `GET /api/v1/me` (red caída, 5xx, 403...). Devolver `undefined` usa el perfil en memoria. */
+    get?: (call: RecordedCall) => Response | Promise<Response> | undefined;
+    /** Sobrescribe `PATCH /api/v1/me`. Devolver `undefined` usa el perfil en memoria. */
+    patch?: (call: RecordedCall) => Response | Promise<Response> | undefined;
+    email?: string | null;
+    createdAt?: string | null;
+  };
 }
 
 const IMAGE_ID_PATTERN = /\/api\/v1\/projects\/([^/]+)\/images\/([^/]+)$/;
@@ -63,6 +72,8 @@ export function networkFailure(): Promise<Response> {
 export function installAuthBackend(options: AuthBackendOptions = {}) {
   const session = { user: options.user === undefined ? ANA : options.user, me: options.me ?? ("session" as MeBehavior) };
   const authCalls: RecordedCall[] = [];
+  const profileCalls: RecordedCall[] = [];
+  let storedName: string | null = null;
 
   const override = (call: RecordedCall): Response | Promise<Response> | undefined => {
     if (call.path.startsWith("/api/v1/auth/")) {
@@ -113,6 +124,41 @@ export function installAuthBackend(options: AuthBackendOptions = {}) {
     // Endpoints de producto: sin sesión (modo Authenticated) = 401, como el servidor real.
     if (!session.user) {
       return jsonResponse({ code: "unauthenticated", message: "Necesitás iniciar sesión para usar este recurso." }, 401);
+    }
+
+    if (call.path === "/api/v1/me") {
+      profileCalls.push(call);
+      const user = session.user;
+      const profileOf = (): Response => {
+        const profile = options.profile;
+        const body: Record<string, unknown> = {
+          id: user.id,
+          email: profile?.email === undefined ? user.email : profile.email,
+          displayName: storedName ?? user.displayName,
+          managedFields: ["email"],
+        };
+        if (profile?.createdAt !== null) body.createdAt = profile?.createdAt ?? "2026-10-15T14:32:00Z";
+        return jsonResponse(body);
+      };
+      if (call.method === "GET") {
+        const overridden = options.profile?.get?.(call);
+        if (overridden) return overridden;
+        return options.gates?.profile ? options.gates.profile.then(profileOf) : profileOf();
+      }
+      if (call.method === "PATCH") {
+        const overridden = options.profile?.patch?.(call);
+        if (overridden) return overridden;
+        const respond = (): Response => {
+          const requested = (call.body as { displayName?: unknown } | undefined)?.displayName;
+          const name = typeof requested === "string" ? requested.trim() : "";
+          if (name.length < 1 || name.length > 80) {
+            return jsonResponse({ code: "invalid_display_name", message: "El nombre para mostrar debe tener entre 1 y 80 caracteres." }, 400);
+          }
+          storedName = name;
+          return profileOf();
+        };
+        return options.gates?.profileSave ? options.gates.profileSave.then(respond) : respond();
+      }
     }
 
     if (options.projectsStatus && call.method === "GET" && call.path === "/api/v2/projects") {
@@ -176,6 +222,8 @@ export function installAuthBackend(options: AuthBackendOptions = {}) {
     ...api,
     session,
     authCalls,
+    profileCalls,
+    profileCallsTo: (method: string) => profileCalls.filter((call) => call.method === method),
     authCallsTo: (method: string, path: string) =>
       authCalls.filter((call) => call.method === method && call.path === path),
   };

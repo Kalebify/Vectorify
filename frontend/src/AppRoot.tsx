@@ -4,6 +4,7 @@ import { AuthProvider } from "./auth/AuthProvider";
 import { ArrivalFocus, AuthBoundary } from "./auth/AuthBoundary";
 import {
   getLocationSearch,
+  isAccountView,
   navigateToReturnUrl,
   readAuthView,
   readReturnUrl,
@@ -13,6 +14,7 @@ import {
 } from "./auth/authLocation";
 import { useAuth } from "./auth/authContext";
 import { LoginScreen } from "./auth/LoginScreen";
+import { ProfileScreen } from "./auth/ProfileScreen";
 import { RegisterScreen } from "./auth/RegisterScreen";
 import { SessionErrorPanel, SessionPending } from "./auth/SessionStates";
 import { UserMenu } from "./auth/UserMenu";
@@ -20,7 +22,8 @@ import { UserMenu } from "./auth/UserMenu";
 /**
  * Raíz de composición (M3.1-S05): une el módulo de autenticación con la app de producto SIN que `App` ni sus pantallas importen nada de
  * auth. Las rutas privadas (Mis proyectos, `?view=new`, Workspace) quedan detrás de `AuthBoundary`; `?view=login|register` son las únicas
- * vistas públicas. El menú de cuenta se inyecta en `App` como slot.
+ * vistas públicas. `?view=account` («Mi cuenta», M3.1-S07) también va detrás de `AuthBoundary` y se resuelve ANTES que las vistas de producto: `App`
+ * no se entera de esa ruta. El menú de cuenta se inyecta en `App` como slot.
  */
 export function AppRoot() {
   return (
@@ -34,11 +37,20 @@ function Routes() {
   const search = useSyncExternalStore(subscribeLocation, getLocationSearch);
   const authView = readAuthView(search);
 
+  if (isAccountView(search)) {
+    return (
+      <AuthBoundary>
+        <ProfileScreen />
+        <ArrivalFocus key="account" />
+      </AuthBoundary>
+    );
+  }
+
   if (authView === null) {
     return (
       <AuthBoundary>
         <App userMenu={<UserMenu />} />
-        <ArrivalFocus />
+        <ArrivalFocus key="app" />
       </AuthBoundary>
     );
   }
