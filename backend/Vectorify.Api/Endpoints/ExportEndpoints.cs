@@ -20,9 +20,9 @@ namespace Vectorify.Api.Endpoints;
 /// </summary>
 public static class ExportEndpoints
 {
-    public static void MapExportEndpoints(this IEndpointRouteBuilder app)
+    public static void MapExportEndpoints(this RouteGroupBuilder app)
     {
-        app.MapGet("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/export", async (
+        app.MapGet("/export", async (
             Guid projectId,
             Guid imageId,
             string? sourceKind,

@@ -13,9 +13,9 @@ namespace Vectorify.Api.Endpoints;
 /// </summary>
 public static class ThresholdEndpoints
 {
-    public static void MapThresholdEndpoints(this IEndpointRouteBuilder app)
+    public static void MapThresholdEndpoints(this RouteGroupBuilder app)
     {
-        app.MapPost("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/threshold", async (
+        app.MapPost("/threshold", async (
             Guid projectId,
             Guid imageId,
             ThresholdRequest request,
@@ -57,7 +57,7 @@ public static class ThresholdEndpoints
             "la respuesta incluye un código/mensaje de advertencia (no un error). 'Resetear' es " +
             "simplemente volver a llamar con los valores por defecto (value=128, invert=false).");
 
-        app.MapGet("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/masks/{maskId:guid}", async (
+        app.MapGet("/masks/{maskId:guid}", async (
             Guid projectId,
             Guid imageId,
             Guid maskId,

@@ -13,9 +13,9 @@ namespace Vectorify.Api.Endpoints;
 /// </summary>
 public static class VectorLayerEndpoints
 {
-    public static void MapVectorLayerEndpoints(this IEndpointRouteBuilder app)
+    public static void MapVectorLayerEndpoints(this RouteGroupBuilder app)
     {
-        app.MapPost("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}/layers", async (
+        app.MapPost("/color-palette/{paletteId:guid}/layers", async (
             Guid projectId,
             Guid imageId,
             Guid paletteId,
@@ -62,7 +62,7 @@ public static class VectorLayerEndpoints
             "pero igual registra una versión nueva del conjunto (nunca retrocede ni muta una " +
             "versión existente).");
 
-        app.MapGet("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}/layers", (
+        app.MapGet("/color-palette/{paletteId:guid}/layers", (
             Guid projectId,
             Guid imageId,
             Guid paletteId,

@@ -19,6 +19,7 @@ public sealed class ProjectUploadService : IProjectUploadService
     private readonly IFileStorage _fileStorage;
     private readonly IProjectRegistry _registry;
     private readonly IUserContext _userContext;
+    private readonly IClassicProjectAccess _access;
     private readonly ILogger<ProjectUploadService> _logger;
 
     public ProjectUploadService(
@@ -26,12 +27,14 @@ public sealed class ProjectUploadService : IProjectUploadService
         IFileStorage fileStorage,
         IProjectRegistry registry,
         IUserContext userContext,
+        IClassicProjectAccess access,
         ILogger<ProjectUploadService> logger)
     {
         _validator = validator;
         _fileStorage = fileStorage;
         _registry = registry;
         _userContext = userContext;
+        _access = access;
         _logger = logger;
     }
 
@@ -41,11 +44,11 @@ public sealed class ProjectUploadService : IProjectUploadService
 
         if (!string.IsNullOrWhiteSpace(idempotencyKey))
         {
-            // M2.2-S09: el replay solo aplica a un registro del MISMO usuario (o sin dueño, previo
-            // a esta tarjeta). Una key que otro usuario ya usó NO devuelve sus ids: se trata como
-            // una carga nueva (el registry guarda la key más reciente).
+            // M2.2-S09: el replay solo aplica a un registro del MISMO usuario. Una key que otro usuario ya usó NO
+            // devuelve sus ids: se trata como una carga nueva (el registry guarda la key más reciente). M3.1-S06: un
+            // registro legado sin dueño solo se reproduce en Auth:Mode=Development (regla única en IClassicProjectAccess).
             var existing = _registry.FindByIdempotencyKey(idempotencyKey);
-            if (existing is not null && existing.IsAccessibleBy(ownerId))
+            if (existing is not null && _access.IsAccessible(existing))
             {
                 _logger.LogInformation(
                     "Replay de Idempotency-Key {IdempotencyKey}: devolviendo proyecto {ProjectId} sin crear uno nuevo",

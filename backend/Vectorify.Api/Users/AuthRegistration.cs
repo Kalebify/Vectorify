@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
+using Vectorify.Api.Authorization;
 using Vectorify.Api.Data.Auth;
 using Vectorify.Api.Options;
 
@@ -48,7 +49,7 @@ public static class AuthRegistration
         });
 
         services.AddAuthentication(IdentityConstants.ApplicationScheme).AddIdentityCookies();
-        services.AddAuthorization();
+        services.AddVectorifyAuthorization();
 
         services
             .AddIdentityCore<ApplicationUser>()

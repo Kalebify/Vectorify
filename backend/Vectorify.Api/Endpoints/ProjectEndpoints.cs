@@ -1,7 +1,6 @@
 using Vectorify.Api.Contracts;
 using Vectorify.Api.Projects;
 using Vectorify.Api.Storage;
-using Vectorify.Api.Users;
 
 namespace Vectorify.Api.Endpoints;
 
@@ -104,19 +103,26 @@ public static class ProjectEndpoints
             "opcional 'Idempotency-Key' evita duplicar el proyecto ante un reintento del " +
             "mismo envío: si se repite la clave, se devuelve 200 con el proyecto ya creado " +
             "en vez de crear uno nuevo.");
+    }
 
+    /// <summary>
+    /// Lecturas de un proyecto/imagen ya subida. Se mapean sobre el grupo del flujo clásico (<see cref="Vectorify.Api.Authorization.ClassicProjectScopeExtensions.MapClassicProjectGroup"/>):
+    /// la comprobación de dueño (404 uniforme ante ajeno o inexistente) la hace el middleware central ANTES de llegar acá, así que estos
+    /// handlers solo localizan el registro (M3.1-S06).
+    /// </summary>
+    public static void MapProjectImageEndpoints(this RouteGroupBuilder app)
+    {
         // Metadata JSON de un proyecto/imagen ya subida (M2.1-S08): permite reconstruir
         // `activeProject` del lado del cliente a partir de una URL (deep-link/reload del
         // Workspace) sin volver a subir el archivo. Mismo shape que UploadImageResponse.
-        app.MapGet("/api/v1/projects/{projectId:guid}/images/{imageId:guid}", (
+        app.MapGet("", (
             Guid projectId,
             Guid imageId,
-            IProjectRegistry registry,
-            IUserContext userContext) =>
+            IProjectRegistry registry) =>
         {
-            // M2.2-S09: un registro de otro usuario es un 404 idéntico al de uno inexistente.
+            // El dueño ya lo comprobó ClassicProjectOwnerMiddleware (ajeno e inexistente = el mismo 404, M2.2-S09/M3.1-S06).
             var record = registry.Find(projectId, imageId);
-            if (record is null || !record.IsAccessibleBy(userContext.GetEffectiveUserId()))
+            if (record is null)
             {
                 return Results.NotFound(new ApiErrorResponse("not_found", "No existe un proyecto/imagen con esos IDs."));
             }
@@ -137,20 +143,19 @@ public static class ProjectEndpoints
         .Produces<ApiErrorResponse>(StatusCodes.Status404NotFound)
         .WithSummary("Recupera la metadata (filename/dimensiones) de un proyecto/imagen ya cargada, sin su binario.")
         .WithDescription(
-            "404 uniforme si no existe O si fue subida por otro usuario (M2.2-S09). Los registros previos a esa " +
-            "tarjeta no tienen dueño y siguen siendo accesibles.");
+            "404 uniforme si no existe O si fue subida por otro usuario (M2.2-S09). Desde M3.1-S06 los registros previos a esa " +
+            "tarjeta (sin dueño) no son accesibles por ningún usuario autenticado; solo por el usuario de desarrollo en Auth:Mode=Development.");
 
         // Recupera el original guardado, sin procesarlo (fuera de alcance de este sprint).
-        app.MapGet("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/original", async (
+        app.MapGet("/original", async (
             Guid projectId,
             Guid imageId,
             IProjectRegistry registry,
-            IUserContext userContext,
             IFileStorage fileStorage,
             CancellationToken cancellationToken) =>
         {
             var record = registry.Find(projectId, imageId);
-            if (record is null || !record.IsAccessibleBy(userContext.GetEffectiveUserId()))
+            if (record is null)
             {
                 return Results.NotFound(new ApiErrorResponse("not_found", "No existe un proyecto/imagen con esos IDs."));
             }

@@ -25,8 +25,11 @@ public sealed class ProjectUploadServiceTests
     private static ProjectUploadService CreateService(FakeFileStorage storage, InMemoryProjectRegistry registry, Guid? userId = null)
     {
         var validator = new ImageUploadValidator(Microsoft.Extensions.Options.Options.Create(new UploadOptions()));
+        var userContext = new FixedUserContext(userId);
+        // Auth:Mode=Development (el modo de estos tests unitarios): un registro legado sin dueño sigue siendo reproducible.
+        var access = new ClassicProjectAccess(registry, userContext, Microsoft.Extensions.Options.Options.Create(new AuthOptions { Mode = AuthMode.Development }));
         return new ProjectUploadService(
-            validator, storage, registry, new FixedUserContext(userId), NullLogger<ProjectUploadService>.Instance);
+            validator, storage, registry, userContext, access, NullLogger<ProjectUploadService>.Instance);
     }
 
     [Fact]

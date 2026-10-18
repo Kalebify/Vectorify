@@ -13,10 +13,10 @@ namespace Vectorify.Api.Endpoints;
 /// </summary>
 public static class LayerLayoutEndpoints
 {
-    public static void MapLayerLayoutEndpoints(this IEndpointRouteBuilder app)
+    public static void MapLayerLayoutEndpoints(this RouteGroupBuilder app)
     {
         app.MapPost(
-            "/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}/layers/{groupId:guid}/visibility",
+            "/color-palette/{paletteId:guid}/layers/{groupId:guid}/visibility",
             async (
                 Guid projectId,
                 Guid imageId,
@@ -40,7 +40,7 @@ public static class LayerLayoutEndpoints
             "persisten únicamente los toggles explícitos del Eye de una capa a la vez -- ver IMPL.md.");
 
         app.MapPost(
-            "/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}/layers/{groupId:guid}/lock",
+            "/color-palette/{paletteId:guid}/layers/{groupId:guid}/lock",
             async (
                 Guid projectId,
                 Guid imageId,
@@ -64,7 +64,7 @@ public static class LayerLayoutEndpoints
             "ninguna interacción que mute su geometría. Togglear Locked NO afecta Visible ni Order.");
 
         app.MapPost(
-            "/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}/layers/{groupId:guid}/rename",
+            "/color-palette/{paletteId:guid}/layers/{groupId:guid}/rename",
             async (
                 Guid projectId,
                 Guid imageId,
@@ -90,7 +90,7 @@ public static class LayerLayoutEndpoints
             "Togglear Name NO afecta Visible/Locked/Order de esa capa ni de ninguna otra.");
 
         app.MapPost(
-            "/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}/layers/reorder",
+            "/color-palette/{paletteId:guid}/layers/reorder",
             async (
                 Guid projectId,
                 Guid imageId,
@@ -114,7 +114,7 @@ public static class LayerLayoutEndpoints
             "Order, preservando Visible/Locked de cada capa intactos.");
 
         app.MapGet(
-            "/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}/layers/layout",
+            "/color-palette/{paletteId:guid}/layers/layout",
             (
                 Guid projectId,
                 Guid imageId,

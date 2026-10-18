@@ -14,10 +14,10 @@ namespace Vectorify.Api.Endpoints;
 /// </summary>
 public static class ManufacturingOperationEndpoints
 {
-    public static void MapManufacturingOperationEndpoints(this IEndpointRouteBuilder app)
+    public static void MapManufacturingOperationEndpoints(this RouteGroupBuilder app)
     {
         app.MapPost(
-            "/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}/layers/{groupId:guid}/operation",
+            "/color-palette/{paletteId:guid}/layers/{groupId:guid}/operation",
             async (
                 Guid projectId,
                 Guid imageId,
@@ -53,7 +53,7 @@ public static class ManufacturingOperationEndpoints
             "viejas no se migran automáticamente -- mismo criterio que M2-S05 (ComponentGroup/ComponentSetVersion).");
 
         app.MapGet(
-            "/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}/layers/operations",
+            "/color-palette/{paletteId:guid}/layers/operations",
             (
                 Guid projectId,
                 Guid imageId,

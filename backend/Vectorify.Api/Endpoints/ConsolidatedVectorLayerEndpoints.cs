@@ -29,10 +29,10 @@ namespace Vectorify.Api.Endpoints;
 /// </summary>
 public static class ConsolidatedVectorLayerEndpoints
 {
-    public static void MapConsolidatedVectorLayerEndpoints(this IEndpointRouteBuilder app)
+    public static void MapConsolidatedVectorLayerEndpoints(this RouteGroupBuilder app)
     {
         app.MapGet(
-            "/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}/layers/consolidated",
+            "/color-palette/{paletteId:guid}/layers/consolidated",
             (
                 Guid projectId,
                 Guid imageId,

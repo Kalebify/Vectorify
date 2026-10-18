@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Vectorify.Api.Contracts;
 using Vectorify.Api.Endpoints;
+using Vectorify.Api.Authorization;
 using Vectorify.Api.Middleware;
 using Vectorify.Api.Options;
 using Vectorify.Api.Tests.TestSupport;
@@ -501,7 +502,7 @@ public sealed class AuthLoginLogoutTests : IClassFixture<AuthApiFixture>, IAsync
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         var body = (await response.Content.ReadFromJsonAsync<ApiErrorResponse>())!;
-        Assert.Equal(UnauthenticatedUserMiddleware.Code, body.Code);
+        Assert.Equal(UnauthenticatedJsonResultHandler.Code, body.Code);
         Assert.Equal(HttpStatusCode.Unauthorized, (await _client.PostAsJsonAsync("/api/v2/projects", new CreateProjectRequest("X", null))).StatusCode);
     }
 

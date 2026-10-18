@@ -8,11 +8,10 @@ namespace Vectorify.Api.Projects;
 /// de M1-S01/M1-S02).
 /// </summary>
 /// <param name="OwnerId">
-/// M2.2-S09: usuario efectivo que subió la imagen. <c>null</c> = registro previo a esta tarjeta
-/// (JSON viejo en disco) o sin dueño conocido: sigue siendo accesible por cualquiera, no se
-/// puede inferir un dueño retroactivamente. Solo lo hacen valer el puente hacia v2
-/// (<c>VectorDocumentService.SaveAsync</c>) y <c>GET /api/v1/projects/.../images/...</c>; el resto
-/// del pipeline clásico se direcciona por Guid sin dueño (limitación conocida, hardening de MVP 3.1).
+/// Usuario efectivo que subió la imagen. <c>null</c> = registro LEGADO (JSON de antes de M2.2-S09) sin dueño conocido: no se puede
+/// inferir un dueño retroactivamente. Desde M3.1-S06 un registro sin dueño NO es accesible por ningún usuario autenticado (falla
+/// cerrado); solo el usuario de desarrollo (<c>Auth:Mode=Development</c>) conserva el acceso. La decisión se toma en UN solo lugar
+/// (<see cref="IClassicProjectAccess"/>) y la aplica a todo el flujo clásico <see cref="Vectorify.Api.Authorization.ClassicProjectOwnerMiddleware"/>.
 /// </param>
 public sealed record ProjectRecord(
     Guid ProjectId,
@@ -29,9 +28,9 @@ public sealed record ProjectRecord(
     Guid? OwnerId = null)
 {
     /// <summary>
-    /// true si <paramref name="userId"/> puede ver este registro: es su dueño, o el registro no
-    /// tiene dueño (previo a M2.2-S09). Un registro ajeno debe tratarse como INEXISTENTE (404
-    /// uniforme), nunca como 403.
+    /// true si <paramref name="userId"/> es el dueño del registro. Un registro SIN dueño (legado) solo es accesible si
+    /// <paramref name="allowOwnerless"/> (modo <c>Auth:Mode=Development</c>); en modo Authenticated nadie lo alcanza. Un registro
+    /// ajeno debe tratarse como INEXISTENTE (404 uniforme), nunca como 403.
     /// </summary>
-    public bool IsAccessibleBy(Guid userId) => OwnerId is null || OwnerId == userId;
+    public bool IsAccessibleBy(Guid userId, bool allowOwnerless) => OwnerId is null ? allowOwnerless : OwnerId == userId;
 }

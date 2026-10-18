@@ -12,9 +12,9 @@ namespace Vectorify.Api.Endpoints;
 /// </summary>
 public static class CheckEndpoints
 {
-    public static void MapCheckEndpoints(this IEndpointRouteBuilder app)
+    public static void MapCheckEndpoints(this RouteGroupBuilder app)
     {
-        app.MapPost("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/check", async (
+        app.MapPost("/check", async (
             Guid projectId,
             Guid imageId,
             CheckRequest request,

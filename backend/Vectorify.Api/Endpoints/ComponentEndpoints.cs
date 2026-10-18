@@ -14,10 +14,10 @@ namespace Vectorify.Api.Endpoints;
 /// </summary>
 public static class ComponentEndpoints
 {
-    public static void MapComponentEndpoints(this IEndpointRouteBuilder app)
+    public static void MapComponentEndpoints(this RouteGroupBuilder app)
     {
         app.MapPost(
-            "/api/v1/projects/{projectId:guid}/images/{imageId:guid}/vectors/{vectorId:guid}/components",
+            "/vectors/{vectorId:guid}/components",
             async (
                 Guid projectId,
                 Guid imageId,
@@ -60,7 +60,7 @@ public static class ComponentEndpoints
             "cacheado) en vez de volver a llamar a Python, pero igual registra una versión nueva.");
 
         app.MapGet(
-            "/api/v1/projects/{projectId:guid}/images/{imageId:guid}/vectors/{vectorId:guid}/components",
+            "/vectors/{vectorId:guid}/components",
             (
                 Guid projectId,
                 Guid imageId,

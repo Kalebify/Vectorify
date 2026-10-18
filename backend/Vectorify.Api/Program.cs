@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Vectorify.Api.Assets;
 using Vectorify.Api.Assets.Persistence;
+using Vectorify.Api.Authorization;
 using Vectorify.Api.Checking;
 using Vectorify.Api.Clients;
 using Vectorify.Api.ColorPalette;
@@ -159,6 +160,10 @@ builder.Services.AddSingleton<IImageUploadValidator, ImageUploadValidator>();
 builder.Services.AddSingleton<IFileStorage, LocalFileStorage>();
 builder.Services.AddSingleton<IProjectRegistry, PersistentProjectRegistry>();
 builder.Services.AddScoped<IProjectUploadService, ProjectUploadService>();
+
+// Regla de dueño ÚNICA del flujo clásico (M3.1-S06): la usan el middleware central del grupo /api/v1/projects/{projectId}/images/{imageId},
+// el replay de idempotencia de la carga y el puente clásico -> v2. Un registro sin dueño (legado) falla cerrado salvo en Auth:Mode=Development.
+builder.Services.AddScoped<IClassicProjectAccess, ClassicProjectAccess>();
 
 // Preprocesamiento de imagen (M1-S03): rangos de sliders configurables
 // (Preprocess:*), un cliente Python dedicado con su propio timeout (más alto
@@ -711,9 +716,6 @@ app.UseCors(FrontendCorsOptions.PolicyName);
 // Development no se aplica (sin sesiones: el flujo de desarrollo y los E2E anónimos siguen igual).
 app.UseMiddleware<CsrfGuardMiddleware>();
 
-// Red de seguridad hasta S06: una request sin sesión que llega a IUserContext (falla cerrado) responde 401 y no 500.
-app.UseMiddleware<UnauthenticatedUserMiddleware>();
-
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -724,13 +726,18 @@ if (app.Environment.IsDevelopment())
     });
 }
 
-// Autenticación (M3.1-S02), DESPUÉS de CORS y de Swagger (los preflight y la UI no necesitan sesión): la cookie de Identity se
-// descifra en UseAuthentication; UseAuthorization aplica las políticas (todavía sin FallbackPolicy: la denegación por
-// defecto de los endpoints del flujo existente es S06); UserProvisioningMiddleware mapea (Provider, Subject) -> User.Id
-// una vez por request autenticada. Las requests anónimas lo atraviesan sin tocar la base.
+// Autenticación y autorización (M3.1-S02, M3.1-S06), DESPUÉS de CORS y de Swagger (los preflight y la UI no necesitan sesión):
+//  1. UseAuthentication descifra la cookie de Identity.
+//  2. UserProvisioningMiddleware mapea (Provider, Subject) -> User.Id una vez por request autenticada y añade la identidad interna;
+//     va ANTES de UseAuthorization porque la FallbackPolicy se evalúa sobre IUserContext (usuario RESUELTO). Las requests anónimas lo
+//     atraviesan sin tocar la base.
+//  3. UseAuthorization aplica la FallbackPolicy (DENEGAR POR DEFECTO: 401 sin usuario resuelto; en Auth:Mode=Development el usuario de
+//     desarrollo la satisface). Solo las rutas con AllowAnonymous explícito la saltan.
+//  4. ClassicProjectOwnerMiddleware: comprobación de dueño CENTRAL de /api/v1/projects/{projectId}/images/{imageId}/** (404 uniforme).
 app.UseAuthentication();
-app.UseAuthorization();
 app.UseMiddleware<UserProvisioningMiddleware>();
+app.UseAuthorization();
+app.UseMiddleware<ClassicProjectOwnerMiddleware>();
 
 // Liveness simple de la propia Web API: no depende de Python. Si esto responde,
 // ASP.NET Core está arriba, sin importar el estado del motor.
@@ -741,6 +748,7 @@ app.MapGet("/health", () => Results.Ok(new
     version = ApiVersion,
     timestamp = DateTimeOffset.UtcNow,
 }))
+.AllowAnonymous()
 .WithName("GetHealth")
 .WithTags("Health");
 
@@ -797,27 +805,35 @@ app.MapGet("/api/v1/system/health", async (
 
     return Results.Ok(response);
 })
+.AllowAnonymous()
 .WithName("GetSystemHealth")
 .WithTags("Health");
 
 app.MapAuthEndpoints();
-app.MapProjectEndpoints();
-app.MapPreprocessEndpoints();
-app.MapThresholdEndpoints();
-app.MapVectorizationEndpoints();
-app.MapSimplificationEndpoints();
-app.MapCheckEndpoints();
-app.MapGeometryEndpoints();
-app.MapDimensionEndpoints();
-app.MapExportEndpoints();
-app.MapColorPaletteEndpoints();
-app.MapVectorLayerEndpoints();
-app.MapConsolidatedVectorLayerEndpoints();
-app.MapComponentEndpoints();
-app.MapComponentGroupEndpoints();
-app.MapPhysicalUnionEndpoints();
-app.MapManufacturingOperationEndpoints();
-app.MapLayerLayoutEndpoints();
+app.MapProjectEndpoints(); // POST /api/v1/projects (alta: el dueño lo pone el servidor)
+app.MapGeometryEndpoints(); // /api/v2/geometry/*: operaciones SIN estado ni recurso; solo exigen sesión (FallbackPolicy)
+
+// Flujo clásico con dueño (M3.1-S06): TODAS estas rutas cuelgan de UN grupo, y el grupo lleva la comprobación de dueño central
+// (ClassicProjectOwnerMiddleware, por metadata). Las rutas se declaran con paths relativos al prefijo del grupo.
+var classicProject = app.MapClassicProjectGroup();
+classicProject.MapProjectImageEndpoints();
+classicProject.MapPreprocessEndpoints();
+classicProject.MapThresholdEndpoints();
+classicProject.MapVectorizationEndpoints();
+classicProject.MapSimplificationEndpoints();
+classicProject.MapCheckEndpoints();
+classicProject.MapDimensionEndpoints();
+classicProject.MapExportEndpoints();
+classicProject.MapColorPaletteEndpoints();
+classicProject.MapVectorLayerEndpoints();
+classicProject.MapConsolidatedVectorLayerEndpoints();
+classicProject.MapComponentEndpoints();
+classicProject.MapComponentGroupEndpoints();
+classicProject.MapPhysicalUnionEndpoints();
+classicProject.MapManufacturingOperationEndpoints();
+classicProject.MapLayerLayoutEndpoints();
+
+// /api/v2/projects*: el dueño se filtra en el repositorio por IUserContext (404 uniforme), ver docs/AUTH_AUTHORIZATION.md.
 app.MapProjectV2Endpoints();
 app.MapAssetEndpoints();
 app.MapVectorDocumentEndpoints();

@@ -41,6 +41,7 @@ public sealed class VectorDocumentService : IVectorDocumentService
     private readonly IVectorVersionRegistry _vectorVersionRegistry;
     private readonly IFileStorage _fileStorage;
     private readonly IProjectRegistry _projectRegistry;
+    private readonly IClassicProjectAccess _classicAccess;
     private readonly IAssetService _assetService;
     private readonly IUserContext _userContext;
     private readonly ILogger<VectorDocumentService> _logger;
@@ -57,6 +58,7 @@ public sealed class VectorDocumentService : IVectorDocumentService
         IVectorVersionRegistry vectorVersionRegistry,
         IFileStorage fileStorage,
         IProjectRegistry projectRegistry,
+        IClassicProjectAccess classicAccess,
         IAssetService assetService,
         IUserContext userContext,
         ILogger<VectorDocumentService> logger)
@@ -72,6 +74,7 @@ public sealed class VectorDocumentService : IVectorDocumentService
         _vectorVersionRegistry = vectorVersionRegistry;
         _fileStorage = fileStorage;
         _projectRegistry = projectRegistry;
+        _classicAccess = classicAccess;
         _assetService = assetService;
         _userContext = userContext;
         _logger = logger;
@@ -142,14 +145,12 @@ public sealed class VectorDocumentService : IVectorDocumentService
             }
         }
 
-        // M2.2-S09: puente clásico -> v2. Los uploads del flujo clásico (ProjectRecord) tienen dueño
-        // desde esta tarjeta: si el original del triple es de OTRO usuario, el resultado es el mismo
-        // NotFound que "no existe" -- y se corta ACÁ, antes de crear el Project, subir Assets o generar
-        // el thumbnail, para no dejar nada huérfano. Un registro sin dueño (previo a la tarjeta) sigue
-        // siendo accesible. Un registro inexistente no se rechaza acá: lo atrapan los chequeos de
-        // paleta/capas de más abajo, como siempre.
-        var classicRecord = _projectRegistry.Find(request.ClassicProjectId, request.ImageId);
-        if (classicRecord is not null && !classicRecord.IsAccessibleBy(ownerId))
+        // M2.2-S09 / M3.1-S06: puente clásico -> v2. Los uploads del flujo clásico (ProjectRecord) tienen dueño: si el
+        // original del triple es de OTRO usuario, o no existe, o es un registro legado sin dueño (que en modo
+        // Authenticated no es de nadie), el resultado es el MISMO NotFound -- y se corta ACÁ, antes de crear el Project,
+        // subir Assets o generar el thumbnail, para no dejar nada huérfano ni distinguir "ajeno" de "inexistente"
+        // (antes un inexistente seguía hasta un 422 de paleta, un oráculo de existencia). La regla vive en IClassicProjectAccess.
+        if (_classicAccess.FindAccessible(request.ClassicProjectId, request.ImageId) is null)
         {
             return new VectorDocumentResult.NotFound("not_found", "No existe un proyecto con ese Id.");
         }

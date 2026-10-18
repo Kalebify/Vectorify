@@ -14,10 +14,10 @@ namespace Vectorify.Api.Endpoints;
 /// </summary>
 public static class ComponentGroupEndpoints
 {
-    public static void MapComponentGroupEndpoints(this IEndpointRouteBuilder app)
+    public static void MapComponentGroupEndpoints(this RouteGroupBuilder app)
     {
         app.MapPost(
-            "/api/v1/projects/{projectId:guid}/images/{imageId:guid}/vectors/{vectorId:guid}/components/groups",
+            "/vectors/{vectorId:guid}/components/groups",
             async (
                 Guid projectId,
                 Guid imageId,
@@ -42,7 +42,7 @@ public static class ComponentGroupEndpoints
             "ComponentSetVersion vigente del VectorId indicado al momento de crear el grupo.");
 
         app.MapPost(
-            "/api/v1/projects/{projectId:guid}/images/{imageId:guid}/vectors/{vectorId:guid}/components/groups/{groupId:guid}/ungroup",
+            "/vectors/{vectorId:guid}/components/groups/{groupId:guid}/ungroup",
             async (
                 Guid projectId,
                 Guid imageId,
@@ -62,7 +62,7 @@ public static class ComponentGroupEndpoints
         .WithSummary("Desagrupa un ComponentGroup: sus componentes vuelven a existir individualmente exactamente como antes de agruparlos.");
 
         app.MapPost(
-            "/api/v1/projects/{projectId:guid}/images/{imageId:guid}/vectors/{vectorId:guid}/components/groups/{groupId:guid}/rename",
+            "/vectors/{vectorId:guid}/components/groups/{groupId:guid}/rename",
             async (
                 Guid projectId,
                 Guid imageId,
@@ -84,7 +84,7 @@ public static class ComponentGroupEndpoints
         .WithSummary("Renombra un ComponentGroup existente.");
 
         app.MapGet(
-            "/api/v1/projects/{projectId:guid}/images/{imageId:guid}/vectors/{vectorId:guid}/components/groups",
+            "/vectors/{vectorId:guid}/components/groups",
             (
                 Guid projectId,
                 Guid imageId,

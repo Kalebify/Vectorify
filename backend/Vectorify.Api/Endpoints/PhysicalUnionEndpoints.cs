@@ -16,10 +16,10 @@ namespace Vectorify.Api.Endpoints;
 /// </summary>
 public static class PhysicalUnionEndpoints
 {
-    public static void MapPhysicalUnionEndpoints(this IEndpointRouteBuilder app)
+    public static void MapPhysicalUnionEndpoints(this RouteGroupBuilder app)
     {
         app.MapPost(
-            "/api/v1/projects/{projectId:guid}/images/{imageId:guid}/vectors/{vectorId:guid}/physical-union/preview",
+            "/vectors/{vectorId:guid}/physical-union/preview",
             async (
                 Guid projectId,
                 Guid imageId,
@@ -47,7 +47,7 @@ public static class PhysicalUnionEndpoints
             "confirmar, no tiene ningún efecto persistente.");
 
         app.MapPost(
-            "/api/v1/projects/{projectId:guid}/images/{imageId:guid}/vectors/{vectorId:guid}/physical-union/confirm",
+            "/vectors/{vectorId:guid}/physical-union/confirm",
             async (
                 Guid projectId,
                 Guid imageId,
@@ -73,7 +73,7 @@ public static class PhysicalUnionEndpoints
             "teniendo exactamente lo que tenía antes de intentar la unión.");
 
         app.MapGet(
-            "/api/v1/projects/{projectId:guid}/images/{imageId:guid}/vectors/{vectorId:guid}/physical-union",
+            "/vectors/{vectorId:guid}/physical-union",
             (
                 Guid projectId,
                 Guid imageId,

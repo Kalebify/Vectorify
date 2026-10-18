@@ -14,9 +14,9 @@ namespace Vectorify.Api.Endpoints;
 /// </summary>
 public static class DimensionEndpoints
 {
-    public static void MapDimensionEndpoints(this IEndpointRouteBuilder app)
+    public static void MapDimensionEndpoints(this RouteGroupBuilder app)
     {
-        app.MapPost("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/dimensions/apply", async (
+        app.MapPost("/dimensions/apply", async (
             Guid projectId,
             Guid imageId,
             DimensionRequest request,
@@ -63,7 +63,7 @@ public static class DimensionEndpoints
             "como una nueva versión (cache-hit sobre el mismo SVG de origen + las mismas dimensiones avanza la " +
             "versión en vez de retroceder a una vieja).");
 
-        app.MapGet("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/dimensions/{dimensionId:guid}", async (
+        app.MapGet("/dimensions/{dimensionId:guid}", async (
             Guid projectId,
             Guid imageId,
             Guid dimensionId,

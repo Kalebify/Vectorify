@@ -13,9 +13,9 @@ namespace Vectorify.Api.Endpoints;
 /// </summary>
 public static class PreprocessEndpoints
 {
-    public static void MapPreprocessEndpoints(this IEndpointRouteBuilder app)
+    public static void MapPreprocessEndpoints(this RouteGroupBuilder app)
     {
-        app.MapPost("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/preview", async (
+        app.MapPost("/preview", async (
             Guid projectId,
             Guid imageId,
             PreprocessRequest request,
@@ -58,7 +58,7 @@ public static class PreprocessEndpoints
             "volver a llamar con los valores por defecto (grayscale=false, contrast=1.0, " +
             "brightness=0, denoise=0).");
 
-        app.MapGet("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/previews/{previewId:guid}", async (
+        app.MapGet("/previews/{previewId:guid}", async (
             Guid projectId,
             Guid imageId,
             Guid previewId,

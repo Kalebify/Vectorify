@@ -13,9 +13,9 @@ namespace Vectorify.Api.Endpoints;
 /// </summary>
 public static class ColorPaletteEndpoints
 {
-    public static void MapColorPaletteEndpoints(this IEndpointRouteBuilder app)
+    public static void MapColorPaletteEndpoints(this RouteGroupBuilder app)
     {
-        app.MapPost("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/detect", async (
+        app.MapPost("/color-palette/detect", async (
             Guid projectId,
             Guid imageId,
             ColorPaletteDetectRequest request,
@@ -37,7 +37,7 @@ public static class ColorPaletteEndpoints
             "(debe existir y no estar confirmada); mismos parámetros -> cache-hit (crea versión nueva " +
             "reutilizando los grupos ya detectados), parámetros distintos -> llama a Python de nuevo.");
 
-        app.MapPost("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}/merge", async (
+        app.MapPost("/color-palette/{paletteId:guid}/merge", async (
             Guid projectId,
             Guid imageId,
             Guid paletteId,
@@ -56,7 +56,7 @@ public static class ColorPaletteEndpoints
         .Produces<ApiErrorResponse>(StatusCodes.Status409Conflict)
         .WithSummary("Fusiona 2+ grupos de color en uno solo (crea una nueva versión de la paleta).");
 
-        app.MapPost("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}/unmerge", async (
+        app.MapPost("/color-palette/{paletteId:guid}/unmerge", async (
             Guid projectId,
             Guid imageId,
             Guid paletteId,
@@ -75,7 +75,7 @@ public static class ColorPaletteEndpoints
         .Produces<ApiErrorResponse>(StatusCodes.Status409Conflict)
         .WithSummary("Deshace el último merge que produjo un grupo (mientras la paleta no esté confirmada).");
 
-        app.MapPost("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}/rename", async (
+        app.MapPost("/color-palette/{paletteId:guid}/rename", async (
             Guid projectId,
             Guid imageId,
             Guid paletteId,
@@ -94,7 +94,7 @@ public static class ColorPaletteEndpoints
         .Produces<ApiErrorResponse>(StatusCodes.Status409Conflict)
         .WithSummary("Renombra un grupo de color (crea una nueva versión de la paleta).");
 
-        app.MapPost("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}/exclude", async (
+        app.MapPost("/color-palette/{paletteId:guid}/exclude", async (
             Guid projectId,
             Guid imageId,
             Guid paletteId,
@@ -113,7 +113,7 @@ public static class ColorPaletteEndpoints
         .Produces<ApiErrorResponse>(StatusCodes.Status409Conflict)
         .WithSummary("Marca un grupo como incluido/excluido (M2.1-S02), independiente de un merge.");
 
-        app.MapPost("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}/confirm", async (
+        app.MapPost("/color-palette/{paletteId:guid}/confirm", async (
             Guid projectId,
             Guid imageId,
             Guid paletteId,
@@ -130,7 +130,7 @@ public static class ColorPaletteEndpoints
         .Produces<ApiErrorResponse>(StatusCodes.Status409Conflict)
         .WithSummary("Confirma la paleta final: queda como entrada declarada de M2-S02 (no genera capas SVG en esta tarjeta).");
 
-        app.MapGet("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}", (
+        app.MapGet("/color-palette/{paletteId:guid}", (
             Guid projectId,
             Guid imageId,
             Guid paletteId,
@@ -147,7 +147,7 @@ public static class ColorPaletteEndpoints
         .Produces<ApiErrorResponse>(StatusCodes.Status404NotFound)
         .WithSummary("Recupera la última versión vigente de una sesión de paleta de colores.");
 
-        app.MapGet("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}/preview", async (
+        app.MapGet("/color-palette/{paletteId:guid}/preview", async (
             Guid projectId,
             Guid imageId,
             Guid paletteId,
@@ -177,7 +177,7 @@ public static class ColorPaletteEndpoints
         .Produces<ApiErrorResponse>(StatusCodes.Status404NotFound)
         .WithSummary("Recupera el preview cuantizado (PNG) de la última versión de una sesión de paleta de colores.");
 
-        app.MapGet("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/color-palette/{paletteId:guid}/groups/{groupId:guid}/mask", async (
+        app.MapGet("/color-palette/{paletteId:guid}/groups/{groupId:guid}/mask", async (
             Guid projectId,
             Guid imageId,
             Guid paletteId,

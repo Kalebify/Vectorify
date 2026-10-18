@@ -127,7 +127,9 @@ public sealed class PersistentProjectRegistryTests : IDisposable
 
         Assert.NotNull(record);
         Assert.Null(record!.OwnerId);
-        Assert.True(record.IsAccessibleBy(Guid.NewGuid()));
+        // M3.1-S06: un registro legado sin dueño falla CERRADO (nadie lo alcanza) salvo que el modo lo permita (Auth:Mode=Development).
+        Assert.False(record.IsAccessibleBy(Guid.NewGuid(), allowOwnerless: false));
+        Assert.True(record.IsAccessibleBy(Guid.NewGuid(), allowOwnerless: true));
     }
 
     [Fact]
@@ -140,8 +142,9 @@ public sealed class PersistentProjectRegistryTests : IDisposable
         var reloaded = CreateRegistry().Find(record.ProjectId, record.ImageId);
 
         Assert.Equal(ownerId, reloaded!.OwnerId);
-        Assert.True(reloaded.IsAccessibleBy(ownerId));
-        Assert.False(reloaded.IsAccessibleBy(Guid.NewGuid()));
+        Assert.True(reloaded.IsAccessibleBy(ownerId, allowOwnerless: false));
+        Assert.False(reloaded.IsAccessibleBy(Guid.NewGuid(), allowOwnerless: false));
+        Assert.False(reloaded.IsAccessibleBy(Guid.NewGuid(), allowOwnerless: true)); // allowOwnerless NO abre los registros con dueño ajeno
     }
 
     public void Dispose()

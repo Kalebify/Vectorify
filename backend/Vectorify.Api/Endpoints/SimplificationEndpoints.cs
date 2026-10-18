@@ -13,9 +13,9 @@ namespace Vectorify.Api.Endpoints;
 /// </summary>
 public static class SimplificationEndpoints
 {
-    public static void MapSimplificationEndpoints(this IEndpointRouteBuilder app)
+    public static void MapSimplificationEndpoints(this RouteGroupBuilder app)
     {
-        app.MapPost("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/simplify/preview", async (
+        app.MapPost("/simplify/preview", async (
             Guid projectId,
             Guid imageId,
             SimplifyRequest request,
@@ -51,7 +51,7 @@ public static class SimplificationEndpoints
             "sus métricas, SIN crear una versión nueva ni tocar el storage -- cancelar (simplemente no " +
             "llamar a /simplify/apply) no deja rastro.");
 
-        app.MapPost("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/simplify/apply", async (
+        app.MapPost("/simplify/apply", async (
             Guid projectId,
             Guid imageId,
             SimplifyRequest request,
@@ -90,7 +90,7 @@ public static class SimplificationEndpoints
             "simplificado en storage y registra una nueva versión en el historial (cache-hit sobre el mismo " +
             "vector de origen + parámetros avanza la versión en vez de retroceder a una vieja).");
 
-        app.MapGet("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/simplifications/{simplificationId:guid}", async (
+        app.MapGet("/simplifications/{simplificationId:guid}", async (
             Guid projectId,
             Guid imageId,
             Guid simplificationId,

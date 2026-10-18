@@ -13,9 +13,9 @@ namespace Vectorify.Api.Endpoints;
 /// </summary>
 public static class VectorizationEndpoints
 {
-    public static void MapVectorizationEndpoints(this IEndpointRouteBuilder app)
+    public static void MapVectorizationEndpoints(this RouteGroupBuilder app)
     {
-        app.MapPost("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/vectorize", async (
+        app.MapPost("/vectorize", async (
             Guid projectId,
             Guid imageId,
             VectorizeRequest request,
@@ -56,7 +56,7 @@ public static class VectorizationEndpoints
             "Python. El SVG resultante está sanitizado (sin scripts ni referencias externas) y " +
             "acompañado de estadísticas (paths, nodos aproximados, bounds).");
 
-        app.MapGet("/api/v1/projects/{projectId:guid}/images/{imageId:guid}/vectors/{vectorId:guid}", async (
+        app.MapGet("/vectors/{vectorId:guid}", async (
             Guid projectId,
             Guid imageId,
             Guid vectorId,
