@@ -1,0 +1,18 @@
+{
+  "card_id": "3e8d77b2-6398-812a-8c0e-c7f89f52d2cf",
+  "card_url": "https://app.notion.com/p/3e8d77b26398812a8c0ec7f89f52d2cf",
+  "title": "M3.1-S07 · Perfil y configuración básica de cuenta",
+  "stack": "Frontend, ASP.NET Core -- ASP.NET Core Identity + cookie (ADR confirmado), React 19, .NET 10",
+  "branch": "sprint/3e8d77b2-m31-s07-perfil",
+  "column": "Doing",
+  "phase": "design",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "started_at": "2026-10-18T00:00:00Z",
+  "exceptions": [
+    "Sin preview de Vercel: verificacion visual con pila local aislada (docker compose -p) en modo Authenticated y el navegador integrado.",
+    "La rama se corta de sprint/3e8d77b2-m31-s06-autorizacion (apilada: PR #65 .NET 10 -> S02 -> ... -> S06 -> S07); los merges los hace el usuario.",
+    "Supresion de cuenta y exportacion de datos (asignadas a S07 por el ADR, no por la tarjeta) NO se implementan: dependen de la decision humana P11 y son destructivas.",
+    "Cambio de email y de contrasena fuera: requieren el envio de correo de S08."
+  ]
+}
