@@ -31,7 +31,15 @@ public static class SessionCookie
             return new AuthenticationProperties { IsPersistent = false };
         }
 
-        var absolute = now + options.RememberMeLifetime;
+        return CreatePersistentProperties(now, now + options.RememberMeLifetime);
+    }
+
+    /// <summary>
+    /// Propiedades de una sesión «recordarme» con un tope absoluto YA fijado: lo usa la re-emisión de la cookie de la sesión actual (cambio de contraseña, S08) para
+    /// conservar el tope original en vez de reiniciar los 30 días.
+    /// </summary>
+    public static AuthenticationProperties CreatePersistentProperties(DateTimeOffset now, DateTimeOffset absolute)
+    {
         var properties = new AuthenticationProperties
         {
             IsPersistent = true,       // Expires/Max-Age en el Set-Cookie: sobrevive al cierre del navegador

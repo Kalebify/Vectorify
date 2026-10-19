@@ -48,15 +48,16 @@ const type = (value: string) => fireEvent.change(nameInput(), { target: { value 
 const alertText = () => screen.getByRole("alert").textContent;
 
 describe("ProfileScreen — estructura y accesibilidad", () => {
-  it("un h1 «Mi cuenta», dos h2 con secciones nombradas, un main, un banner y título de documento", async () => {
+  it("un h1 «Mi cuenta», tres h2 con secciones nombradas (Perfil, Cuenta de acceso, Contraseña), un main, un banner y título de documento", async () => {
     await renderReady();
 
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     expect(screen.getByRole("heading", { level: 1, name: "Mi cuenta" })).toHaveAttribute("tabindex", "-1");
-    expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual(["Perfil", "Cuenta de acceso"]);
+    expect(screen.getAllByRole("heading", { level: 2 }).map((heading) => heading.textContent)).toEqual(["Perfil", "Cuenta de acceso", "Contraseña"]);
     expect(screen.queryAllByRole("heading", { level: 3 })).toHaveLength(0);
     expect(screen.getByRole("region", { name: "Perfil" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Cuenta de acceso" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Contraseña" })).toBeInTheDocument();
     expect(screen.getAllByRole("main")).toHaveLength(1);
     expect(screen.getAllByRole("banner")).toHaveLength(1);
     expect(document.title).toBe("Mi cuenta — Vectorify");
@@ -115,20 +116,21 @@ describe("ProfileScreen — estructura y accesibilidad", () => {
     expect(text).not.toMatch(/provider|subject|aspnet/i);
   });
 
-  it("no promete nada fuera de alcance: sin contraseña, cambio de correo, avatar, preferencias, supresión ni exportación", async () => {
+  it("no promete nada fuera de alcance: sin cambio de correo, avatar, preferencias, supresión ni exportación (el cambio de contraseña llegó en S08)", async () => {
     await renderReady();
 
     const text = document.body.textContent ?? "";
-    expect(text).not.toMatch(/contraseña|avatar|preferencias|idioma|elimin|borrar cuenta|suprim|exportar|próximamente|pronto/i);
+    expect(text).not.toMatch(/avatar|preferencias|idioma|elimin|borrar cuenta|suprim|exportar|próximamente|pronto/i);
+    expect(text).not.toMatch(/MFA|verificación en dos pasos|autenticación de dos factores|confirmado|sin confirmar/i); // fuera de alcance: MFA y estado de confirmación del correo
     expect(screen.queryByRole("button", { name: /correo/i })).not.toBeInTheDocument();
   });
 
-  it("orden de tabulación: trigger del menú -> volver -> campo -> Guardar (inactivo pero enfocable); sin tabindex positivo", async () => {
+  it("orden de tabulación: trigger del menú -> volver -> campo -> Guardar -> Descartar -> contraseña actual -> nueva -> repetir -> Cambiar contraseña; sin tabindex positivo", async () => {
     await renderReady();
     type("Otro nombre");
 
     const focusables = Array.from(document.querySelectorAll<HTMLElement>("a[href], button, input, [tabindex]")).filter(
-      (element) => element.getAttribute("tabindex") !== "-1",
+      (element) => element.getAttribute("tabindex") !== "-1" && !element.hidden, // el campo de usuario oculto no es una parada de tabulación
     );
     expect(focusables.map((element) => element.getAttribute("aria-label") ?? element.textContent?.trim() ?? element.tagName)).toEqual([
       expect.stringContaining("Ana Gómez"),
@@ -136,6 +138,10 @@ describe("ProfileScreen — estructura y accesibilidad", () => {
       "",
       "Guardar cambios",
       "Descartar cambios",
+      "", // contraseña actual
+      "", // contraseña nueva
+      "", // repetir
+      "Cambiar contraseña",
     ]);
     expect(document.querySelectorAll("[tabindex]:not([tabindex='-1']):not([tabindex='0'])")).toHaveLength(0);
   });

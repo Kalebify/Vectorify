@@ -132,7 +132,7 @@ builder.Services
             .WithMethods("GET", "POST", "PATCH", "DELETE")
             .AllowCredentials()
             .SetPreflightMaxAge(TimeSpan.FromMinutes(10)) // el cliente envía X-Vectorify-Request en todo fetch: sin esto cada GET cross-origin duplicaría requests
-            .WithExposedHeaders(CorrelationIdMiddleware.HeaderName)));
+            .WithExposedHeaders(CorrelationIdMiddleware.HeaderName, "Retry-After"))); // Retry-After (M3.1-S08): la SPA lo lee en los 429 de la recuperación
 
 // Carga y almacenamiento de imágenes (M1-S02): validación configurable (Upload:*),
 // almacenamiento local para desarrollo (Storage:*, detrás de la abstracción
@@ -703,6 +703,14 @@ else
     app.Logger.LogInformation("CORS habilitado para los orígenes {AllowedOrigins}", string.Join(", ", allowedOrigins));
 }
 
+// Correo de recuperación (M3.1-S08): con Mode=Disabled la API responde 202 a forgot/resend pero NO envía nada. En un entorno que no es de desarrollo es casi seguro un olvido.
+var emailMode = app.Services.GetRequiredService<IOptions<AuthOptions>>().Value.Email.Mode;
+if (emailMode == AuthEmailMode.Disabled && !UserContextRegistration.IsDevelopmentUserAllowed(app.Environment))
+{
+    app.Logger.LogWarning(
+        "Auth:Email:Mode=Disabled: no se enviarán correos de recuperación ni de confirmación. Configure Auth:Email:Mode=Smtp (ver docs/AUTH_RECOVERY.md).");
+}
+
 app.UseMiddleware<CorrelationIdMiddleware>();
 
 // Red de seguridad de la persistencia (M2.2-S10): PostgreSQL caído / storage que lanza -> 503 controlado
@@ -715,6 +723,10 @@ app.UseCors(FrontendCorsOptions.PolicyName);
 // falta o es ajeno). DESPUÉS de CORS (el 403 lleva sus cabeceras y el preflight ya se resolvió) y ANTES de autenticar. En modo
 // Development no se aplica (sin sesiones: el flujo de desarrollo y los E2E anónimos siguen igual).
 app.UseMiddleware<CsrfGuardMiddleware>();
+
+// Límite por IP de forgot/reset/resend/confirm (M3.1-S08; política AuthRecoveryLimiter.IpPolicyName, solo en las rutas que la piden con RequireRateLimiting).
+// DESPUÉS de CORS (el 429 lleva las cabeceras CORS y expone Retry-After) y del CSRF (una petición rechazada por CSRF no gasta cupo).
+app.UseRateLimiter();
 
 if (app.Environment.IsDevelopment())
 {
@@ -810,6 +822,7 @@ app.MapGet("/api/v1/system/health", async (
 .WithTags("Health");
 
 app.MapAuthEndpoints();
+app.MapAuthRecoveryEndpoints(); // forgot/reset/confirm/resend (anónimos) + change-password (M3.1-S08)
 app.MapProfileEndpoints(); // GET/PATCH /api/v1/me (M3.1-S07): perfil propio resuelto por IUserContext
 app.MapProjectEndpoints(); // POST /api/v1/projects (alta: el dueño lo pone el servidor)
 app.MapGeometryEndpoints(); // /api/v2/geometry/*: operaciones SIN estado ni recurso; solo exigen sesión (FallbackPolicy)

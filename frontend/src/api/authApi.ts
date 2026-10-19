@@ -1,6 +1,15 @@
 import { ApiClientError, httpClient } from "./httpClient";
 import { rearmSessionBoundary } from "./sessionBoundary";
-import type { CurrentUser, LoginRequest, RegisterRequest, RegisterResponse } from "../types/auth";
+import type {
+  ChangePasswordRequest,
+  ConfirmEmailRequest,
+  CurrentUser,
+  EmailRequest,
+  LoginRequest,
+  RegisterRequest,
+  RegisterResponse,
+  ResetPasswordRequest,
+} from "../types/auth";
 
 /**
  * Cliente mínimo de autenticación (M3.1-S03). Sin pantallas, sin contexto React y sin rutas protegidas (eso es M3.1-S05).
@@ -13,6 +22,11 @@ export const AUTH_LOGIN_PATH = "/api/v1/auth/login";
 export const AUTH_LOGOUT_PATH = "/api/v1/auth/logout";
 export const AUTH_LOGOUT_ALL_PATH = "/api/v1/auth/logout-all";
 export const AUTH_ME_PATH = "/api/v1/auth/me";
+export const AUTH_FORGOT_PASSWORD_PATH = "/api/v1/auth/forgot-password";
+export const AUTH_RESET_PASSWORD_PATH = "/api/v1/auth/reset-password";
+export const AUTH_CONFIRM_EMAIL_PATH = "/api/v1/auth/confirm-email";
+export const AUTH_RESEND_CONFIRMATION_PATH = "/api/v1/auth/resend-confirmation";
+export const AUTH_CHANGE_PASSWORD_PATH = "/api/v1/auth/change-password";
 
 /** true si el error es un 401 de la Web API (sin sesión, sesión caducada/invalidada o credenciales inválidas). */
 export function isUnauthorizedError(error: unknown): boolean {
@@ -61,4 +75,45 @@ export async function getCurrentUser(signal?: AbortSignal): Promise<CurrentUser 
     }
     throw error;
   }
+}
+
+// --- Recuperación de acceso y verificación de correo (M3.1-S08). Ningún token ni contraseña se guarda aquí: viajan en el cuerpo y mueren con la llamada. ---
+
+/** Pide el enlace para elegir una contraseña nueva. 202 UNIFORME exista o no la cuenta; 400 `invalid_email` solo por formato. */
+export function forgotPassword(request: EmailRequest, signal?: AbortSignal): Promise<RegisterResponse> {
+  return httpClient.postJson<RegisterResponse>(AUTH_FORGOT_PASSWORD_PATH, { email: request.email }, { signal });
+}
+
+/** Elige una contraseña nueva con el token del correo. 204; 400 `invalid_token` (único error para token inválido/caducado/reusado) o `weak_password`. */
+export async function resetPassword(request: ResetPasswordRequest, signal?: AbortSignal): Promise<void> {
+  await httpClient.postJson<void>(
+    AUTH_RESET_PASSWORD_PATH,
+    { email: request.email, token: request.token, newPassword: request.newPassword },
+    { signal },
+  );
+}
+
+/** Confirma el correo con el token del enlace. 204; 400 `invalid_token` si no sirve. */
+export async function confirmEmail(request: ConfirmEmailRequest, signal?: AbortSignal): Promise<void> {
+  const body: Record<string, string> = { token: request.token };
+  if (request.userId) body.userId = request.userId;
+  else if (request.email) body.email = request.email;
+  await httpClient.postJson<void>(AUTH_CONFIRM_EMAIL_PATH, body, { signal });
+}
+
+/** Pide otro correo de confirmación. 202 UNIFORME exista o no la cuenta. */
+export function resendConfirmation(request: EmailRequest, signal?: AbortSignal): Promise<RegisterResponse> {
+  return httpClient.postJson<RegisterResponse>(AUTH_RESEND_CONFIRMATION_PATH, { email: request.email }, { signal });
+}
+
+/**
+ * Cambia la contraseña de la sesión actual (exige la contraseña actual). 204 y la sesión sigue viva (el servidor re-emite la cookie).
+ * Contraseña actual incorrecta = 400 `invalid_current_password` (nunca 401); un 401 significa que ya no hay sesión.
+ */
+export async function changePassword(request: ChangePasswordRequest, signal?: AbortSignal): Promise<void> {
+  await httpClient.postJson<void>(
+    AUTH_CHANGE_PASSWORD_PATH,
+    { currentPassword: request.currentPassword, newPassword: request.newPassword },
+    { signal },
+  );
 }

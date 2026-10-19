@@ -1,4 +1,3 @@
-using System.Net.Mail;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -6,6 +5,7 @@ using Npgsql;
 using Vectorify.Api.Contracts;
 using Vectorify.Api.Data;
 using Vectorify.Api.Data.Auth;
+using Vectorify.Api.Email;
 using Vectorify.Api.Options;
 using Vectorify.Api.Users;
 
@@ -38,7 +38,7 @@ public static class AuthEndpoints
     /// <summary>Valor de <see cref="RegisterResponse.Status"/>: el MISMO para cuenta nueva y para correo ya registrado.</summary>
     public const string RegisterAcceptedStatus = "accepted";
 
-    private const int MaxEmailLength = 254;
+    internal const int MaxEmailLength = EmailAddress.MaxLength;
 
     public static void MapAuthEndpoints(this IEndpointRouteBuilder app)
     {
@@ -52,7 +52,7 @@ public static class AuthEndpoints
             .WithDescription(
                 "Respuesta UNIFORME (202 {status:'accepted'}) exista o no el correo: no revela si una cuenta ya existe. " +
                 "Solo los errores de validación (email inválido, contraseña < 12 caracteres) son visibles y no dependen de " +
-                "si el correo existe. La verificación por email llega en M3.1-S08.");
+                "si el correo existe. El correo de confirmación (M3.1-S08) se envía en segundo plano, solo para cuentas nuevas.");
 
         app.MapPost(LoginPath, LoginAsync)
             .AllowAnonymous()
@@ -149,6 +149,14 @@ public static class AuthEndpoints
                 logger.LogInformation("Login: credenciales rechazadas.");
             }
 
+            return InvalidCredentials();
+        }
+
+        // Auth:RequireConfirmedEmail (S08, ADR P9): con el correo sin confirmar NO se abre sesión y se responde el MISMO 401 uniforme (no delata ni la cuenta ni el motivo).
+        // La contraseña ya era correcta, así que el contador de fallos quedó a cero; solo se loguea el id interno de la cuenta.
+        if (authOptions.Value.RequireConfirmedEmail && !account.EmailConfirmed)
+        {
+            logger.LogInformation("Login: cuenta {AccountId} con correo sin confirmar; sesión rechazada (Auth:RequireConfirmedEmail).", account.Id);
             return InvalidCredentials();
         }
 
@@ -301,6 +309,7 @@ public static class AuthEndpoints
         RegisterRequest request,
         UserManager<ApplicationUser> users,
         IUserProvisioner provisioner,
+        IAuthEmailQueue emailQueue,
         Microsoft.Extensions.Options.IOptions<AuthOptions> authOptions,
         TimeProvider time,
         ILoggerFactory loggerFactory,
@@ -351,6 +360,10 @@ public static class AuthEndpoints
         if (result.Succeeded)
         {
             await ProvisionUserAsync(provisioner, account, email!, logger, cancellationToken);
+
+            // Correo de confirmación (S08): FUERA de la ruta de respuesta (cola + trabajador). Un fallo del correo nunca rompe el registro, y la respuesta es la
+            // misma 202 de siempre: no afirma que el correo llegue ni que la cuenta sea nueva. Una cuenta ya existente NO recibe correo (no se enumera).
+            emailQueue.TryEnqueue(new AuthEmailJob(AuthEmailKind.EmailConfirmation, email!, account.Id));
             logger.LogInformation("Registro: cuenta nueva creada.");
             return Accepted();
         }
@@ -392,25 +405,11 @@ public static class AuthEndpoints
         }
     }
 
-    private static IResult Accepted() =>
+    internal static IResult Accepted() =>
         Results.Json(new RegisterResponse(RegisterAcceptedStatus), statusCode: StatusCodes.Status202Accepted);
 
     private static string PasswordMessage(AuthOptions options) =>
         $"La contraseña debe tener al menos {options.Password.MinLength} caracteres.";
 
-    private static bool IsValidEmail(string? email)
-    {
-        if (string.IsNullOrEmpty(email) || email.Length > MaxEmailLength)
-        {
-            return false;
-        }
-
-        // MailAddress acepta formas con nombre ("Ana <a@b.c>") y comentarios: solo vale la dirección pelada.
-        if (!MailAddress.TryCreate(email, out var parsed) || !string.Equals(parsed.Address, email, StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        return email.Contains('@') && parsed.Host.Contains('.') && !email.Any(char.IsWhiteSpace);
-    }
+    internal static bool IsValidEmail(string? email) => EmailAddress.IsValid(email);
 }

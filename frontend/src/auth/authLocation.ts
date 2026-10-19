@@ -2,11 +2,13 @@ import { sanitizeReturnUrl } from "./returnUrl";
 
 /**
  * Ubicación de las vistas de autenticación (M3.1-S05), por query string como el resto de la app (sin react-router; ver
- * `lib/workspaceLocation.ts`): `?view=login` y `?view=register`, con `returnUrl` opcional ya validado (ver `returnUrl.ts`).
+ * `lib/workspaceLocation.ts`): `?view=login`, `?view=register` y, desde M3.1-S08, `?view=forgot-password`, `?view=reset-password` y `?view=confirm-email`, con `returnUrl` opcional ya validado (ver `returnUrl.ts`).
  * Las vistas de producto (`dashboard`, `new`, Workspace) siguen siendo de `lib/workspaceLocation.ts` y no se tocan.
  */
 
-export type AuthView = "login" | "register";
+export type AuthView = "login" | "register" | "forgot-password" | "reset-password" | "confirm-email";
+
+const AUTH_VIEWS: readonly AuthView[] = ["login", "register", "forgot-password", "reset-password", "confirm-email"];
 
 const VIEW_PARAM = "view";
 const RETURN_URL_PARAM = "returnUrl";
@@ -17,7 +19,7 @@ const FOCUS_HEADING_KEY = "vectorifyAuthFocusHeading";
 /** Vista de auth de una query string, o `null` si es una vista de producto. */
 export function readAuthView(search: string = window.location.search): AuthView | null {
   const view = new URLSearchParams(search).get(VIEW_PARAM);
-  return view === "login" || view === "register" ? view : null;
+  return AUTH_VIEWS.find((candidate) => candidate === view) ?? null;
 }
 
 /** true si es un clic izquierdo sin modificadores (el resto —clic central, Ctrl/Cmd/Mayús+clic— lo resuelve el navegador, p. ej. otra pestaña). */

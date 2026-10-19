@@ -46,12 +46,28 @@ export interface AuthBackendOptions {
   logoutAll?: () => Response | Promise<Response>;
   /** Respuesta de `POST /login`. */
   login?: (call: RecordedCall) => Response | Promise<Response>;
+  /** Recuperación (M3.1-S08). Por defecto: forgot/resend = 202 uniforme; reset/confirm/change-password = 204. */
+  forgot?: (call: RecordedCall) => Response | Promise<Response>;
+  reset?: (call: RecordedCall) => Response | Promise<Response>;
+  confirm?: (call: RecordedCall) => Response | Promise<Response>;
+  resend?: (call: RecordedCall) => Response | Promise<Response>;
+  changePassword?: (call: RecordedCall) => Response | Promise<Response>;
   /** Estado de `GET /document` de un proyecto guardado. */
   documentStatus?: number;
   /** Código HTTP con el que responde `GET /api/v2/projects` (para probar 403/5xx en pantallas de producto con sesión viva). */
   projectsStatus?: number;
   /** Retiene la respuesta de `/me` o de `/login` hasta que se resuelva la promesa (estado «cargando» / «enviando»). */
-  gates?: { me?: Promise<void>; login?: Promise<void>; profile?: Promise<void>; profileSave?: Promise<void> };
+  gates?: {
+    me?: Promise<void>;
+    login?: Promise<void>;
+    profile?: Promise<void>;
+    profileSave?: Promise<void>;
+    forgot?: Promise<void>;
+    reset?: Promise<void>;
+    confirm?: Promise<void>;
+    resend?: Promise<void>;
+    changePassword?: Promise<void>;
+  };
   /** Perfil (M3.1-S07): `GET /api/v1/me` y `PATCH /api/v1/me`. Por defecto, un perfil en memoria que valida como el servidor. */
   profile?: {
     /** Sobrescribe `GET /api/v1/me` (red caída, 5xx, 403...). Devolver `undefined` usa el perfil en memoria. */
@@ -103,6 +119,20 @@ export function installAuthBackend(options: AuthBackendOptions = {}) {
 
       if (call.path === "/api/v1/auth/register") {
         return options.register ? options.register(call) : jsonResponse({ status: "accepted" }, 202);
+      }
+
+      const recovery: Record<string, [keyof NonNullable<AuthBackendOptions["gates"]>, ((call: RecordedCall) => Response | Promise<Response>) | undefined, () => Response]> = {
+        "/api/v1/auth/forgot-password": ["forgot", options.forgot, () => jsonResponse({ status: "accepted" }, 202)],
+        "/api/v1/auth/reset-password": ["reset", options.reset, () => new Response(null, { status: 204 })],
+        "/api/v1/auth/confirm-email": ["confirm", options.confirm, () => new Response(null, { status: 204 })],
+        "/api/v1/auth/resend-confirmation": ["resend", options.resend, () => jsonResponse({ status: "accepted" }, 202)],
+        "/api/v1/auth/change-password": ["changePassword", options.changePassword, () => new Response(null, { status: 204 })],
+      };
+      const recoveryRoute = recovery[call.path];
+      if (recoveryRoute && call.method === "POST") {
+        const [gate, custom, fallback] = recoveryRoute;
+        const respond = (): Response | Promise<Response> => (custom ? custom(call) : fallback());
+        return options.gates?.[gate] ? options.gates[gate].then(respond) : respond();
       }
 
       if (call.path === "/api/v1/auth/logout") {

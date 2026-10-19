@@ -2,12 +2,13 @@ import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 
 import { flushSync } from "react-dom";
 import { getProfile } from "../api/profileApi";
 import type { UserProfile } from "../types/profile";
-import { PROFILE, SESSION_ERROR } from "./authCopy";
+import { CHANGE_PASSWORD, PROFILE, SESSION_ERROR } from "./authCopy";
 import { useAuth } from "./authContext";
 import { classifyFailure, type Failure } from "./authErrors";
 import { focusPageHeading, wantsHeadingFocus } from "./authLocation";
 import { AccountLayout } from "./AccountLayout";
 import { AuthAlert, AuthButton } from "./AuthUi";
+import { ChangePasswordForm } from "./ChangePasswordForm";
 import { ProfileForm } from "./ProfileForm";
 import { useDocumentTitle } from "./useDocumentTitle";
 
@@ -122,6 +123,12 @@ export function ProfileScreen() {
           >
             <AccountFacts profile={load.profile} development={isDevelopmentMode} />
           </ProfileSection>
+          {/* Solo con sesión real (M3.1-S08): en modo Development no hay contraseña que cambiar. */}
+          {!isDevelopmentMode && (
+            <ProfileSection title={CHANGE_PASSWORD.title} intro={CHANGE_PASSWORD.intro}>
+              <ChangePasswordForm email={load.profile.email} />
+            </ProfileSection>
+          )}
         </>
       )}
     </AccountLayout>

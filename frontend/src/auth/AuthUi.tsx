@@ -1,6 +1,8 @@
 import { useId, type ReactNode, type Ref } from "react";
-import { BANNERS } from "./authCopy";
-import { isPlainLeftClick, navigateAuth, type AuthView } from "./authLocation";
+import { AUTH_HELP, BANNERS } from "./authCopy";
+import { useAuth } from "./authContext";
+import { buildAuthSearch, isPlainLeftClick, navigateAuth, type AuthView } from "./authLocation";
+import { isValidEmailFormat } from "./validation";
 import "./auth.css";
 
 /**
@@ -23,13 +25,15 @@ export function AuthLayout({ children }: { children: ReactNode }) {
 interface AuthCardProps {
   title: string;
   intro?: string;
+  /** Cuerpo de un panel de resultado (M3.1-S08): va pegado al `h1` (4 px) y en color de texto primario. */
+  body?: ReactNode;
   headingRef?: Ref<HTMLHeadingElement>;
   children?: ReactNode;
   /** Línea de cambio de pantalla (login <-> registro). */
   footer?: ReactNode;
 }
 
-export function AuthCard({ title, intro, headingRef, children, footer }: AuthCardProps) {
+export function AuthCard({ title, intro, body, headingRef, children, footer }: AuthCardProps) {
   const titleId = useId();
   return (
     <section className="auth-card" aria-labelledby={titleId}>
@@ -38,6 +42,7 @@ export function AuthCard({ title, intro, headingRef, children, footer }: AuthCar
           {title}
         </h1>
         {intro && <p className="auth-card__intro">{intro}</p>}
+        {body && <p className="auth-card__body">{body}</p>}
       </div>
       {children}
       {footer && <p className="auth-card__switch">{footer}</p>}
@@ -51,6 +56,8 @@ const BANNER_CLASS: Record<BannerKind, string> = {
   expired: "status-banner--degraded",
   "signed-out": "status-banner--online",
   "signed-out-all": "status-banner--online",
+  "password-reset": "status-banner--online",
+  "email-confirmed": "status-banner--online",
   registered: "status-banner--online",
   "return-info": "auth-banner--info",
 };
@@ -254,6 +261,11 @@ export function AuthButton({
 interface AuthLinkProps {
   view: AuthView;
   returnUrl: string | null;
+  /**
+   * Correo que se guarda EN MEMORIA justo antes de navegar para precargar el campo de la pantalla de destino (M3.1-S08; nunca va en la URL).
+   * `undefined` no toca lo que ya hubiera; `null` lo olvida.
+   */
+  prefillEmail?: string | null;
   /** Se llama justo antes de navegar (p. ej. para recordar en memoria el registro recibido). */
   onBeforeNavigate?: () => void;
   /** `true`: apariencia de botón primario (panel de registro recibido). */
@@ -265,7 +277,8 @@ interface AuthLinkProps {
 }
 
 /** Enlace real (`<a href>`, abrible en otra pestaña) que navega sin recargar entre vistas de auth, conservando el `returnUrl`. */
-export function AuthLink({ view, returnUrl, onBeforeNavigate, asButton, focusHeading, href, children }: AuthLinkProps) {
+export function AuthLink({ view, returnUrl, prefillEmail, onBeforeNavigate, asButton, focusHeading, href, children }: AuthLinkProps) {
+  const { setPrefillEmail } = useAuth();
   return (
     <a
       className={asButton ? "auth-button auth-button--primary" : "auth-link"}
@@ -273,11 +286,71 @@ export function AuthLink({ view, returnUrl, onBeforeNavigate, asButton, focusHea
       onClick={(event) => {
         if (!isPlainLeftClick(event)) return;
         event.preventDefault();
+        if (prefillEmail !== undefined) setPrefillEmail(prefillEmail);
         onBeforeNavigate?.();
         navigateAuth(view, returnUrl, { focusHeading });
       }}
     >
       {children}
     </a>
+  );
+}
+
+/**
+ * Campo de usuario OCULTO (M3.1-S08, DESIGN §5.6): para que el gestor de contraseñas asocie la contraseña nueva a la cuenta correcta en formularios
+ * sin campo de correo visible (restablecer y cambiar). `hidden`: sin tabulación ni árbol de accesibilidad, sin etiqueta. Nunca contiene el token.
+ * Va como PRIMER hijo del `<form>`. Sin correo no se renderiza.
+ */
+export function HiddenUsernameField({ email }: { email: string | null | undefined }) {
+  if (!email) return null;
+  return <input type="email" name="username" autoComplete="username" value={email} readOnly hidden />;
+}
+
+/**
+ * Región de estado PERSISTENTE (M3.1-S08, DESIGN §5.10): siempre en el DOM para que el lector de pantalla anuncie el éxito sin mover el foco. El banner
+ * interior no lleva rol. Vacía no ocupa alto (`:empty`); nunca `display: none`.
+ */
+export function AuthStatus({ message, className = "auth-status" }: { message: string | null; className?: string }) {
+  return (
+    <div className={className} role="status" aria-live="polite">
+      {message && (
+        <div className="status-banner status-banner--online auth-banner">
+          <p>{message}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Contenido de un panel de resultado sin formulario (M3.1-S08, DESIGN §5.13): nota opcional + acciones en columna (primario arriba). El cuerpo va en `AuthCard body`. */
+export function ResetResultPanel({ note, children }: { note?: string; children: ReactNode }) {
+  return (
+    <>
+      {note && <p className="auth-card__intro">{note}</p>}
+      <div className="auth-result__actions">{children}</div>
+    </>
+  );
+}
+
+/**
+ * Las dos salidas para quien no puede entrar (M3.1-S08, DESIGN §5.9). Van DESPUÉS del formulario de login (Enter en la contraseña sigue enviando y el
+ * camino con teclado no se interrumpe) y antes de «¿No tenés cuenta?». `email` es lo escrito en el login: si tiene formato de correo, precarga la pantalla de destino.
+ */
+export function AuthHelpLinks({ returnUrl, email }: { returnUrl: string | null; email: string }) {
+  const typed = email.trim();
+  const prefill = isValidEmailFormat(typed) ? typed : null;
+  return (
+    <ul className="auth-help">
+      <li>
+        <AuthLink view="forgot-password" returnUrl={returnUrl} href={buildAuthSearch("forgot-password", returnUrl)} prefillEmail={prefill} focusHeading>
+          {AUTH_HELP.forgot}
+        </AuthLink>
+      </li>
+      <li>
+        <AuthLink view="confirm-email" returnUrl={null} href={buildAuthSearch("confirm-email")} prefillEmail={prefill} focusHeading>
+          {AUTH_HELP.confirm}
+        </AuthLink>
+      </li>
+    </ul>
   );
 }

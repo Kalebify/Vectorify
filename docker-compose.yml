@@ -79,6 +79,27 @@ services:
       Auth__Session__ClockSkew: ${AUTH_SESSION_CLOCK_SKEW:-00:00:30}
       # Ruta DENTRO del contenedor del key ring (coincide con el volumen montado arriba; no la cambies sin cambiar el volumen).
       Auth__DataProtection__KeysPath: /var/lib/vectorify/dataprotection-keys
+      # Recuperación de acceso y verificación de correo (M3.1-S08, ver docs/AUTH_RECOVERY.md). Por defecto el correo está APAGADO
+      # (Disabled): forgot/resend responden 202 pero no envían nada. Log (solo Development) escribe el enlace en el log del backend;
+      # Smtp envía de verdad. PublicBaseUrl = dónde se sirve la SPA (debe figurar en CORS_ALLOWED_ORIGINS) y NUNCA se deriva de la request.
+      # La contraseña SMTP (AUTH_EMAIL_SMTP_PASSWORD) es un SECRETO: solo por entorno o .env local, jamás en el repositorio.
+      Auth__Email__Mode: ${AUTH_EMAIL_MODE:-Disabled}
+      Auth__Email__PublicBaseUrl: ${AUTH_EMAIL_PUBLIC_BASE_URL:-}
+      Auth__Email__FromAddress: ${AUTH_EMAIL_FROM_ADDRESS:-}
+      Auth__Email__FromName: ${AUTH_EMAIL_FROM_NAME:-Vectorify}
+      Auth__Email__Smtp__Host: ${AUTH_EMAIL_SMTP_HOST:-}
+      Auth__Email__Smtp__Port: ${AUTH_EMAIL_SMTP_PORT:-587}
+      Auth__Email__Smtp__Security: ${AUTH_EMAIL_SMTP_SECURITY:-StartTls}
+      Auth__Email__Smtp__UserName: ${AUTH_EMAIL_SMTP_USERNAME:-}
+      Auth__Email__Smtp__Password: ${AUTH_EMAIL_SMTP_PASSWORD:-}
+      Auth__Tokens__PasswordResetLifetime: ${AUTH_TOKENS_PASSWORD_RESET_LIFETIME:-01:00:00}
+      Auth__Tokens__EmailConfirmationLifetime: ${AUTH_TOKENS_EMAIL_CONFIRMATION_LIFETIME:-1.00:00:00}
+      Auth__RequireConfirmedEmail: ${AUTH_REQUIRE_CONFIRMED_EMAIL:-false}
+      Auth__RateLimit__IpPermitLimit: ${AUTH_RATE_LIMIT_IP_PERMIT_LIMIT:-20}
+      Auth__RateLimit__IpWindow: ${AUTH_RATE_LIMIT_IP_WINDOW:-00:15:00}
+      Auth__RateLimit__AddressSendPermitLimit: ${AUTH_RATE_LIMIT_ADDRESS_SEND_PERMIT_LIMIT:-5}
+      Auth__RateLimit__AddressVerifyPermitLimit: ${AUTH_RATE_LIMIT_ADDRESS_VERIFY_PERMIT_LIMIT:-10}
+      Auth__RateLimit__AddressWindow: ${AUTH_RATE_LIMIT_ADDRESS_WINDOW:-01:00:00}
       # Nombre del servicio "postgres" en la red de docker-compose, no localhost ni el
       # puerto publicado en el host. Nunca hardcodeado -- viene de variables de entorno
       # con el mismo criterio que PythonEngine__BaseUrl (ver .env.example).
@@ -92,6 +113,18 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
+
+  # Sumidero de correo SOLO para desarrollo/verificación manual de la recuperación de acceso (M3.1-S08). No arranca por defecto:
+  #   docker compose --profile mail-sink up -d
+  # y, para que el backend le hable: AUTH_EMAIL_MODE=Smtp AUTH_EMAIL_SMTP_HOST=mailpit AUTH_EMAIL_SMTP_PORT=1025
+  # AUTH_EMAIL_SMTP_SECURITY=None AUTH_EMAIL_FROM_ADDRESS=no-reply@vectorify.local AUTH_EMAIL_PUBLIC_BASE_URL=<origen de la SPA>.
+  # Mailpit guarda los mensajes en memoria y los muestra en http://localhost:${MAILPIT_UI_PORT:-8025}; no entrega nada a Internet.
+  mailpit:
+    image: axllent/mailpit:latest
+    profiles: ["mail-sink"]
+    ports:
+      - "${MAILPIT_UI_PORT:-8025}:8025"
+      - "${MAILPIT_SMTP_PORT:-1025}:1025"
 
   frontend:
     build:

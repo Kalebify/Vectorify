@@ -20,6 +20,10 @@ public static partial class EndpointAuthorizationAudit
         ["POST /api/v1/auth/register"] = "Nadie tiene sesión antes de registrarse; respuesta uniforme (T5).",
         ["POST /api/v1/auth/login"] = "Nadie tiene sesión antes de entrar; 401 uniforme y bloqueo (T5/T6).",
         ["POST /api/v1/auth/logout"] = "Idempotente: sin sesión (o caducada) responde 204; no expone datos.",
+        ["POST /api/v1/auth/forgot-password"] = "Quien olvidó la contraseña no tiene sesión. 202 UNIFORME exista o no la cuenta (T5); el correo sale en segundo plano; límite por IP (429) y por dirección hasheada (M3.1-S08).",
+        ["POST /api/v1/auth/reset-password"] = "Quien olvidó la contraseña no tiene sesión; lo autoriza el token NATIVO de Identity (un solo uso, vida corta). Error genérico para token inválido/caducado/reusado y cuenta inexistente; límites por IP y dirección (M3.1-S08).",
+        ["POST /api/v1/auth/confirm-email"] = "El enlace del correo se abre sin sesión (otro dispositivo); lo autoriza el token NATIVO de Identity. Error genérico; límites por IP y dirección (M3.1-S08).",
+        ["POST /api/v1/auth/resend-confirmation"] = "Quien no confirmó el correo puede no poder iniciar sesión (Auth:RequireConfirmedEmail), así que no hay sesión. 202 UNIFORME exista o no la cuenta; límites por IP y dirección (M3.1-S08).",
         ["GET /api/v1/auth/me"] = "En Auth:Mode=Development no hay login y la SPA necesita 200 sin cookie; en Authenticated responde 401 por sí mismo sin identidad verificada.",
     };
 
@@ -49,6 +53,7 @@ public static partial class EndpointAuthorizationAudit
         ["GET /api/v2/projects"] = "Listado: WHERE OwnerId = IUserContext.",
         ["POST /api/v2/workspaces/save"] = "Los ids del body se resuelven con el dueño del servidor: ProjectId (v2) por repositorio y el triple clásico por IClassicProjectAccess; ajeno e inexistente = 404.",
         ["POST /api/v1/auth/logout-all"] = "Opera sobre la cuenta de la propia sesión (RequireAuthorization); no recibe ids.",
+        ["POST /api/v1/auth/change-password"] = "Opera sobre la cuenta de la propia sesión (RequireAuthorization; la cuenta sale de la cookie, no del cuerpo); exige la contraseña actual y no recibe ids. Contraseña actual incorrecta = 400, nunca 401 (M3.1-S08).",
         ["GET /api/v1/me"] = "Perfil PROPIO: el usuario sale solo de IUserContext (FallbackPolicy: 401 sin sesión); la ruta no recibe ids ni puede direccionar a otro usuario.",
         ["PATCH /api/v1/me"] = "Perfil PROPIO: el usuario sale solo de IUserContext; el cuerpo solo lleva displayName y cualquier id/userId/email se ignora. Cubierto por la matriz UserA/UserB de MultiUserIsolationTests.",
         ["POST /api/v2/geometry/boolean"] = "Cálculo SIN estado: recibe y devuelve coordenadas; no lee ni escribe recursos.",

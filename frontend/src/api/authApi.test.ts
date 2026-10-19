@@ -1,16 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  AUTH_CHANGE_PASSWORD_PATH,
+  AUTH_CONFIRM_EMAIL_PATH,
+  AUTH_FORGOT_PASSWORD_PATH,
+  AUTH_RESEND_CONFIRMATION_PATH,
+  AUTH_RESET_PASSWORD_PATH,
   AUTH_LOGIN_PATH,
   AUTH_LOGOUT_ALL_PATH,
   AUTH_LOGOUT_PATH,
   AUTH_ME_PATH,
   AUTH_REGISTER_PATH,
+  changePassword,
+  confirmEmail,
+  forgotPassword,
   getCurrentUser,
   isUnauthorizedError,
   login,
   logout,
   logoutAll,
   register,
+  resendConfirmation,
+  resetPassword,
 } from "./authApi";
 import { API_BASE_URL, ApiClientError, CSRF_HEADER_NAME, CSRF_HEADER_VALUE } from "./httpClient";
 
@@ -155,5 +165,89 @@ describe("authApi", () => {
     expect(isUnauthorizedError(new ApiClientError("x", { isNetworkError: true }))).toBe(false);
     expect(isUnauthorizedError(new Error("401"))).toBe(false);
     expect(isUnauthorizedError(undefined)).toBe(false);
+  });
+});
+
+describe("authApi — recuperación de acceso y verificación de correo (M3.1-S08)", () => {
+  it("los paths son los del backend", () => {
+    expect(AUTH_FORGOT_PASSWORD_PATH).toBe("/api/v1/auth/forgot-password");
+    expect(AUTH_RESET_PASSWORD_PATH).toBe("/api/v1/auth/reset-password");
+    expect(AUTH_CONFIRM_EMAIL_PATH).toBe("/api/v1/auth/confirm-email");
+    expect(AUTH_RESEND_CONFIRMATION_PATH).toBe("/api/v1/auth/resend-confirmation");
+    expect(AUTH_CHANGE_PASSWORD_PATH).toBe("/api/v1/auth/change-password");
+  });
+
+  it("forgotPassword y resendConfirmation envían SOLO el correo, con credenciales y cabecera anti-CSRF", async () => {
+    const fetchMock = stubFetch(() => json({ status: "accepted" }, 202));
+
+    await expect(forgotPassword({ email: "ana@vectorify.test" })).resolves.toEqual({ status: "accepted" });
+    await expect(resendConfirmation({ email: "ana@vectorify.test" })).resolves.toEqual({ status: "accepted" });
+
+    expect(String(fetchMock.mock.calls[0][0])).toBe(`${API_BASE_URL}/api/v1/auth/forgot-password`);
+    expect(String(fetchMock.mock.calls[1][0])).toBe(`${API_BASE_URL}/api/v1/auth/resend-confirmation`);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init?.method).toBe("POST");
+      expect(init?.credentials).toBe("include");
+      expect(headerOf(init, CSRF_HEADER_NAME)).toBe(CSRF_HEADER_VALUE);
+      expect(JSON.parse(String(init?.body))).toEqual({ email: "ana@vectorify.test" });
+    }
+  });
+
+  it("resetPassword envía {email, token, newPassword} y resuelve vacío ante el 204", async () => {
+    const fetchMock = stubFetch(new Response(null, { status: 204 }));
+
+    await expect(resetPassword({ email: "ana@vectorify.test", token: "T", newPassword: "una-contrasena-larga-1" })).resolves.toBeUndefined();
+
+    expect(String(fetchMock.mock.calls[0][0])).toBe(`${API_BASE_URL}/api/v1/auth/reset-password`);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      email: "ana@vectorify.test",
+      token: "T",
+      newPassword: "una-contrasena-larga-1",
+    });
+  });
+
+  it("confirmEmail envía userId (o email) y token, y no mezcla identificadores", async () => {
+    const fetchMock = stubFetch(new Response(null, { status: 204 }));
+
+    await confirmEmail({ userId: "u1", email: "ana@vectorify.test", token: "T" });
+    await confirmEmail({ email: "ana@vectorify.test", token: "T" });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ userId: "u1", token: "T" });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ email: "ana@vectorify.test", token: "T" });
+  });
+
+  it("changePassword envía {currentPassword, newPassword}", async () => {
+    const fetchMock = stubFetch(new Response(null, { status: 204 }));
+
+    await expect(changePassword({ currentPassword: "actual-larga-123", newPassword: "nueva-larga-1234" })).resolves.toBeUndefined();
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ currentPassword: "actual-larga-123", newPassword: "nueva-larga-1234" });
+  });
+
+  it("propagan el error con su status, cuerpo y Retry-After (400 invalid_token, 429)", async () => {
+    stubFetch(json({ code: "invalid_token", message: "x" }, 400));
+    await expect(resetPassword({ email: "a@b.co", token: "T", newPassword: "una-contrasena-larga-1" })).rejects.toMatchObject({
+      status: 400,
+      body: { code: "invalid_token" },
+    });
+
+    stubFetch(new Response("{}", { status: 429, headers: { "Retry-After": "300" } }));
+    await expect(forgotPassword({ email: "a@b.co" })).rejects.toMatchObject({ status: 429, retryAfterSeconds: 300 });
+  });
+
+  it("un 401 de change-password NO dispara la frontera de sesión automática (es un endpoint de auth)", async () => {
+    const { onSessionExpired, resetSessionBoundaryForTests } = await import("./sessionBoundary");
+    resetSessionBoundaryForTests();
+    let events = 0;
+    const off = onSessionExpired(() => {
+      events += 1;
+    });
+    stubFetch(json({}, 401));
+
+    await expect(changePassword({ currentPassword: "a", newPassword: "b" })).rejects.toMatchObject({ status: 401 });
+
+    expect(events).toBe(0);
+    off();
+    resetSessionBoundaryForTests();
   });
 });

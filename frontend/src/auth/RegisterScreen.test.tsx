@@ -123,7 +123,7 @@ describe("RegisterScreen — validación al enviar", () => {
 });
 
 describe("RegisterScreen — registro recibido (202 uniforme)", () => {
-  it("envía solo correo y contraseña; muestra «Registro recibido» con el foco en el h1, sin mencionar correos enviados ni verificación", async () => {
+  it("envía solo correo y contraseña; muestra «Registro recibido» con el foco en el h1, sin afirmar que se envió ningún correo", async () => {
     const api = await renderRegister();
     fillValid();
 
@@ -138,8 +138,10 @@ describe("RegisterScreen — registro recibido (202 uniforme)", () => {
     expect(document.title).toBe("Registro recibido — Vectorify");
 
     const text = document.body.textContent ?? "";
-    expect(text).toContain("Ya podés iniciar sesión con tu correo y la contraseña que elegiste.");
-    expect(text).not.toMatch(/enviamos|te enviamos|bandeja|verific|confirmá tu|revisá tu (correo|email)|spam/i);
+    expect(text).toContain("Iniciá sesión con tu correo y la contraseña que elegiste. Si ya tenías una cuenta con este correo, entrá con la contraseña de siempre.");
+    // El correo de confirmación se menciona SOLO en condicional («debería llegarte»): nunca se afirma que se envió ni que la cuenta es nueva.
+    expect(text).toContain("Si el correo es nuevo para nosotros, en unos minutos debería llegarte un mensaje con un enlace para confirmarlo.");
+    expect(text).not.toMatch(/enviamos|te enviamos|te mandamos|bandeja|verific|confirmá tu|revisá tu (correo|email)|spam/i);
     // No confirma que la cuenta sea nueva y no deja contraseñas en el DOM.
     expect(text).not.toMatch(/cuenta (fue )?creada|bienvenid/i);
     expect(screen.queryByLabelText("Contraseña")).not.toBeInTheDocument();

@@ -52,7 +52,7 @@ Sin «refresh» explícito: la SPA no hace nada para renovar; basta con seguir u
 | Cookie manipulada, truncada o de otro key ring | 401 | No se descifra: no hay forma de saber «quién es». Probado con varias alteraciones. |
 | `logout` | 204; borra la cookie de este navegador y **rota el `SecurityStamp`** | Idempotente y tolerante a anónimo. Decisión de S03: cerrar sesión en un sitio la cierra en todos (con la ventana de §5). |
 | `logout-all` (`POST /api/v1/auth/logout-all`) | 204; rota el `SecurityStamp` de **la cuenta autenticada** y borra la cookie | **Exige sesión** (401 sin ella), mismo CSRF. Si la rotación falla: cookie borrada y 503 `logout_incomplete` (reintentar). Nada del cliente decide qué cuenta se rota. |
-| Cambio / reset de contraseña | Debe rotar el `SecurityStamp` (ADR T15) | **No existe todavía** (S07/S08): cuando se construya, debe llamar a `UpdateSecurityStampAsync`; Identity ya lo hace en `ChangePasswordAsync`/`ResetPasswordAsync`. No probado aquí. |
+| Cambio / reset de contraseña (S08) | Rota el `SecurityStamp` (ADR T15) | `reset-password` y `change-password` usan `ResetPasswordAsync`/`ChangePasswordAsync`, que rotan el stamp: toda cookie anterior deja de valer al revalidarse (misma ventana de §5). `change-password` **re-emite la cookie de la sesión actual** con el stamp nuevo (conserva el tope absoluto de «recordarme»); `reset-password` además limpia el bloqueo. Probado en `AuthRecoveryEndpointsTests`. Ver `docs/AUTH_RECOVERY.md`. |
 | Cuenta bloqueada por intentos fallidos | No revoca sesiones abiertas | El bloqueo (S03) impide *nuevos* logins. |
 | Reinicio del backend | **Las sesiones sobreviven** si el key ring está en un volumen (§6) | Verificado con dos hosts sobre el mismo directorio; con claves distintas la sesión se pierde (control). |
 | Pérdida del key ring | Todas las sesiones dejan de valer (401) | Las personas vuelven a iniciar sesión; no se pierden datos. Desde S08 también invalida enlaces de recuperación emitidos. |
@@ -90,6 +90,8 @@ Sin «refresh» explícito: la SPA no hace nada para renovar; basta con seguir u
 | `POST /api/v1/auth/logout` | opcional | — | 204 (rota el stamp si había sesión) / 503 `logout_incomplete` |
 | `POST /api/v1/auth/logout-all` | **sesión** | — | 204 / 401 / 503 `logout_incomplete` |
 | `GET /api/v1/auth/me` | sesión (en modo Development, anónimo) | — | 200 `CurrentUserResponse` (incluye `authMode`) / 401 |
+| `POST /api/v1/auth/change-password` (S08) | **sesión** | `{currentPassword, newPassword}` | 204 + cookie re-emitida / 400 `invalid_current_password` (NUNCA 401) o `weak_password` / 401 sin sesión |
+| `forgot-password`, `reset-password`, `confirm-email`, `resend-confirmation` (S08) | anónimo | ver `docs/AUTH_RECOVERY.md` | 202 uniforme / 204 / 400 genérico / 429 |
 
 **`/me` en modo Development (M3.1-S05).** Con `Auth:Mode=Development` no hay login: `/me` es anónimo y devuelve SIEMPRE el usuario de `IUserContext` (el usuario de desarrollo, dueño real de los datos en ese modo) con `authMode="Development"`, ignorando cualquier cookie.
 Así la SPA no queda bloqueada en la pantalla de login en desarrollo y puede ocultar «Salir» y mostrar la pastilla «Modo desarrollo». En modo `Authenticated` nada cambia: 401 sin identidad verificada. `login` también devuelve `authMode`.

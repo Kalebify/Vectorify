@@ -23,3 +23,26 @@ public sealed record LoginRequest(string? Email, string? Password, bool? Remembe
 /// login y la SPA oculta el formulario y «Salir» (ver <c>GET /api/v1/auth/me</c>).
 /// </summary>
 public sealed record CurrentUserResponse(Guid Id, string? Email, string DisplayName, string AuthMode);
+
+/// <summary>Cuerpo de <c>POST /api/v1/auth/forgot-password</c> (M3.1-S08). La respuesta es el 202 uniforme (<see cref="RegisterResponse"/>) exista o no la cuenta.</summary>
+public sealed record ForgotPasswordRequest(string? Email);
+
+/// <summary>
+/// Cuerpo de <c>POST /api/v1/auth/reset-password</c> (M3.1-S08): el token NATIVO de Identity que llegó por correo (en el fragmento del enlace), el correo de la cuenta y la
+/// contraseña nueva. Nunca se devuelven ni se loguean.
+/// </summary>
+public sealed record ResetPasswordRequest(string? Email, string? Token, string? NewPassword);
+
+/// <summary>
+/// Cuerpo de <c>POST /api/v1/auth/confirm-email</c> (M3.1-S08): identifica la cuenta por <see cref="AccountId"/> (el enlace del correo) o, si falta, por <see cref="Email"/>.
+/// En el JSON el campo se llama <c>userId</c> (el fragmento del enlace y la SPA lo usan así). La propiedad C# NO se llama <c>UserId</c> a propósito: el test de arquitectura
+/// «los contratos de entrada nunca llevan un dueño/usuario» (S02) prohíbe esos nombres, y aquí no es el usuario quien se nombra a sí mismo: este endpoint es ANÓNIMO y lo
+/// que autoriza es el token firmado de Identity (ligado a esa cuenta y a su SecurityStamp); el id solo dice contra qué cuenta verificarlo.
+/// </summary>
+public sealed record ConfirmEmailRequest([property: System.Text.Json.Serialization.JsonPropertyName("userId")] string? AccountId, string? Email, string? Token);
+
+/// <summary>Cuerpo de <c>POST /api/v1/auth/resend-confirmation</c> (M3.1-S08). Respuesta: el 202 uniforme.</summary>
+public sealed record ResendConfirmationRequest(string? Email);
+
+/// <summary>Cuerpo de <c>POST /api/v1/auth/change-password</c> (M3.1-S08, sesión obligatoria). Nunca se devuelven ni se loguean.</summary>
+public sealed record ChangePasswordRequest(string? CurrentPassword, string? NewPassword);

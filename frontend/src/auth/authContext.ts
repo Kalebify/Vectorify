@@ -23,7 +23,7 @@ export interface SessionFailure {
 }
 
 /** Motivo de llegada al login que viaja EN MEMORIA (nunca en la URL: un enlace no puede fabricar un «Tu sesión terminó»). */
-export type AuthNotice = "expired" | "signed-out" | "signed-out-all" | "registered";
+export type AuthNotice = "expired" | "signed-out" | "signed-out-all" | "password-reset" | "email-confirmed" | "registered";
 
 export interface AuthContextValue {
   state: AuthState;
@@ -32,8 +32,11 @@ export interface AuthContextValue {
   /** true si el servidor está en `Auth:Mode=Development`: sin login, sin «Salir». */
   isDevelopmentMode: boolean;
   notice: AuthNotice | null;
-  /** Correo del último registro recibido, para precargar el login (la contraseña nunca). */
-  registeredEmail: string | null;
+  /**
+   * Correo que pasa EN MEMORIA entre pantallas de auth (registro recibido, login, solicitud de recuperación, restablecimiento, confirmación) para precargar
+   * el campo de correo (M3.1-S08; generaliza el `registeredEmail` de S05). Nunca va en la URL; la contraseña nunca se conserva.
+   */
+  prefillEmail: string | null;
   /** true mientras un reintento de `/me` está en curso. */
   isRetrying: boolean;
   /** Vuelve a consultar la sesión (desde el estado `error`). */
@@ -51,6 +54,17 @@ export interface AuthContextValue {
   updateDisplayName: (displayName: string) => void;
   /** Recuerda en memoria que el registro fue recibido (aviso + correo precargado en el login). */
   announceRegistered: (email: string) => void;
+  /** Guarda en memoria el correo con el que se precargará la pantalla de auth a la que se navega (`null` lo olvida). */
+  setPrefillEmail: (email: string | null) => void;
+  /** Aviso de la próxima pantalla de login que llega EN MEMORIA tras restablecer la contraseña o confirmar el correo (+ correo precargado). */
+  announceNotice: (notice: "password-reset" | "email-confirmed", email: string | null) => void;
+  /**
+   * Cierra la sesión LOCAL tras restablecer la contraseña (M3.1-S08): intenta `POST /logout` (errores ignorados) y pasa a «no autenticado» SIN el aviso
+   * de sesión terminada. No hace nada si no hay una sesión real.
+   */
+  endSessionAfterPasswordReset: () => Promise<void>;
+  /** Marca la sesión como terminada (aviso `expired`, vuelta a la ubicación actual): para un 401 en una ruta de auth, que la frontera automática no cubre. */
+  expireSession: () => void;
 }
 
 export const AuthContext = createContext<AuthContextValue | null>(null);

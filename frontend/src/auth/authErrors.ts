@@ -14,6 +14,8 @@ export interface Failure {
   code?: string;
   /** `message` del `ApiErrorResponse` del servidor (ya en español), si vino. */
   message?: string;
+  /** Segundos de espera de la cabecera `Retry-After` de un 429 (M3.1-S08), si vino y se pudo leer. */
+  retryAfterSeconds?: number;
 }
 
 function bodyField(body: unknown, field: "code" | "message"): string | undefined {
@@ -31,7 +33,12 @@ export function classifyFailure(error: unknown): Failure {
   if (error.isAborted) return { kind: "aborted" };
   if (error.isNetworkError || error.status === undefined) return { kind: "network" };
 
-  const base = { status: error.status, code: bodyField(error.body, "code"), message: bodyField(error.body, "message") };
+  const base = {
+    status: error.status,
+    code: bodyField(error.body, "code"),
+    message: bodyField(error.body, "message"),
+    retryAfterSeconds: error.retryAfterSeconds,
+  };
   if (error.status === 401) return { kind: "unauthorized", ...base };
   if (error.status === 403) return { kind: "forbidden", ...base };
   if (error.status === 429) return { kind: "rateLimited", ...base };

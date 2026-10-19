@@ -71,12 +71,44 @@ describe("LoginScreen — estructura, etiquetas y accesibilidad", () => {
     expect(document.querySelector("form")).toHaveAttribute("aria-busy", "false");
   });
 
-  it("no muestra enlaces muertos ni promesas fuera de alcance: sin «olvidé mi contraseña» ni verificación de correo", async () => {
+  it("muestra solo enlaces reales (sin enlaces muertos ni promesas fuera de alcance): ayuda de acceso + «Creá una», sin MFA ni login social", async () => {
     await renderLogin();
     const text = document.body.textContent ?? "";
-    expect(text).not.toMatch(/olvid/i);
-    expect(text).not.toMatch(/verific/i);
-    expect(screen.getAllByRole("link").map((link) => link.textContent)).toEqual(["Creá una"]);
+    expect(text).not.toMatch(/MFA|dos factores|google|github|microsoft/i);
+    const links = screen.getAllByRole("link");
+    expect(links.map((link) => link.textContent)).toEqual([
+      "¿Olvidaste tu contraseña?",
+      "¿No te llegó el correo para confirmar tu cuenta?",
+      "Creá una",
+    ]);
+    // Todos son <a href> reales de la propia app (nada de "#" ni href vacío).
+    expect(links.map((link) => link.getAttribute("href"))).toEqual(["?view=forgot-password", "?view=confirm-email", "?view=register"]);
+  });
+
+  it("los enlaces de ayuda van DESPUÉS del botón «Iniciar sesión» y ANTES de «Creá una» (orden del DOM = orden de tabulación; Enter en la contraseña sigue enviando)", async () => {
+    await renderLogin();
+
+    const button = submit();
+    const forgot = screen.getByRole("link", { name: "¿Olvidaste tu contraseña?" });
+    const confirm = screen.getByRole("link", { name: "¿No te llegó el correo para confirmar tu cuenta?" });
+    const register = screen.getByRole("link", { name: "Creá una" });
+    const follows = (a: Node, b: Node) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(button, forgot)).toBe(true);
+    expect(follows(forgot, confirm)).toBe(true);
+    expect(follows(confirm, register)).toBe(true);
+    expect(button.closest("form")).not.toContainElement(forgot); // fuera del formulario: no interrumpen el camino del teclado
+    expect(forgot.closest("ul")).toBe(confirm.closest("ul"));
+    expect(document.querySelectorAll("[tabindex]:not([tabindex='-1']):not([tabindex='0'])")).toHaveLength(0);
+  });
+
+  it("«¿Olvidaste tu contraseña?» conserva el returnUrl validado", async () => {
+    const returnUrl = "/?projectId=p1&imageId=i1&paletteId=pal1";
+    await renderLogin({}, `/?view=login&returnUrl=${encodeURIComponent(returnUrl)}`);
+
+    expect(screen.getByRole("link", { name: "¿Olvidaste tu contraseña?" })).toHaveAttribute(
+      "href",
+      `?view=forgot-password&returnUrl=${encodeURIComponent(returnUrl)}`,
+    );
   });
 
   it("el enlace «Creá una» es un <a href> real que conserva el returnUrl y lleva el foco al h1 del registro", async () => {
@@ -210,8 +242,9 @@ describe("LoginScreen — envío y errores del servidor", () => {
 
     fireEvent.click(submit());
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "El correo o la contraseña no son correctos. Si fallaste varias veces seguidas, esperá unos minutos antes de volver a intentar.",
+    // Texto de S08: cubre cuenta inexistente, contraseña errónea, bloqueo Y correo sin confirmar (Auth:RequireConfirmedEmail) sin distinguirlos.
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "El correo o la contraseña no son correctos. Si fallaste varias veces seguidas, esperá unos minutos antes de volver a intentar. Si todavía no confirmaste tu correo, puede que tengas que hacerlo antes de entrar.",
     );
   });
 

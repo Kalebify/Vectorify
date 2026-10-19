@@ -119,6 +119,49 @@
   gap: var(--auth-space-1);
 }
 
+/* ---------- Recuperación de acceso (M3.1-S08) ---------- */
+
+/* El correo repetido dentro de un texto parte en cualquier punto: un correo largo no provoca scroll horizontal a 360 px. */
+.auth-email {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* Cuerpo de un panel de resultado pegado al h1 (h1 -> 4 px -> cuerpo). */
+.auth-card__head .auth-card__body {
+  margin: 0;
+}
+
+/* Acciones de un panel de resultado: columna, primario a ancho completo arriba y secundario debajo. */
+.auth-result__actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--auth-space-3);
+}
+
+.auth-result__actions > .auth-button {
+  width: 100%;
+}
+
+/* Salidas del login para quien no puede entrar (lista nativa, un enlace por línea). */
+.auth-help {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.auth-help .auth-link {
+  font-size: 0.875rem;
+}
+
+/* Región de estado persistente de las tarjetas de auth: vacía no ocupa alto (anula el gap del flex) y nunca se oculta con display. */
+.auth-status:empty {
+  margin-bottom: calc(-1 * var(--auth-space-4));
+}
+
 /* ---------- Avisos ---------- */
 
 .auth-banner {

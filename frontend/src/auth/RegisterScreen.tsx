@@ -27,7 +27,7 @@ interface FieldErrors {
 
 /**
  * Pantalla de registro (`?view=register`). El 202 es UNIFORME (exista o no el correo): el panel «Registro recibido» no afirma que la
- * cuenta sea nueva ni menciona ningún correo (la verificación llega en S08).
+ * cuenta sea nueva ni que el correo de confirmación llegó (M3.1-S08): habla en condicional («si el correo es nuevo para nosotros…»).
  */
 export function RegisterScreen({ search }: { search: string }) {
   const { announceRegistered } = useAuth();

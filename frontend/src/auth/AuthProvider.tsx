@@ -15,10 +15,10 @@ import { classifyFailure } from "./authErrors";
 interface Store {
   state: AuthState;
   notice: AuthNotice | null;
-  registeredEmail: string | null;
+  prefillEmail: string | null;
 }
 
-const INITIAL_STORE: Store = { state: { status: "unknown" }, notice: null, registeredEmail: null };
+const INITIAL_STORE: Store = { state: { status: "unknown" }, notice: null, prefillEmail: null };
 
 /** Un servidor anterior a S05 no envía `authMode`: se interpreta como sesión real. */
 function normalizeUser(user: CurrentUser): CurrentUser {
@@ -117,7 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signIn = useCallback(async (request: LoginRequest, signal?: AbortSignal) => {
     const user = await login(request, signal);
     requestArrivalFocus();
-    setStore({ state: { status: "authenticated", user: normalizeUser(user) }, notice: null, registeredEmail: null });
+    setStore({ state: { status: "authenticated", user: normalizeUser(user) }, notice: null, prefillEmail: null });
   }, []);
 
   const signOut = useCallback(async () => {
@@ -155,7 +155,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const announceRegistered = useCallback((email: string) => {
-    setStore((current) => ({ ...current, notice: "registered", registeredEmail: email }));
+    setStore((current) => ({ ...current, notice: "registered", prefillEmail: email }));
+  }, []);
+
+  const setPrefillEmail = useCallback((email: string | null) => {
+    setStore((current) => (current.prefillEmail === email ? current : { ...current, prefillEmail: email }));
+  }, []);
+
+  const announceNotice = useCallback((notice: "password-reset" | "email-confirmed", email: string | null) => {
+    setStore((current) => ({ ...current, notice, prefillEmail: email }));
+  }, []);
+
+  // Tras restablecer la contraseña el servidor ya rotó el SecurityStamp (la cookie de este navegador deja de valer sola); igualmente se pide cerrar la sesión
+  // para que borre la cookie, y se pasa a «no autenticado» sin el aviso «Tu sesión terminó» (el usuario acaba de cambiar su contraseña a propósito).
+  const endSessionAfterPasswordReset = useCallback(async () => {
+    try {
+      await logout();
+    } catch {
+      // mejor esfuerzo: la sesión ya no es válida en el servidor
+    }
+    setStore((current) =>
+      current.state.status === "authenticated" && current.state.user.authMode !== "Development"
+        ? { ...current, state: { status: "unauthenticated", returnUrl: null }, notice: null }
+        : current,
+    );
+  }, []);
+
+  const expireSession = useCallback(() => {
+    setStore((current) => {
+      if (current.state.status !== "authenticated" || current.state.user.authMode === "Development") return current;
+      return { ...current, state: { status: "unauthenticated", returnUrl: currentReturnUrl() }, notice: "expired" };
+    });
   }, []);
 
   const value = useMemo<AuthContextValue>(
@@ -164,7 +194,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user: store.state.status === "authenticated" ? store.state.user : null,
       isDevelopmentMode: store.state.status === "authenticated" && store.state.user.authMode === "Development",
       notice: store.notice,
-      registeredEmail: store.registeredEmail,
+      prefillEmail: store.prefillEmail,
       isRetrying,
       retry,
       signIn,
@@ -172,8 +202,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signOutAll,
       updateDisplayName,
       announceRegistered,
+      setPrefillEmail,
+      announceNotice,
+      endSessionAfterPasswordReset,
+      expireSession,
     }),
-    [store, isRetrying, retry, signIn, signOut, signOutAll, updateDisplayName, announceRegistered],
+    [
+      store,
+      isRetrying,
+      retry,
+      signIn,
+      signOut,
+      signOutAll,
+      updateDisplayName,
+      announceRegistered,
+      setPrefillEmail,
+      announceNotice,
+      endSessionAfterPasswordReset,
+      expireSession,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -38,6 +38,21 @@ public sealed class AuthOptions
 
     /// <summary>Auth__DataProtection__*: dónde vive el key ring que cifra la cookie de sesión (M3.1-S04).</summary>
     public AuthDataProtectionOptions DataProtection { get; set; } = new();
+
+    /// <summary>Auth__Email__*: envío de correo transaccional (M3.1-S08): modo, enlace público de la SPA, remitente y SMTP.</summary>
+    public AuthEmailOptions Email { get; set; } = new();
+
+    /// <summary>Auth__Tokens__*: vida de los tokens NATIVOS de Identity (restablecer contraseña, confirmar correo) (M3.1-S08).</summary>
+    public AuthTokensOptions Tokens { get; set; } = new();
+
+    /// <summary>Auth__RateLimit__*: límites de frecuencia de forgot/reset/resend/confirm (M3.1-S08; S09 los generaliza).</summary>
+    public AuthRateLimitOptions RateLimit { get; set; } = new();
+
+    /// <summary>
+    /// Auth__RequireConfirmedEmail (M3.1-S08, ADR P9): si es <c>true</c>, el login de una cuenta con el correo SIN confirmar responde el MISMO
+    /// 401 uniforme que una contraseña errónea. Por defecto <c>false</c>: confirmar el correo no es obligatorio para entrar.
+    /// </summary>
+    public bool RequireConfirmedEmail { get; set; }
 }
 
 public sealed class AuthCookieOptions
@@ -116,4 +131,105 @@ public sealed class AuthLockoutOptions
 
     /// <summary>Auth__Lockout__Duration. Lo usa el login (S03).</summary>
     public TimeSpan Duration { get; set; } = TimeSpan.FromMinutes(15);
+}
+
+/// <summary>Cómo se entregan los correos transaccionales (M3.1-S08).</summary>
+public enum AuthEmailMode
+{
+    /// <summary>No se envía nada (default). Forgot/resend siguen respondiendo 202 uniforme; la recuperación por correo NO funciona.</summary>
+    Disabled,
+
+    /// <summary>Escribe el mensaje —CON el enlace y el correo— en el log, para probar a mano. SOLO Development/Testing/Test (validado al arrancar).</summary>
+    Log,
+
+    /// <summary>Envía por SMTP (<see cref="AuthSmtpOptions"/>). Proveedor concreto: decisión humana (ADR P5); aquí SMTP genérico.</summary>
+    Smtp,
+}
+
+/// <summary>Cifrado del canal SMTP.</summary>
+public enum AuthSmtpSecurity
+{
+    /// <summary>STARTTLS obligatorio (default; puerto típico 587). El certificado del servidor se valida.</summary>
+    StartTls,
+
+    /// <summary>Sin cifrado. SOLO Development/Testing/Test (sumidero local tipo Mailpit).</summary>
+    None,
+}
+
+public sealed class AuthEmailOptions
+{
+    /// <summary>Auth__Email__Mode: <see cref="AuthEmailMode.Disabled"/> (default) | <see cref="AuthEmailMode.Log"/> (solo desarrollo) | <see cref="AuthEmailMode.Smtp"/>.</summary>
+    public AuthEmailMode Mode { get; set; } = AuthEmailMode.Disabled;
+
+    /// <summary>
+    /// Auth__Email__PublicBaseUrl: origen (esquema + host + puerto, sin ruta) donde se sirve la SPA y al que apuntan los enlaces de los correos.
+    /// Obligatorio con Mode Log/Smtp; <c>https</c> salvo en desarrollo; DEBE figurar en <c>Cors:AllowedOrigins</c>. NUNCA se deriva de Host/Origin de la request.
+    /// </summary>
+    public string? PublicBaseUrl { get; set; }
+
+    /// <summary>Auth__Email__FromAddress: remitente (obligatorio con Smtp).</summary>
+    public string? FromAddress { get; set; }
+
+    /// <summary>Auth__Email__FromName: nombre visible del remitente.</summary>
+    public string FromName { get; set; } = "Vectorify";
+
+    public AuthSmtpOptions Smtp { get; set; } = new();
+}
+
+public sealed class AuthSmtpOptions
+{
+    /// <summary>Auth__Email__Smtp__Host.</summary>
+    public string? Host { get; set; }
+
+    /// <summary>Auth__Email__Smtp__Port (587 por defecto, STARTTLS).</summary>
+    public int Port { get; set; } = 587;
+
+    /// <summary>Auth__Email__Smtp__Security: <c>StartTls</c> (default) o <c>None</c> (solo desarrollo).</summary>
+    public AuthSmtpSecurity Security { get; set; } = AuthSmtpSecurity.StartTls;
+
+    /// <summary>Auth__Email__Smtp__UserName (opcional: sin usuario no se autentica).</summary>
+    public string? UserName { get; set; }
+
+    /// <summary>
+    /// Auth__Email__Smtp__Password: SECRETO. Solo por variable de entorno / gestor de secretos; nunca en appsettings ni en el repositorio
+    /// (un test lo vigila). Nunca se loguea.
+    /// </summary>
+    public string? Password { get; set; }
+
+    /// <summary>Auth__Email__Smtp__Timeout: tiempo máximo de un envío (el envío ocurre en segundo plano).</summary>
+    public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(30);
+}
+
+public sealed class AuthTokensOptions
+{
+    /// <summary>Tope de las vidas configurables: un token de recuperación que viva más de una semana es un riesgo, no una comodidad.</summary>
+    public static readonly TimeSpan MaxLifetime = TimeSpan.FromDays(7);
+
+    /// <summary>Auth__Tokens__PasswordResetLifetime: vida del enlace de restablecer contraseña (1 h).</summary>
+    public TimeSpan PasswordResetLifetime { get; set; } = TimeSpan.FromHours(1);
+
+    /// <summary>Auth__Tokens__EmailConfirmationLifetime: vida del enlace de confirmar correo (24 h).</summary>
+    public TimeSpan EmailConfirmationLifetime { get; set; } = TimeSpan.FromHours(24);
+}
+
+/// <summary>
+/// Límites de frecuencia (M3.1-S08) con <c>Microsoft.AspNetCore.RateLimiting</c> / <c>System.Threading.RateLimiting</c>. Dos ejes: por IP (429 + <c>Retry-After</c>)
+/// y por dirección de correo hasheada (respuesta uniforme sin enviar). Ventana fija. S09 generaliza esto al resto de <c>/api/v1/auth/*</c>.
+/// </summary>
+public sealed class AuthRateLimitOptions
+{
+    /// <summary>Auth__RateLimit__IpPermitLimit: peticiones por IP y por ruta dentro de la ventana (forgot/reset/resend/confirm).</summary>
+    public int IpPermitLimit { get; set; } = 20;
+
+    /// <summary>Auth__RateLimit__IpWindow.</summary>
+    public TimeSpan IpWindow { get; set; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>Auth__RateLimit__AddressSendPermitLimit: pedidos de correo (forgot/resend) por dirección dentro de la ventana; el excedente da el 202 uniforme SIN enviar.</summary>
+    public int AddressSendPermitLimit { get; set; } = 5;
+
+    /// <summary>Auth__RateLimit__AddressVerifyPermitLimit: intentos de reset/confirm por dirección dentro de la ventana; el excedente da el mismo error genérico.</summary>
+    public int AddressVerifyPermitLimit { get; set; } = 10;
+
+    /// <summary>Auth__RateLimit__AddressWindow.</summary>
+    public TimeSpan AddressWindow { get; set; } = TimeSpan.FromHours(1);
 }

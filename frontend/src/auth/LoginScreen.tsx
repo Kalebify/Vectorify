@@ -9,6 +9,7 @@ import {
   AuthBanner,
   AuthButton,
   AuthCard,
+  AuthHelpLinks,
   AuthLayout,
   AuthLink,
   CheckboxField,
@@ -35,11 +36,11 @@ interface FieldErrors {
 
 /** Pantalla de inicio de sesión (`?view=login`). Solo se monta con la sesión resuelta como «no autenticado». */
 export function LoginScreen({ search }: { search: string }) {
-  const { notice, registeredEmail, signIn } = useAuth();
+  const { notice, prefillEmail, signIn } = useAuth();
   const returnUrl = readReturnUrl(search);
   const bannerKind: BannerKind | null = notice ?? (returnUrl ? "return-info" : null);
 
-  const [email, setEmail] = useState(registeredEmail ?? "");
+  const [email, setEmail] = useState(prefillEmail ?? "");
   const [password, setPassword] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -187,6 +188,9 @@ export function LoginScreen({ search }: { search: string }) {
             {submitting ? LOGIN.submitting : ""}
           </p>
         </form>
+
+        {/* Las salidas para quien no puede entrar van DESPUÉS del formulario (M3.1-S08): Enter en la contraseña sigue enviando y el orden de Tab no se interrumpe. */}
+        <AuthHelpLinks returnUrl={returnUrl} email={email} />
       </AuthCard>
     </AuthLayout>
   );

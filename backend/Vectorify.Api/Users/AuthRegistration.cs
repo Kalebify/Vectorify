@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Vectorify.Api.Authorization;
 using Vectorify.Api.Data.Auth;
+using Vectorify.Api.Email;
 using Vectorify.Api.Options;
 
 namespace Vectorify.Api.Users;
@@ -54,12 +55,41 @@ public static class AuthRegistration
         services
             .AddIdentityCore<ApplicationUser>()
             .AddEntityFrameworkStores<AuthDbContext>()
-            .AddSignInManager();
+            .AddSignInManager()
+            // Tokens NATIVOS de Identity para recuperar/confirmar (M3.1-S08), con vida propia cada uno (Auth:Tokens:*). Sin AddDefaultTokenProviders a propósito:
+            // solo existen estos dos proveedores (nada de teléfono/2FA).
+            .AddTokenProvider<PasswordResetTokenProvider>(PasswordResetTokenProvider.ProviderName)
+            .AddTokenProvider<EmailConfirmationTokenProvider>(EmailConfirmationTokenProvider.ProviderName);
+
+        services.AddOptions<PasswordResetTokenProviderOptions>().Configure<IOptions<AuthOptions>>((token, auth) =>
+        {
+            token.Name = PasswordResetTokenProvider.ProviderName; // propósito del protector: separa los tokens de cada uso
+            token.TokenLifespan = auth.Value.Tokens.PasswordResetLifetime;
+        });
+        services.AddOptions<EmailConfirmationTokenProviderOptions>().Configure<IOptions<AuthOptions>>((token, auth) =>
+        {
+            token.Name = EmailConfirmationTokenProvider.ProviderName;
+            token.TokenLifespan = auth.Value.Tokens.EmailConfirmationLifetime;
+        });
+
+        // Correo transaccional en segundo plano (M3.1-S08): cola + trabajador + IEmailSender elegido por Auth:Email:Mode (diferido, respeta overrides de tests).
+        services.AddSingleton<AuthEmailQueue>();
+        services.AddSingleton<IAuthEmailQueue>(sp => sp.GetRequiredService<AuthEmailQueue>());
+        services.AddHostedService<AuthEmailWorker>();
+        services.AddSingleton<IEmailSender>(sp => sp.GetRequiredService<IOptions<AuthOptions>>().Value.Email.Mode switch
+        {
+            AuthEmailMode.Smtp => ActivatorUtilities.CreateInstance<SmtpEmailSender>(sp),
+            AuthEmailMode.Log => ActivatorUtilities.CreateInstance<LogEmailSender>(sp),
+            _ => new DisabledEmailSender(),
+        });
+        AuthRecoveryLimiter.AddAuthRecoveryRateLimiting(services);
 
         services.AddOptions<IdentityOptions>().Configure<IOptions<AuthOptions>>((identity, auth) =>
         {
             var options = auth.Value;
             identity.User.RequireUniqueEmail = true;
+            identity.Tokens.PasswordResetTokenProvider = PasswordResetTokenProvider.ProviderName;
+            identity.Tokens.EmailConfirmationTokenProvider = EmailConfirmationTokenProvider.ProviderName;
 
             // Política de contraseña: SOLO largo (≥ 12). Sin reglas de composición (NIST 800-63B).
             identity.Password.RequiredLength = options.Password.MinLength;

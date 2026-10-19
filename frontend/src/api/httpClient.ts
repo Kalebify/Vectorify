@@ -38,19 +38,41 @@ export class ApiClientError extends Error {
   readonly isAborted: boolean;
   /** Código HTTP cuando la Web API respondió 4xx/5xx (M2.2-S08); undefined en errores de red/abort. */
   readonly status?: number;
+  /**
+   * Segundos de espera que pidió el servidor con la cabecera `Retry-After` (M3.1-S08; en segundos o como fecha HTTP), o undefined si no vino o
+   * no se puede leer. En una llamada entre orígenes solo es legible si el backend la expone con `Access-Control-Expose-Headers`.
+   */
+  readonly retryAfterSeconds?: number;
 
   constructor(
     message: string,
-    options?: { cause?: unknown; body?: unknown; isNetworkError?: boolean; isAborted?: boolean; status?: number },
+    options?: {
+      cause?: unknown;
+      body?: unknown;
+      isNetworkError?: boolean;
+      isAborted?: boolean;
+      status?: number;
+      retryAfterSeconds?: number;
+    },
   ) {
     super(message);
     this.name = "ApiClientError";
     this.cause = options?.cause;
     this.body = options?.body;
     this.status = options?.status;
+    this.retryAfterSeconds = options?.retryAfterSeconds;
     this.isNetworkError = options?.isNetworkError ?? false;
     this.isAborted = options?.isAborted ?? false;
   }
+}
+
+/** Interpreta `Retry-After` (entero de segundos o fecha HTTP) como segundos de espera; undefined si falta o es ilegible. */
+export function parseRetryAfter(value: string | null | undefined, now: number = Date.now()): number | undefined {
+  const raw = value?.trim();
+  if (!raw) return undefined;
+  if (/^\d+$/.test(raw)) return Number.parseInt(raw, 10);
+  const date = Date.parse(raw);
+  return Number.isNaN(date) ? undefined : Math.max(0, Math.ceil((date - now) / 1000));
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -85,7 +107,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiClientError(
       `La Web API respondió con código ${response.status} en ${path}`,
-      { body, status: response.status },
+      { body, status: response.status, retryAfterSeconds: parseRetryAfter(response.headers.get("Retry-After")) },
     );
   }
 

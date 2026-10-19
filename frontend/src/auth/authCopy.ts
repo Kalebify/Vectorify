@@ -4,6 +4,13 @@ export const NETWORK_MESSAGE = "No se pudo contactar con el servidor. Revisá tu
 export const FORBIDDEN_MESSAGE = "No pudimos verificar la solicitud. Recargá la página e intentá de nuevo.";
 export const RATE_LIMITED_MESSAGE = "Hiciste demasiados intentos. Esperá unos minutos antes de volver a probar.";
 
+/** 429 con `Retry-After` legible (M3.1-S08, DESIGN §11.8): minutos redondeados hacia arriba, mínimo 1; singular solo para 1. */
+export function rateLimitedMessage(retryAfterSeconds: number | undefined): string {
+  if (retryAfterSeconds === undefined || !Number.isFinite(retryAfterSeconds) || retryAfterSeconds < 0) return RATE_LIMITED_MESSAGE;
+  const minutes = Math.max(1, Math.ceil(retryAfterSeconds / 60));
+  return `Hiciste demasiados pedidos seguidos. Probá de nuevo en ${minutes} ${minutes === 1 ? "minuto" : "minutos"}.`;
+}
+
 export const TITLES = {
   login: "Iniciar sesión",
   register: "Crear cuenta",
@@ -39,7 +46,7 @@ export const LOGIN = {
   emailInvalid: "Ingresá un correo electrónico válido, por ejemplo nombre@ejemplo.com.",
   passwordRequired: "Ingresá tu contraseña.",
   credentials:
-    "El correo o la contraseña no son correctos. Si fallaste varias veces seguidas, esperá unos minutos antes de volver a intentar.",
+    "El correo o la contraseña no son correctos. Si fallaste varias veces seguidas, esperá unos minutos antes de volver a intentar. Si todavía no confirmaste tu correo, puede que tengas que hacerlo antes de entrar.",
   server: "El servidor no pudo completar el inicio de sesión. Intentá de nuevo en unos minutos.",
 } as const;
 
@@ -64,8 +71,8 @@ export const REGISTER = {
 } as const;
 
 export const REGISTER_RECEIVED = {
-  body: "Ya podés iniciar sesión con tu correo y la contraseña que elegiste.",
-  note: "Si ya tenías una cuenta con este correo, entrá con la contraseña de siempre.",
+  body: "Iniciá sesión con tu correo y la contraseña que elegiste. Si ya tenías una cuenta con este correo, entrá con la contraseña de siempre.",
+  note: "Si el correo es nuevo para nosotros, en unos minutos debería llegarte un mensaje con un enlace para confirmarlo. Si no lo ves, revisá la carpeta de correo no deseado o pedí otro desde el inicio de sesión.",
   goToLogin: "Ir a iniciar sesión",
 } as const;
 
@@ -73,6 +80,8 @@ export const BANNERS = {
   expired: "Tu sesión terminó. Iniciá sesión de nuevo para continuar.",
   "signed-out": "Cerraste sesión.",
   "signed-out-all": "Cerraste sesión en todos tus dispositivos.",
+  "password-reset": "Cambiaste tu contraseña. Iniciá sesión con la contraseña nueva.",
+  "email-confirmed": "Confirmaste tu correo. Iniciá sesión para continuar.",
   registered: "Registro recibido. Iniciá sesión con tu correo y tu contraseña.",
   "return-info": "Iniciá sesión para continuar. Después te llevamos a la página que querías abrir.",
 } as const;
@@ -167,4 +176,135 @@ export const PROFILE = {
     forbidden: (status: number) => `El servidor rechazó la solicitud (código ${status}). Recargá la página e intentá de nuevo.`,
     other: "No pudimos cargar tu perfil. Recargá la página e intentá de nuevo.",
   },
+} as const;
+
+// --- Recuperación de acceso y verificación de correo (M3.1-S08, DESIGN §11) ---
+
+export const AUTH_HELP = {
+  forgot: "¿Olvidaste tu contraseña?",
+  confirm: "¿No te llegó el correo para confirmar tu cuenta?",
+} as const;
+
+export const FORGOT = {
+  title: "¿Olvidaste tu contraseña?",
+  intro: "Escribí el correo con el que entrás. Si corresponde a una cuenta, te vamos a enviar un enlace para elegir una contraseña nueva.",
+  emailLabel: "Correo electrónico",
+  submit: "Enviar enlace",
+  submitting: "Enviando…",
+  switchPrompt: "¿Te acordaste?",
+  switchLink: "Volver a iniciar sesión",
+  emailRequired: "Ingresá tu correo electrónico.",
+  emailInvalid: "Ingresá un correo electrónico válido, por ejemplo nombre@ejemplo.com.",
+  server: "El servidor no pudo recibir el pedido. Intentá de nuevo en unos minutos.",
+  rejected: "No pudimos procesar el pedido con esos datos. Revisá el correo e intentá de nuevo.",
+  sent: {
+    title: "Pedido recibido",
+    bodyPrefix: "Si existe una cuenta con",
+    bodySuffix: ", en unos minutos debería llegarte un correo con un enlace para elegir una contraseña nueva.",
+    note: "Por seguridad, el enlace vence al poco tiempo y sirve una sola vez. Si no lo ves, revisá la carpeta de correo no deseado o volvé a pedirlo.",
+    goToLogin: "Volver a iniciar sesión",
+    again: "Volver a pedir el enlace",
+  },
+} as const;
+
+export const RESET = {
+  title: "Elegí una contraseña nueva",
+  introPrefix: "Vas a cambiar la contraseña de la cuenta",
+  introSuffix: ".",
+  newLabel: "Contraseña nueva",
+  newHint: "Usá al menos 12 caracteres. Una frase larga que te resulte fácil de recordar es una buena opción.",
+  confirmLabel: "Repetí la contraseña nueva",
+  submit: "Guardar contraseña nueva",
+  submitting: "Guardando contraseña…",
+  backToLogin: "Volver a iniciar sesión",
+  passwordShort: "La contraseña debe tener al menos 12 caracteres.",
+  passwordLong: "La contraseña no puede superar los 128 caracteres.",
+  confirmRequired: "Repetí la contraseña.",
+  confirmMismatch: "Las contraseñas no coinciden.",
+  network: "No pudimos confirmar el cambio: no hay conexión con el servidor. Revisá tu conexión e intentá de nuevo.",
+  server: "El servidor no pudo cambiar la contraseña. Intentá de nuevo en unos minutos.",
+  forbidden: "No pudimos verificar la solicitud. Intentá de nuevo; si vuelve a pasar, abrí otra vez el enlace desde tu correo.",
+  success: {
+    title: "Contraseña cambiada",
+    body: "Listo. Ya podés iniciar sesión con tu contraseña nueva.",
+    note: "Por seguridad, cerramos las sesiones que tenías abiertas con tu cuenta en otros dispositivos y navegadores. Puede tardar unos minutos en aplicarse en todos.",
+    goToLogin: "Ir a iniciar sesión",
+  },
+  invalid: {
+    title: "Este enlace ya no es válido",
+    body: "No pudimos usar este enlace para cambiar la contraseña. Puede que haya vencido, que ya se haya usado o que esté incompleto.",
+    note: "Pedí un enlace nuevo: cada enlace sirve una sola vez y por poco tiempo.",
+    askNew: "Pedir un enlace nuevo",
+    backToLogin: "Volver a iniciar sesión",
+  },
+  missing: {
+    title: "Abrí el enlace desde tu correo",
+    body: "Esta página funciona con el enlace del correo de recuperación. Si recargaste la página o escribiste la dirección a mano, el enlace ya no está acá: volvé a abrirlo desde el correo o pedí uno nuevo.",
+    askNew: "Pedir un enlace nuevo",
+    backToLogin: "Volver a iniciar sesión",
+  },
+} as const;
+
+export const CONFIRM_EMAIL = {
+  pending: {
+    title: "Confirmando tu correo",
+    status: "Confirmando tu correo…",
+    network: "No pudimos confirmar tu correo: no hay conexión con el servidor. Revisá tu conexión e intentá de nuevo.",
+    server: "El servidor no pudo confirmar tu correo. Intentá de nuevo en unos minutos.",
+    forbidden: "No pudimos verificar la solicitud. Intentá de nuevo.",
+    clarification: "Tu enlace sigue sirviendo mientras no venza.",
+  },
+  success: {
+    title: "Correo confirmado",
+    body: "Listo: confirmamos tu correo. Desde ahora lo podés usar para recuperar el acceso a tu cuenta.",
+    goToLogin: "Ir a iniciar sesión",
+    goToProjects: "Ir a Mis proyectos",
+  },
+  invalid: {
+    title: "No pudimos confirmar tu correo",
+    body: "Puede que el enlace haya vencido, que ya se haya usado o que esté incompleto. Si ya habías confirmado tu correo, no tenés que hacer nada más.",
+  },
+  missing: {
+    title: "Confirmá tu correo",
+    body: "Para confirmar tu correo, abrí el enlace del mensaje que te enviamos al crear la cuenta. Si no lo encontrás o ya venció, pedí otro acá.",
+  },
+  backToLogin: "Volver a iniciar sesión",
+} as const;
+
+export const RESEND = {
+  emailLabel: "Correo de tu cuenta",
+  submit: "Enviar otro enlace",
+  submitting: "Enviando…",
+  success: "Pedido recibido. Si hay una cuenta con ese correo pendiente de confirmar, en unos minutos debería llegarte un enlace nuevo.",
+  emailRequired: "Ingresá tu correo electrónico.",
+  emailInvalid: "Ingresá un correo electrónico válido, por ejemplo nombre@ejemplo.com.",
+  server: "El servidor no pudo recibir el pedido. Intentá de nuevo en unos minutos.",
+  rejected: "No pudimos procesar el pedido con esos datos. Revisá el correo e intentá de nuevo.",
+} as const;
+
+export const CHANGE_PASSWORD = {
+  title: "Contraseña",
+  intro: "Cambiala cuando quieras. Seguís con la sesión iniciada en este navegador y cerramos las demás.",
+  currentLabel: "Contraseña actual",
+  currentHint: "Si no la recordás, cerrá sesión y usá «¿Olvidaste tu contraseña?» en la pantalla de inicio de sesión.",
+  newLabel: "Contraseña nueva",
+  newHint: "Usá al menos 12 caracteres. Una frase larga que te resulte fácil de recordar es una buena opción.",
+  confirmLabel: "Repetí la contraseña nueva",
+  submit: "Cambiar contraseña",
+  submitting: "Cambiando contraseña…",
+  success:
+    "Cambiamos tu contraseña. Seguís con la sesión iniciada en este navegador; en tus otros dispositivos la sesión se cierra en unos minutos y vas a tener que entrar con la contraseña nueva.",
+  currentRequired: "Ingresá tu contraseña actual.",
+  passwordShort: "La contraseña debe tener al menos 12 caracteres.",
+  passwordLong: "La contraseña no puede superar los 128 caracteres.",
+  confirmRequired: "Repetí la contraseña.",
+  confirmMismatch: "Las contraseñas no coinciden.",
+  currentIncorrect: "La contraseña actual no es correcta.",
+  rejected: "No pudimos cambiar la contraseña con esos datos. Revisalos e intentá de nuevo.",
+  network: "No pudimos confirmar el cambio: no hay conexión con el servidor. Revisá tu conexión e intentá de nuevo.",
+  server: (status: number | undefined) =>
+    status === undefined
+      ? "El servidor no pudo cambiar la contraseña. Intentá de nuevo en unos minutos."
+      : `El servidor no pudo cambiar la contraseña (código ${status}). Intentá de nuevo en unos minutos.`,
+  forbidden: (status: number) => `El servidor rechazó el cambio (código ${status}). Recargá la página e intentá de nuevo.`,
 } as const;

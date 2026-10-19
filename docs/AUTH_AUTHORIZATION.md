@@ -35,10 +35,12 @@ desarrollo. Este modo solo existe en `Development/Testing/Test` (guardrail de ar
 | `GET /api/v1/system/health` | Estado API/Postgres/Python que consume la SPA antes de iniciar sesión; sin datos de usuarios. |
 | `POST /api/v1/auth/register`, `POST /api/v1/auth/login` | Nadie tiene sesión antes de entrar; respuestas uniformes (T5/T6). |
 | `POST /api/v1/auth/logout` | Idempotente (204 con o sin sesión); no expone datos. |
+| `POST /api/v1/auth/forgot-password`, `POST /api/v1/auth/resend-confirmation` | M3.1-S08. Quien olvidó la contraseña o no confirmó el correo no tiene sesión. **202 uniforme** exista o no la cuenta; el correo sale en segundo plano; límites por IP (429) y por dirección hasheada. Ver `docs/AUTH_RECOVERY.md`. |
+| `POST /api/v1/auth/reset-password`, `POST /api/v1/auth/confirm-email` | M3.1-S08. Los autoriza el **token nativo de Identity** (un solo uso, vida corta, ligado al SecurityStamp); error genérico único para token inválido/caducado/reusado/cuenta inexistente; límites por IP y dirección. |
 | `GET /api/v1/auth/me` | En Development la SPA necesita 200 sin cookie; en Authenticated responde 401 por sí mismo sin identidad verificada. |
 | Swagger / Swagger UI | No son endpoints: son *middleware* previo a la autorización y **solo se montan en Development**. |
 
-`POST /api/v1/auth/logout-all` **no** es anónima (`RequireAuthorization`). La lista está fijada por `EndpointAuthorizationAudit.AnonymousAllowlist` (§5).
+`POST /api/v1/auth/logout-all` y `POST /api/v1/auth/change-password` (S08) **no** son anónimas (`RequireAuthorization`; la cuenta sale de la cookie, nunca del cuerpo). La lista está fijada por `EndpointAuthorizationAudit.AnonymousAllowlist` (§5).
 
 ## 3. Matriz de recursos protegidos
 
@@ -136,6 +138,7 @@ console.log(`${changed} registro(s)`);
 | **Modo Development** | Flujo anónimo completo intacto, política satisfecha por el usuario de desarrollo en toda ruta, dueño ajeno ⇒ 404, legado sin dueño accesible solo para él. | `EndToEnd/DevelopmentModeAuthorizationTests.cs` |
 | **Arquitectura** (reflexión sobre el `EndpointDataSource`) | Toda ruta `/api/*` hereda la denegación por defecto y tiene dueño (grupo central) o figura en una lista blanca justificada; las listas no pueden quedar desactualizadas. Con **controles** que demuestran que el auditor detecta una ruta nueva sin proteger, una ruta que pierde la metadata del grupo, una ruta convertida en anónima y una entrada de lista obsoleta. | `EndToEnd/EndpointAuthorizationArchitectureTests.cs`, `TestSupport/EndpointAuthorizationAudit.cs` |
 | **Perfil propio** (S07) | `GET`/`PATCH /api/v1/me`: lectura, edición, validación 1–80/unicode/control, campos prohibidos sin efecto (contra la base), 401, CSRF 403, `no-store`, sin filtrar identidad interna, aislamiento (C no toca a A ni a B ni con ids en cuerpo/query/cabeceras) y modo Development (`/auth/me` lee `Users.DisplayName`; sobrevive a un reinicio). | `EndToEnd/ProfileEndpointsTests.cs`, `EndToEnd/ProfileDevelopmentModeTests.cs`, `EndToEnd/MultiUserIsolationTests.cs` (`Profile_*`) |
+| **Recuperación y verificación** (S08) | Rutas anónimas nuevas y `change-password` en las listas del auditor; flujos completos, tokens inválidos/caducados/reusados, límites, SMTP real contra un servidor falso. Ver `docs/AUTH_RECOVERY.md` §9. | `EndToEnd/AuthRecovery*Tests.cs` |
 | Regla de dueño (unidad) | `ProjectRecord.IsAccessibleBy` y `ClassicProjectAccess` por modo, dueño y sesión. | `Projects/ClassicProjectAccessTests.cs`, `Projects/PersistentProjectRegistryTests.cs` |
 
 **Cómo añadir una ruta nueva.** Del flujo clásico: mapearla con path **relativo** dentro de `classicProject` en `Program.cs` (queda protegida sola). De `/api/v2` o sin
@@ -162,7 +165,8 @@ recurso: añadirla a la lista blanca de `EndpointAuthorizationAudit` **con su ju
 | Seguridad | 401 sin sesión (`FallbackPolicy`); 403 `csrf_rejected` sin cabecera anti-CSRF u Origin permitido (modo Authenticated, como el resto de métodos no seguros); el log no incluye nombre ni correo. |
 | Lista del auditor | `NoProjectResourceAllowlist`: perfil PROPIO, el usuario no es un parámetro. |
 | Nombre compartido | `Users.DisplayName` (dominio, no Identity). `GET /api/v1/auth/me` lo lee de ahí también en `Auth:Mode=Development` (no del valor de configuración `DevelopmentUser:DisplayName`, que solo siembra la fila la primera vez), así que el nombre editado sobrevive a una recarga y a un reinicio de la API. |
-| No implementado (declarado) | Cambio de correo (requiere reverificación por correo: S08), cambio de contraseña (S08), avatar, locale/preferencias. |
+| Cambio de contraseña (S08) | `POST /api/v1/auth/change-password` (sesión + CSRF + contraseña actual), ver `docs/AUTH_RECOVERY.md`. Lista del auditor: `NoProjectResourceAllowlist`. |
+| No implementado (declarado) | Cambio de correo, avatar, locale/preferencias. |
 
 ## 8. Pendiente de decisión: supresión de cuenta y exportación de datos (P11) — SIN CÓDIGO
 

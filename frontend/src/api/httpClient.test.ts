@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { API_BASE_URL, CSRF_HEADER_NAME, CSRF_HEADER_VALUE, httpClient, uploadFile } from "./httpClient";
+import { API_BASE_URL, CSRF_HEADER_NAME, CSRF_HEADER_VALUE, httpClient, parseRetryAfter, uploadFile } from "./httpClient";
 import { FakeXMLHttpRequest, stubXMLHttpRequest } from "../test/FakeXMLHttpRequest";
 
 function stubFetch(response: () => Response = () => new Response("{}", { status: 200 })) {
@@ -89,6 +89,33 @@ describe("httpClient — sesión por cookie y cabecera anti-CSRF (M3.1-S03)", ()
       status: 401,
       body: { code: "invalid_credentials" },
     });
+  });
+});
+
+describe("httpClient — Retry-After de un 429 (M3.1-S08)", () => {
+  it("expone retryAfterSeconds en el error cuando la cabecera trae segundos", async () => {
+    stubFetch(() => new Response("{}", { status: 429, headers: { "Retry-After": "120" } }));
+
+    await expect(httpClient.postJson("/api/x", {})).rejects.toMatchObject({ status: 429, retryAfterSeconds: 120 });
+  });
+
+  it("sin cabecera (o ilegible) retryAfterSeconds es undefined", async () => {
+    stubFetch(() => new Response("{}", { status: 429 }));
+    await expect(httpClient.postJson("/api/x", {})).rejects.toMatchObject({ status: 429, retryAfterSeconds: undefined });
+
+    stubFetch(() => new Response("{}", { status: 429, headers: { "Retry-After": "pronto" } }));
+    await expect(httpClient.postJson("/api/x", {})).rejects.toMatchObject({ status: 429, retryAfterSeconds: undefined });
+  });
+
+  it("parseRetryAfter entiende segundos y fecha HTTP, y descarta lo ilegible", () => {
+    const now = Date.parse("2026-10-18T12:00:00Z");
+    expect(parseRetryAfter("0", now)).toBe(0);
+    expect(parseRetryAfter(" 90 ", now)).toBe(90);
+    expect(parseRetryAfter("Sun, 18 Oct 2026 12:02:00 GMT", now)).toBe(120);
+    expect(parseRetryAfter("Sun, 18 Oct 2026 11:00:00 GMT", now)).toBe(0); // fecha pasada
+    expect(parseRetryAfter("", now)).toBeUndefined();
+    expect(parseRetryAfter(null, now)).toBeUndefined();
+    expect(parseRetryAfter("mañana", now)).toBeUndefined();
   });
 });
 
