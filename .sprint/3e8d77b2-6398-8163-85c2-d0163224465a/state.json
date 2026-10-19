@@ -1,0 +1,18 @@
+{
+  "card_id": "3e8d77b2-6398-8163-85c2-d0163224465a",
+  "card_url": "https://app.notion.com/p/3e8d77b26398816385c2d0163224465a",
+  "title": "M3.1-S10 · E2E Auth + multiusuario + release gate",
+  "stack": "Frontend, ASP.NET Core, Infra -- E2E HTTP con cookie jar + navegador real (CDP) contra docker compose aislado, Identity + cookie, .NET 10",
+  "branch": "sprint/3e8d77b2-m31-s10-e2e-release-gate",
+  "column": "Doing",
+  "phase": "implement",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "started_at": "2026-10-19T00:00:00Z",
+  "exceptions": [
+    "Sin preview de Vercel: el gate se verifica contra una pila local aislada (docker compose -p vectorify-s10).",
+    "La rama se corta de sprint/3e8d77b2-m31-s09-hardening (apilada: PR #65 .NET 10 -> S02 -> ... -> S09 -> S10); los merges los hace el usuario.",
+    "Decision del usuario (2026-10-19): el hallazgo H-1 (SixLabors.ImageSharp 2.1.13, High) queda como bloqueante ABIERTO en el gate: el veredicto sera NO LISTO PARA RELEASE aunque la suite este verde.",
+    "La herramienta de reasignacion de datos legados (P10) se entrega y se prueba en una pila aislada; NO se ejecuta sobre datos reales."
+  ]
+}
