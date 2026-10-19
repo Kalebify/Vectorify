@@ -1,0 +1,17 @@
+{
+  "card_id": "3e8d77b2-6398-8198-8251-d72bc266cedc",
+  "card_url": "https://app.notion.com/p/3e8d77b2639881988251d72bc266cedc",
+  "title": "M3.1-S09 · Hardening de seguridad Auth",
+  "stack": "ASP.NET Core, Frontend, Infra -- ASP.NET Core Identity + cookie (ADR confirmado), nginx, docker compose, .NET 10",
+  "branch": "sprint/3e8d77b2-m31-s09-hardening",
+  "column": "Doing",
+  "phase": "implement",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "started_at": "2026-10-19T00:00:00Z",
+  "exceptions": [
+    "Sin preview de Vercel: verificacion con pila local aislada (docker compose -p) en modo Authenticated y el navegador integrado.",
+    "La rama se corta de sprint/3e8d77b2-m31-s08-recuperacion (apilada: PR #65 .NET 10 -> S02 -> ... -> S08 -> S09); los merges los hace el usuario.",
+    "Decisiones humanas que NO se resuelven aqui: licencia/mayor de SixLabors.ImageSharp, dominio y certificado TLS, proveedor de correo (P5), datos legados (P10), supresion de cuenta (P11)."
+  ]
+}
