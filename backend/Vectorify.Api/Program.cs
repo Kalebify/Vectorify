@@ -24,6 +24,7 @@ using Vectorify.Api.Preprocessing;
 using Vectorify.Api.ProjectManagement;
 using Vectorify.Api.Projects;
 using Vectorify.Api.Projects.Persistence;
+using Vectorify.Api.Security;
 using Vectorify.Api.Simplification;
 using Vectorify.Api.Storage;
 using Vectorify.Api.Threshold;
@@ -38,6 +39,15 @@ const string ApiVersion = "0.1.0";
 const string ApiServiceName = "vectorify-api";
 
 var builder = WebApplication.CreateBuilder(args);
+
+// ASPNETCORE_FORWARDEDHEADERS_ENABLED=true (el interruptor que sugería el ADR) hace que el framework confíe en X-Forwarded-* de CUALQUIER origen: cualquier cliente podría falsificar su IP
+// (y esquivar los límites por IP) o hacerse pasar por https. Se rechaza al arrancar; la forma segura es Auth:ForwardedHeaders:* (lista explícita de proxies/redes de confianza).
+if (ForwardedHeadersSetup.IsFrameworkSwitchOn(builder.Configuration))
+{
+    throw new InvalidOperationException(
+        "ASPNETCORE_FORWARDEDHEADERS_ENABLED=true confía en X-Forwarded-For de cualquier origen y no está permitido. " +
+        "Configure Auth__ForwardedHeaders__Enabled=true con Auth__ForwardedHeaders__KnownProxies y/o Auth__ForwardedHeaders__KnownNetworks (ver docs/AUTH_SECURITY_REVIEW.md).");
+}
 
 // Logging estructurado: formatter JSON (incluye scopes, por lo tanto el
 // correlation ID agregado en CorrelationIdMiddleware queda en cada línea).
@@ -91,9 +101,12 @@ builder.Services.AddHttpClient<IPythonVectorizationClient, PythonVectorizationCl
 // activado por defecto, no requiere configuración adicional. VectorizationDbContext es
 // deliberadamente mínimo (ver Data/VectorizationDbContext.cs): "Modelo completo de
 // dominio" es M2.2-S02, la tarjeta siguiente.
+// M3.1-S09: fuera de Development/Testing/Test la contraseña de EJEMPLO del compose (publicada en el repositorio) no es válida: el arranque falla en vez de exponer una base con una clave conocida.
 builder.Services
     .AddOptions<PostgresOptions>()
-    .Bind(builder.Configuration.GetSection(PostgresOptions.SectionName));
+    .Bind(builder.Configuration.GetSection(PostgresOptions.SectionName))
+    .Validate<IHostEnvironment>(PostgresOptionsValidation.IsAcceptable, PostgresOptionsValidation.FailureMessage)
+    .ValidateOnStart();
 
 builder.Services.AddDbContext<VectorizationDbContext>((sp, options) =>
 {
@@ -589,6 +602,15 @@ UserContextRegistration.Register(builder.Services, builder.Environment, builder.
 // UseAuthorization / UserProvisioningMiddleware) se monta más abajo, después de CORS. IUserContext lo decide Auth:Mode
 // (arriba): Authenticated por default; Development (usuario fijo, sin login) solo en entornos de desarrollo.
 builder.Services.AddVectorifyAuth(builder.Configuration);
+
+// Proxy de confianza y HSTS (M3.1-S09): ambos leen Auth:* de forma diferida; ForwardedHeaders solo se activa con Auth:ForwardedHeaders:Enabled.
+builder.Services.AddVectorifyForwardedHeaders();
+builder.Services.AddOptions<Microsoft.AspNetCore.HttpsPolicy.HstsOptions>().Configure<IOptions<AuthOptions>>((hsts, auth) =>
+{
+    hsts.MaxAge = auth.Value.Hsts.MaxAge;
+    hsts.IncludeSubDomains = auth.Value.Hsts.IncludeSubDomains;
+    hsts.Preload = false; // el preload exige dominio y certificado reales y es casi irreversible: decisión humana (docs/AUTH_SECURITY_REVIEW.md)
+});
 builder.Services.AddScoped<IProjectRepository, ProjectRepository>();
 builder.Services.AddScoped<IProjectService, ProjectService>();
 
@@ -711,7 +733,39 @@ if (emailMode == AuthEmailMode.Disabled && !UserContextRegistration.IsDevelopmen
         "Auth:Email:Mode=Disabled: no se enviarán correos de recuperación ni de confirmación. Configure Auth:Email:Mode=Smtp (ver docs/AUTH_RECOVERY.md).");
 }
 
+// 1. IP real y esquema (M3.1-S09): SOLO si Auth:ForwardedHeaders:Enabled, y solo desde los proxies/redes configurados. Va el primero para que los límites por IP, HSTS, los logs y
+//    Request.Scheme vean el valor correcto. Sin esta línea activada, X-Forwarded-* de un cliente se ignora.
+if (app.Services.GetRequiredService<IOptions<AuthOptions>>().Value.ForwardedHeaders.Enabled)
+{
+    app.UseForwardedHeaders();
+}
+
+// 2. HSTS solo fuera de Development (en local con http o localhost sería un riesgo) y solo sobre https (el middleware ignora las respuestas http). La redirección http->https la
+//    hace el proxy que termina TLS (esta API escucha en http dentro de la red privada; ver docs/AUTH_SECURITY_REVIEW.md).
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHsts();
+}
+
+// 3. Cabeceras de seguridad de todas las respuestas, también las de error (M3.1-S09).
+app.UseMiddleware<SecurityHeadersMiddleware>();
+
 app.UseMiddleware<CorrelationIdMiddleware>();
+
+// 4. Manejador global de excepciones (M3.1-S09): fuera de Development NUNCA se devuelve un stack ni el mensaje de una excepción; cuerpo genérico + el X-Correlation-Id de la respuesta para
+//    localizar el detalle en el log. En Development se conserva la página de excepciones del framework (es solo para quien desarrolla). Dentro del correlation ID (el log lleva su scope).
+if (!app.Environment.IsDevelopment())
+{
+    app.UseExceptionHandler(errorApp => errorApp.Run(async context =>
+    {
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        await context.Response.WriteAsJsonAsync(
+            new ApiErrorResponse(
+                "internal_error",
+                "Ocurrió un error inesperado. Intentá de nuevo; si persiste, informá el identificador X-Correlation-Id de la respuesta."),
+            context.RequestAborted);
+    }));
+}
 
 // Red de seguridad de la persistencia (M2.2-S10): PostgreSQL caído / storage que lanza -> 503 controlado
 // (ApiErrorResponse), nunca un 500 con stack. Va DESPUÉS del correlation ID (la respuesta de error ya lo lleva).

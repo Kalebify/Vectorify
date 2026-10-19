@@ -28,7 +28,7 @@ namespace Vectorify.Api.Tests.EndToEnd;
 /// </summary>
 public sealed class PersistenceFailureModesTests : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
+    private readonly TestPostgres _postgres = new();
     private readonly PersistenceDataRoot _dataRoot = new("failure-modes");
 
     public Task InitializeAsync() => _postgres.StartAsync();

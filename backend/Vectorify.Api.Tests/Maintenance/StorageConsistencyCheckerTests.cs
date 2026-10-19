@@ -264,7 +264,7 @@ public sealed class StorageConsistencyCheckerTests : IClassFixture<StorageConsis
     /// <summary>Un único container Postgres para toda la clase; cada test usa su propia base (así las filas de assets no se mezclan).</summary>
     public sealed class PostgresFixture : IAsyncLifetime
     {
-        private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
+        private readonly TestPostgres _postgres = new();
 
         public Task InitializeAsync() => _postgres.StartAsync();
 

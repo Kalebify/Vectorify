@@ -21,11 +21,19 @@ public static class ThumbnailGenerator
     /// <summary>Lado mayor máximo del thumbnail, en píxeles.</summary>
     public const int MaxSidePx = 320;
 
-    public static ThumbnailImage? TryCreate(Stream source)
+    public static ThumbnailImage? TryCreate(Stream source) => TryCreate(source, SafeImageDecoding.DefaultMaxPixels);
+
+    public static ThumbnailImage? TryCreate(Stream source, long maxPixels)
     {
         try
         {
-            using var image = Image.Load(source, out var format);
+            // M3.1-S09: solo PNG/JPEG/WEBP y tope de píxeles de la cabecera (ver SafeImageDecoding); un fallo sigue siendo «sin thumbnail», nunca una excepción.
+            if (source.CanSeek && SafeImageDecoding.CheckPixelLimit(source, maxPixels) == PixelCheckResult.TooLarge)
+            {
+                return null;
+            }
+
+            using var image = Image.Load(SafeImageDecoding.Options, source, out var format);
 
             if (Math.Max(image.Width, image.Height) > MaxSidePx)
             {

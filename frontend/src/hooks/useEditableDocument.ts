@@ -622,7 +622,8 @@ export function useEditableDocument(layers: VectorDocumentLayer[], options: UseE
         continue;
       }
 
-      fetch(svgUrl, { signal })
+      // credentials: "include" (M3.1-S09): el SVG de la capa está detrás de la cookie de sesión de la Web API (otro origen en desarrollo); sin ella el editor no cargaría las capas en modo Authenticated.
+      fetch(svgUrl, { signal, credentials: "include" })
         .then((response) => {
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           return response.text();

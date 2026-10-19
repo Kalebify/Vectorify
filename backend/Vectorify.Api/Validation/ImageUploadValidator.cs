@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using SixLabors.ImageSharp;
+using Vectorify.Api.Imaging;
 using Vectorify.Api.Options;
 
 namespace Vectorify.Api.Validation;
@@ -69,6 +70,14 @@ public sealed class ImageUploadValidator : IImageUploadValidator
                 "El archivo parece estar corrupto: su contenido no coincide con el formato declarado.");
         }
 
+        // M3.1-S09: tope de píxeles leído de la cabecera (sin reservar memoria de píxeles) y solo los decodificadores PNG/JPEG/WEBP (ver SafeImageDecoding).
+        if (SafeImageDecoding.CheckPixelLimit(stream, _options.MaxPixels) == PixelCheckResult.TooLarge)
+        {
+            return ImageValidationResult.Failure(
+                "file_too_large",
+                $"La imagen supera el tamaño máximo permitido en píxeles ({_options.MaxPixels / 1_000_000.0:0.#} megapíxeles).");
+        }
+
         if (!TryDecode(stream))
         {
             return ImageValidationResult.Failure(
@@ -89,7 +98,7 @@ public sealed class ImageUploadValidator : IImageUploadValidator
     {
         try
         {
-            using var image = Image.Load(stream);
+            using var image = Image.Load(SafeImageDecoding.Options, stream);
             return true;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)

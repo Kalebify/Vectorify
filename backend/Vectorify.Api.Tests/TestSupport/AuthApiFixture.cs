@@ -22,13 +22,22 @@ namespace Vectorify.Api.Tests.TestSupport;
 /// </summary>
 public sealed class AuthApiFixture : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
+    /// <summary>
+    /// Opcional (M3.1-S09): si la variable de entorno <c>VECTORIFY_TEST_POSTGRES</c> trae la cadena de conexión de un PostgreSQL con permiso para crear bases (p. ej. `Host=localhost;Port=5432;Username=postgres;Password=...;Database=postgres`),
+    /// los tests de identidad la usan en lugar de levantar un container con Testcontainers. Solo para máquinas SIN Docker; por defecto (variable ausente) todo sigue igual: container real, nunca InMemory.
+    /// </summary>
+    public const string ExternalPostgresVariable = "VECTORIFY_TEST_POSTGRES";
 
-    public string ConnectionString => _postgres.GetConnectionString();
+    private static readonly string? ExternalConnectionString =
+        string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(ExternalPostgresVariable)) ? null : Environment.GetEnvironmentVariable(ExternalPostgresVariable);
 
-    public Task InitializeAsync() => _postgres.StartAsync();
+    private readonly PostgreSqlContainer? _postgres = ExternalConnectionString is null ? new PostgreSqlBuilder("postgres:17-alpine").Build() : null;
 
-    public Task DisposeAsync() => _postgres.DisposeAsync().AsTask();
+    public string ConnectionString => ExternalConnectionString ?? _postgres!.GetConnectionString();
+
+    public Task InitializeAsync() => _postgres?.StartAsync() ?? Task.CompletedTask;
+
+    public Task DisposeAsync() => _postgres?.DisposeAsync().AsTask() ?? Task.CompletedTask;
 
     /// <summary>Crea una base vacía nueva en el container y devuelve su cadena de conexión.</summary>
     public async Task<string> CreateDatabaseAsync()
@@ -73,6 +82,14 @@ public sealed class AuthApiFixture : IAsyncLifetime
                     ["Storage:RootPath"] = Path.Combine(Path.GetTempPath(), "vectorify-auth-tests-" + Guid.NewGuid().ToString("n")),
                     ["ProjectRegistry:RootPath"] = Path.Combine(Path.GetTempPath(), "vectorify-auth-tests-reg-" + Guid.NewGuid().ToString("n")),
                     ["Logging:LogLevel:Default"] = "Trace",
+
+                    // M3.1-S09: login/registro llevan límites reales (20 por IP y 10 por dirección cada 15 min por defecto). Los tests de identidad previos a esa tarjeta hacen
+                    // decenas de logins/registros desde la misma «IP» (TestServer no tiene IP remota) y no prueban el límite, así que arrancan con topes altísimos; las pruebas
+                    // del limitador (AuthLoginRegisterRateLimitTests) los bajan a propósito vía `settings`.
+                    ["Auth:RateLimit:LoginIpPermitLimit"] = "100000",
+                    ["Auth:RateLimit:LoginAddressPermitLimit"] = "100000",
+                    ["Auth:RateLimit:RegisterIpPermitLimit"] = "100000",
+                    ["Auth:RateLimit:RegisterAddressPermitLimit"] = "100000",
                 };
                 foreach (var pair in settings ?? new Dictionary<string, string?>())
                 {

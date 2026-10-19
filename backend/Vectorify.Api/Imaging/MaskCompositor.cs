@@ -108,7 +108,7 @@ public static class MaskCompositor
         IFileStorage storage, string key, int expectedWidth, int expectedHeight, CancellationToken cancellationToken)
     {
         await using var stream = await storage.OpenReadAsync(key, cancellationToken);
-        var mask = await Image.LoadAsync<L8>(stream, cancellationToken);
+        var mask = await Image.LoadAsync<L8>(SafeImageDecoding.Options, stream, cancellationToken);
         if (mask.Width != expectedWidth || mask.Height != expectedHeight)
         {
             mask.Dispose();

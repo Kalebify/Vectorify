@@ -12,3 +12,10 @@
 
 # M3.1-S01: el spike de autenticacion (spikes/AuthPoc) no forma parte de la imagen ni del contexto de build.
 **/spikes
+
+# M3.1-S09: claves, certificados y key rings no entran en el contexto de build ni en la imagen (llegan por volumen/variable en ejecución).
+**/*.pem
+**/*.key
+**/*.pfx
+**/*.p12
+**/dataprotection-keys

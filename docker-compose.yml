@@ -1,12 +1,19 @@
+# Este compose es la pila de DESARROLLO local (M3.1-S09): Development + Auth__Mode=Development explícitos (sin login, usuario fijo), contraseña de
+# Postgres de ejemplo y puertos publicados SOLO en el loopback del anfitrión (BIND_ADDRESS=127.0.0.1 por defecto; ponga BIND_ADDRESS=0.0.0.0 únicamente si
+# necesita abrirla a su red local, sabiendo que en modo Development cualquiera que llegue a la API actúa como el usuario de desarrollo).
+# NO es una plantilla de producción: ahí se usan la imagen del backend con sus defaults (Production + Authenticated), secretos reales por entorno y un proxy con TLS
+# delante (ver docs/AUTH_SECURITY_REVIEW.md).
 services:
   postgres:
     image: postgres:17-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-vectorify}
       POSTGRES_USER: ${POSTGRES_USER:-vectorify}
+      # Contraseña de DESARROLLO publicada en el repositorio a propósito: la API se niega a arrancar fuera de Development/Testing/Test si la cadena de
+      # conexión la usa (KnownDevelopmentSecrets). Cámbiela en cualquier despliegue real con POSTGRES_PASSWORD.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vectorify_dev_password}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       # Volumen nombrado propio (mismo criterio que vectorify_backend_data para
       # App_Data): sin esto, los datos de Postgres se pierden en cada
@@ -22,7 +29,7 @@ services:
     build:
       context: ./services/python-engine
     ports:
-      - "${PYTHON_PORT:-8001}:8000"
+      - "${BIND_ADDRESS:-127.0.0.1}:${PYTHON_PORT:-8001}:8000"
     environment:
       SERVICE_NAME: ${SERVICE_NAME:-vectorify-python-engine}
       SERVICE_VERSION: ${SERVICE_VERSION:-0.1.0}
@@ -39,7 +46,7 @@ services:
     build:
       context: ./backend
     ports:
-      - "${BACKEND_PORT:-5080}:8080"
+      - "${BIND_ADDRESS:-127.0.0.1}:${BACKEND_PORT:-5080}:8080"
     volumes:
       # Los originales subidos (LocalFileStorage) y los sidecars de metadata de
       # proyecto/threshold/vectorización (PersistentProjectRegistry,
@@ -55,6 +62,8 @@ services:
       # (la gente vuelve a iniciar sesión); nada más se rompe. Sin este volumen, cada recreación del contenedor las invalidaría.
       - vectorify_dataprotection_keys:/var/lib/vectorify/dataprotection-keys
     environment:
+      # Modo de DESARROLLO explícito (M3.1-S09): la imagen del backend ya NO arranca por defecto en Development (su default es Production + Authenticated), así que este
+      # compose lo pide aquí. Para probar la autenticación real: AUTH_MODE=Authenticated (el entorno puede seguir en Development).
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
       ASPNETCORE_URLS: http://+:8080
       # Nombre del servicio en la red de docker-compose, no localhost.
@@ -100,6 +109,24 @@ services:
       Auth__RateLimit__AddressSendPermitLimit: ${AUTH_RATE_LIMIT_ADDRESS_SEND_PERMIT_LIMIT:-5}
       Auth__RateLimit__AddressVerifyPermitLimit: ${AUTH_RATE_LIMIT_ADDRESS_VERIFY_PERMIT_LIMIT:-10}
       Auth__RateLimit__AddressWindow: ${AUTH_RATE_LIMIT_ADDRESS_WINDOW:-01:00:00}
+      # Límites de login y registro (M3.1-S09, ver docs/AUTH_SECURITY_REVIEW.md): por IP y por dirección hasheada; 429 + Retry-After al excederse.
+      Auth__RateLimit__LoginIpPermitLimit: ${AUTH_RATE_LIMIT_LOGIN_IP_PERMIT_LIMIT:-20}
+      Auth__RateLimit__LoginIpWindow: ${AUTH_RATE_LIMIT_LOGIN_IP_WINDOW:-00:15:00}
+      Auth__RateLimit__LoginAddressPermitLimit: ${AUTH_RATE_LIMIT_LOGIN_ADDRESS_PERMIT_LIMIT:-10}
+      Auth__RateLimit__LoginAddressWindow: ${AUTH_RATE_LIMIT_LOGIN_ADDRESS_WINDOW:-00:15:00}
+      Auth__RateLimit__RegisterIpPermitLimit: ${AUTH_RATE_LIMIT_REGISTER_IP_PERMIT_LIMIT:-10}
+      Auth__RateLimit__RegisterIpWindow: ${AUTH_RATE_LIMIT_REGISTER_IP_WINDOW:-01:00:00}
+      Auth__RateLimit__RegisterAddressPermitLimit: ${AUTH_RATE_LIMIT_REGISTER_ADDRESS_PERMIT_LIMIT:-5}
+      Auth__RateLimit__RegisterAddressWindow: ${AUTH_RATE_LIMIT_REGISTER_ADDRESS_WINDOW:-01:00:00}
+      # Proxy de confianza (M3.1-S09): APAGADO por defecto (X-Forwarded-* de un cliente se ignora). Detrás de un proxy/TLS: AUTH_FORWARDED_HEADERS_ENABLED=true y la IP del
+      # proxy (KNOWN_PROXIES) o su red (KNOWN_NETWORKS, p. ej. la red de docker 172.16.0.0/12). Sin al menos una de las dos, la API no arranca.
+      Auth__ForwardedHeaders__Enabled: ${AUTH_FORWARDED_HEADERS_ENABLED:-false}
+      Auth__ForwardedHeaders__KnownProxies: ${AUTH_FORWARDED_HEADERS_KNOWN_PROXIES:-}
+      Auth__ForwardedHeaders__KnownNetworks: ${AUTH_FORWARDED_HEADERS_KNOWN_NETWORKS:-}
+      Auth__ForwardedHeaders__ForwardLimit: ${AUTH_FORWARDED_HEADERS_FORWARD_LIMIT:-1}
+      # HSTS (M3.1-S09): solo se emite fuera de Development y sobre https (visto tras ForwardedHeaders).
+      Auth__Hsts__MaxAge: ${AUTH_HSTS_MAX_AGE:-180.00:00:00}
+      Auth__Hsts__IncludeSubDomains: ${AUTH_HSTS_INCLUDE_SUBDOMAINS:-false}
       # Nombre del servicio "postgres" en la red de docker-compose, no localhost ni el
       # puerto publicado en el host. Nunca hardcodeado -- viene de variables de entorno
       # con el mismo criterio que PythonEngine__BaseUrl (ver .env.example).
@@ -123,8 +150,8 @@ services:
     image: axllent/mailpit:latest
     profiles: ["mail-sink"]
     ports:
-      - "${MAILPIT_UI_PORT:-8025}:8025"
-      - "${MAILPIT_SMTP_PORT:-1025}:1025"
+      - "${BIND_ADDRESS:-127.0.0.1}:${MAILPIT_UI_PORT:-8025}:8025"
+      - "${BIND_ADDRESS:-127.0.0.1}:${MAILPIT_SMTP_PORT:-1025}:1025"
 
   frontend:
     build:
@@ -133,8 +160,12 @@ services:
         # URL que usa el NAVEGADOR (fuera de la red docker), por eso apunta al
         # puerto publicado en el host, no al nombre del servicio "backend".
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:5080}
+    environment:
+      # Origen de la API que la CSP del frontend permite en connect-src/img-src (M3.1-S09; nginx lo sustituye al arrancar). Debe coincidir con el origen de
+      # VITE_API_BASE_URL (un origen, sin ruta). Vacío = la API vive en el mismo origen que la SPA (proxy).
+      API_ORIGIN: ${API_ORIGIN:-${VITE_API_BASE_URL:-http://localhost:5080}}
     ports:
-      - "${FRONTEND_PORT:-5173}:80"
+      - "${BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-5173}:80"
     depends_on:
       - backend
 

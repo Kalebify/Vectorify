@@ -17,7 +17,7 @@ namespace Vectorify.Api.Tests.Projects.Persistence;
 /// </summary>
 public sealed class ProjectRepositoryTests : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
+    private readonly TestPostgres _postgres = new();
 
     public Task InitializeAsync() => _postgres.StartAsync();
 

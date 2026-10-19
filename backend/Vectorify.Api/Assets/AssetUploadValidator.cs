@@ -2,6 +2,7 @@ using System.Xml;
 using System.Xml.Linq;
 using Microsoft.Extensions.Options;
 using SixLabors.ImageSharp;
+using Vectorify.Api.Imaging;
 using Vectorify.Api.Options;
 using Vectorify.Api.Validation;
 
@@ -107,6 +108,14 @@ public sealed class AssetUploadValidator : IAssetUploadValidator
         }
 
         using var rasterStream = file.OpenReadStream();
+        if (ImageSignature.Matches(rasterStream, contentType) && SafeImageDecoding.CheckPixelLimit(rasterStream, _options.MaxPixels) == PixelCheckResult.TooLarge)
+        {
+            // M3.1-S09: tope de píxeles leído de la cabecera, antes de decodificar (bomba de descompresión).
+            return AssetValidationResult.Failure(
+                "file_too_large",
+                $"La imagen supera el tamaño máximo permitido en píxeles ({_options.MaxPixels / 1_000_000.0:0.#} megapíxeles).");
+        }
+
         if (!ImageSignature.Matches(rasterStream, contentType) || !TryDecodeRasterImage(rasterStream))
         {
             return AssetValidationResult.Failure(
@@ -127,7 +136,7 @@ public sealed class AssetUploadValidator : IAssetUploadValidator
     {
         try
         {
-            using var image = Image.Load(stream);
+            using var image = Image.Load(SafeImageDecoding.Options, stream);
             return true;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)

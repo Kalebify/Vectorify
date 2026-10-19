@@ -45,8 +45,14 @@ public sealed class AuthOptions
     /// <summary>Auth__Tokens__*: vida de los tokens NATIVOS de Identity (restablecer contraseña, confirmar correo) (M3.1-S08).</summary>
     public AuthTokensOptions Tokens { get; set; } = new();
 
-    /// <summary>Auth__RateLimit__*: límites de frecuencia de forgot/reset/resend/confirm (M3.1-S08; S09 los generaliza).</summary>
+    /// <summary>Auth__RateLimit__*: límites de frecuencia de forgot/reset/resend/confirm (M3.1-S08) y de login/register (M3.1-S09).</summary>
     public AuthRateLimitOptions RateLimit { get; set; } = new();
+
+    /// <summary>Auth__ForwardedHeaders__*: en qué proxies se confía para leer la IP real y el esquema (M3.1-S09). Apagado por defecto.</summary>
+    public AuthForwardedHeadersOptions ForwardedHeaders { get; set; } = new();
+
+    /// <summary>Auth__Hsts__*: Strict-Transport-Security (M3.1-S09). Solo se emite fuera de Development y sobre https (visto por la API tras ForwardedHeaders).</summary>
+    public AuthHstsOptions Hsts { get; set; } = new();
 
     /// <summary>
     /// Auth__RequireConfirmedEmail (M3.1-S08, ADR P9): si es <c>true</c>, el login de una cuenta con el correo SIN confirmar responde el MISMO
@@ -213,8 +219,9 @@ public sealed class AuthTokensOptions
 }
 
 /// <summary>
-/// Límites de frecuencia (M3.1-S08) con <c>Microsoft.AspNetCore.RateLimiting</c> / <c>System.Threading.RateLimiting</c>. Dos ejes: por IP (429 + <c>Retry-After</c>)
-/// y por dirección de correo hasheada (respuesta uniforme sin enviar). Ventana fija. S09 generaliza esto al resto de <c>/api/v1/auth/*</c>.
+/// Límites de frecuencia con <c>Microsoft.AspNetCore.RateLimiting</c> / <c>System.Threading.RateLimiting</c>. Dos ejes: por IP (429 + <c>Retry-After</c>)
+/// y por dirección de correo hasheada (HMAC con clave de proceso). Ventana fija. Recuperación (S08): el excedente por dirección da la respuesta uniforme sin enviar.
+/// Login y registro (S09): el excedente por dirección da 429 + <c>Retry-After</c>, y como el contador cuenta TODA petición para esa dirección (exista o no la cuenta) el 429 no revela cuentas.
 /// </summary>
 public sealed class AuthRateLimitOptions
 {
@@ -232,4 +239,76 @@ public sealed class AuthRateLimitOptions
 
     /// <summary>Auth__RateLimit__AddressWindow.</summary>
     public TimeSpan AddressWindow { get; set; } = TimeSpan.FromHours(1);
+
+    /// <summary>Auth__RateLimit__LoginIpPermitLimit (S09): intentos de login por IP dentro de <see cref="LoginIpWindow"/> (frena el credential stuffing entre cuentas; el bloqueo de cuenta frena la fuerza bruta contra UNA).</summary>
+    public int LoginIpPermitLimit { get; set; } = 20;
+
+    /// <summary>Auth__RateLimit__LoginIpWindow.</summary>
+    public TimeSpan LoginIpWindow { get; set; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// Auth__RateLimit__LoginAddressPermitLimit (S09): intentos de login por dirección (hasheada) dentro de <see cref="LoginAddressWindow"/>, EXISTA O NO la cuenta. Excedido: 429 + Retry-After
+    /// sin comprobar la contraseña. Ojo: junto al bloqueo de cuenta permite a un tercero impedir el acceso de una víctima (DoS de login, riesgo residual de T6, ver docs/AUTH_SECURITY_REVIEW.md).
+    /// </summary>
+    public int LoginAddressPermitLimit { get; set; } = 10;
+
+    /// <summary>Auth__RateLimit__LoginAddressWindow.</summary>
+    public TimeSpan LoginAddressWindow { get; set; } = TimeSpan.FromMinutes(15);
+
+    /// <summary>Auth__RateLimit__RegisterIpPermitLimit (S09): registros por IP dentro de <see cref="RegisterIpWindow"/>.</summary>
+    public int RegisterIpPermitLimit { get; set; } = 10;
+
+    /// <summary>Auth__RateLimit__RegisterIpWindow.</summary>
+    public TimeSpan RegisterIpWindow { get; set; } = TimeSpan.FromHours(1);
+
+    /// <summary>Auth__RateLimit__RegisterAddressPermitLimit (S09): registros por dirección (hasheada) dentro de <see cref="RegisterAddressWindow"/>, exista o no la cuenta. Excedido: 429 + Retry-After.</summary>
+    public int RegisterAddressPermitLimit { get; set; } = 5;
+
+    /// <summary>Auth__RateLimit__RegisterAddressWindow.</summary>
+    public TimeSpan RegisterAddressWindow { get; set; } = TimeSpan.FromHours(1);
+}
+
+/// <summary>
+/// Cabeceras reenviadas por un proxy (M3.1-S09). SIN confianza ciega: apagado por defecto (una petición con <c>X-Forwarded-For</c> se trata como lo que es, un valor del cliente que se ignora) y,
+/// si se enciende, SOLO se atienden las cabeceras de peticiones cuya conexión TCP viene de <see cref="KnownProxies"/> o de <see cref="KnownNetworks"/>. Sin ninguna de las dos listas, el
+/// arranque falla; <c>0.0.0.0/0</c>, <c>::/0</c> y redes demasiado amplias se rechazan. Nunca use <c>ASPNETCORE_FORWARDEDHEADERS_ENABLED=true</c> (confía en cualquiera): la API se niega a arrancar con él.
+/// </summary>
+public sealed class AuthForwardedHeadersOptions
+{
+    /// <summary>Prefijo mínimo aceptado para una red de confianza IPv4 (más ancho = casi «confiar en todos»).</summary>
+    public const int MinIpv4PrefixLength = 8;
+
+    /// <summary>Prefijo mínimo aceptado para una red de confianza IPv6.</summary>
+    public const int MinIpv6PrefixLength = 16;
+
+    /// <summary>Auth__ForwardedHeaders__Enabled: <c>false</c> (default) = se ignoran <c>X-Forwarded-*</c>.</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>Auth__ForwardedHeaders__KnownProxies: IP de proxies de confianza, separadas por coma (p. ej. <c>10.0.0.5</c>).</summary>
+    public string? KnownProxies { get; set; }
+
+    /// <summary>Auth__ForwardedHeaders__KnownNetworks: redes CIDR de confianza, separadas por coma (p. ej. la red de docker <c>172.16.0.0/12</c>).</summary>
+    public string? KnownNetworks { get; set; }
+
+    /// <summary>Auth__ForwardedHeaders__ForwardLimit: saltos de <c>X-Forwarded-For</c> que se procesan (1 = un único proxy delante; el valor se toma de derecha a izquierda).</summary>
+    public int ForwardLimit { get; set; } = 1;
+
+    public string[] GetKnownProxies() => Split(KnownProxies);
+
+    public string[] GetKnownNetworks() => Split(KnownNetworks);
+
+    private static string[] Split(string? value) =>
+        string.IsNullOrWhiteSpace(value)
+            ? []
+            : value.Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+}
+
+/// <summary>Strict-Transport-Security (M3.1-S09). El preload NO se activa por defecto: es irreversible en la práctica y exige dominio y certificado reales.</summary>
+public sealed class AuthHstsOptions
+{
+    /// <summary>Auth__Hsts__MaxAge: 180 días por defecto (súbalo a un año cuando el despliegue esté estable).</summary>
+    public TimeSpan MaxAge { get; set; } = TimeSpan.FromDays(180);
+
+    /// <summary>Auth__Hsts__IncludeSubDomains: <c>false</c> por defecto (afectaría a todos los subdominios del dominio).</summary>
+    public bool IncludeSubDomains { get; set; }
 }

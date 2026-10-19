@@ -34,6 +34,13 @@ export interface WorkspaceLocation {
   savedProjectId?: string;
 }
 
+/**
+ * Los ids de la URL se interpolan en rutas de la API (`/api/v1/projects/${projectId}/images/${imageId}/...`). Un valor como `../auth/logout-all?x=` (en un enlace fabricado) haría que el
+ * navegador de la víctima, con su cookie y la cabecera anti-CSRF, pidiera OTRA ruta de la API (client-side path traversal, M3.1-S09). Solo se aceptan ids opacos: letras, dígitos, `-` y `_`
+ * (los GUID del backend); cualquier otra cosa (`/`, `.`, `?`, `#`, `%`, espacios) invalida la ubicación como si faltara.
+ */
+const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
 const PROJECT_PARAM = "projectId";
 const IMAGE_PARAM = "imageId";
 const PALETTE_PARAM = "paletteId";
@@ -54,6 +61,10 @@ export function readWorkspaceLocation(search: string = window.location.search): 
   const savedProjectId = params.get(SAVED_PROJECT_PARAM);
 
   if (!projectId || !imageId || !paletteId) {
+    return null;
+  }
+
+  if (![projectId, imageId, paletteId, savedProjectId || "x"].every((id) => SAFE_ID.test(id))) {
     return null;
   }
 

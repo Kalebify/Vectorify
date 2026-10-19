@@ -44,26 +44,32 @@ public static class AuthEndpoints
     {
         app.MapPost(RegisterPath, RegisterAsync)
             .AllowAnonymous()
+            .RequireRateLimiting(AuthRecoveryLimiter.RegisterIpPolicyName)
             .WithName("RegisterAccount")
             .WithTags("Auth")
             .Produces<RegisterResponse>(StatusCodes.Status202Accepted)
             .Produces<ApiErrorResponse>(StatusCodes.Status400BadRequest)
+            .Produces<ApiErrorResponse>(StatusCodes.Status429TooManyRequests)
             .WithSummary("Registra una cuenta (email + contraseña) y vincula su User interno de forma idempotente.")
             .WithDescription(
                 "Respuesta UNIFORME (202 {status:'accepted'}) exista o no el correo: no revela si una cuenta ya existe. " +
                 "Solo los errores de validación (email inválido, contraseña < 12 caracteres) son visibles y no dependen de " +
-                "si el correo existe. El correo de confirmación (M3.1-S08) se envía en segundo plano, solo para cuentas nuevas.");
+                "si el correo existe. El correo de confirmación (M3.1-S08) se envía en segundo plano, solo para cuentas nuevas. " +
+                "Límites (M3.1-S09): por IP y por dirección hasheada; el excedente da 429 + Retry-After, igual exista o no la cuenta.");
 
         app.MapPost(LoginPath, LoginAsync)
             .AllowAnonymous()
+            .RequireRateLimiting(AuthRecoveryLimiter.LoginIpPolicyName)
             .WithName("Login")
             .WithTags("Auth")
             .Produces<CurrentUserResponse>(StatusCodes.Status200OK)
             .Produces<ApiErrorResponse>(StatusCodes.Status401Unauthorized)
+            .Produces<ApiErrorResponse>(StatusCodes.Status429TooManyRequests)
             .WithSummary("Inicia sesión (email + contraseña) y emite la cookie de sesión de Identity.")
             .WithDescription(
                 "Cuenta inexistente, contraseña errónea y cuenta bloqueada devuelven EXACTAMENTE el mismo 401 (código, mensaje y cabeceras). " +
-                "Bloqueo tras Auth:Lockout:MaxAttempts fallos durante Auth:Lockout:Duration. Responde 200 con el usuario actual.");
+                "Bloqueo tras Auth:Lockout:MaxAttempts fallos durante Auth:Lockout:Duration. Responde 200 con el usuario actual. " +
+                "Límites (M3.1-S09): por IP y por dirección hasheada, contando TODO intento exista o no la cuenta; el excedente da 429 + Retry-After sin comprobar la contraseña.");
 
         app.MapPost(LogoutPath, LogoutAsync)
             .AllowAnonymous()
@@ -108,6 +114,7 @@ public static class AuthEndpoints
         SignInManager<ApplicationUser> signIn,
         IUserProvisioner provisioner,
         VectorizationDbContext db,
+        AuthRecoveryLimiter limiter,
         Microsoft.Extensions.Options.IOptions<AuthOptions> authOptions,
         TimeProvider time,
         ILoggerFactory loggerFactory,
@@ -123,6 +130,14 @@ public static class AuthEndpoints
         {
             // Entrada que no puede ser válida (vacía o desmesurada): mismo 401, sin tocar la base ni hashear contraseñas gigantes.
             return InvalidCredentials();
+        }
+
+        // Límite por dirección (M3.1-S09): ANTES de consultar la cuenta y contando todo intento, exista o no. Así el 429 no depende de la cuenta (no la revela) y un intento
+        // limitado no llega a comprobar la contraseña ni a sumar al bloqueo de la cuenta. El correo solo se usa para derivar la clave HMAC en memoria; no se loguea.
+        if (!limiter.TryAcquireLogin(email, out var retryAfter))
+        {
+            logger.LogWarning("Login: límite por dirección alcanzado.");
+            return AuthRecoveryLimiter.TooManyRequests(http, retryAfter);
         }
 
         var account = await users.FindByEmailAsync(email);
@@ -142,6 +157,9 @@ public static class AuthEndpoints
         {
             if (result.IsLockedOut)
             {
+                // Una cuenta bloqueada NO verifica la contraseña (CheckPasswordSignInAsync corta antes), así que sin esto respondería mucho más rápido que una cuenta inexistente
+                // (que sí hashea): quien bloquea a propósito un correo (5 fallos) podría distinguir «existe» de «no existe» por el tiempo (T5). Misma carga que el resto de ramas.
+                _ = users.PasswordHasher.HashPassword(new ApplicationUser(), password);
                 logger.LogWarning("Login: cuenta {AccountId} bloqueada por intentos fallidos.", account.Id);
             }
             else
@@ -307,6 +325,8 @@ public static class AuthEndpoints
 
     private static async Task<IResult> RegisterAsync(
         RegisterRequest request,
+        HttpContext http,
+        AuthRecoveryLimiter limiter,
         UserManager<ApplicationUser> users,
         IUserProvisioner provisioner,
         IAuthEmailQueue emailQueue,
@@ -321,6 +341,13 @@ public static class AuthEndpoints
         if (!IsValidEmail(email))
         {
             return Results.BadRequest(new ApiErrorResponse("invalid_email", "Indicá un correo electrónico válido."));
+        }
+
+        // Límite por dirección (M3.1-S09), antes de hashear la contraseña o tocar la base y contando todo intento exista o no la cuenta: el 429 no revela cuentas.
+        if (!limiter.TryAcquireRegister(email!, out var retryAfter))
+        {
+            logger.LogWarning("Registro: límite por dirección alcanzado.");
+            return AuthRecoveryLimiter.TooManyRequests(http, retryAfter);
         }
 
         var password = request.Password;

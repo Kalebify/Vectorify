@@ -32,7 +32,7 @@ namespace Vectorify.Api.Tests.TestSupport;
 /// </summary>
 public sealed class OwnershipTestFixture : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
+    private readonly TestPostgres _postgres = new();
 
     public string StorageRoot { get; } =
         Path.Combine(Path.GetTempPath(), "vectorify-ownership-tests-" + Guid.NewGuid().ToString("n"));

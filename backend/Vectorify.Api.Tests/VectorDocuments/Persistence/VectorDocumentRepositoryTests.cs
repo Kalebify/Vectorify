@@ -19,7 +19,7 @@ namespace Vectorify.Api.Tests.VectorDocuments.Persistence;
 /// </summary>
 public sealed class VectorDocumentRepositoryTests : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
+    private readonly TestPostgres _postgres = new();
 
     public Task InitializeAsync() => _postgres.StartAsync();
 

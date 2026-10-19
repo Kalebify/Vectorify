@@ -14,13 +14,15 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 COPY --from=build /app/publish .
 
-# Auth__Mode (M3.1-S02): la imagen de desarrollo sigue sirviendo la API con el usuario de desarrollo (sin login) hasta
-# S03/S05. Un despliegue real sobreescribe AMBAS variables (ASPNETCORE_ENVIRONMENT=Production, Auth__Mode=Authenticated,
-# Auth__Cookie__*): Auth__Mode=Development en cualquier entorno que no sea Development/Testing/Test impide el arranque.
+# Defaults SEGUROS de la imagen (M3.1-S09): Production + Authenticated. Antes (M3.1-S02) la imagen fijaba Development + Auth__Mode=Development
+# (sin login, usuario fijo), así que cualquier despliegue sin overrides arrancaba abierto. Ahora una imagen sin overrides arranca en Production y
+# EXIGE la configuración de producción (Auth__DataProtection__KeysPath en un volumen, cookie Secure, etc.; si falta algo, NO arranca).
+# El modo de desarrollo (sin login) se pide de forma EXPLÍCITA en docker-compose.yml (ASPNETCORE_ENVIRONMENT=Development + Auth__Mode=Development);
+# Auth__Mode=Development en cualquier entorno que no sea Development/Testing/Test impide el arranque.
 # Sin secretos en la imagen: Postgres__ConnectionString y demás llegan por variables de entorno en tiempo de ejecución.
 ENV ASPNETCORE_URLS=http://+:8080 \
-    ASPNETCORE_ENVIRONMENT=Development \
-    Auth__Mode=Development
+    ASPNETCORE_ENVIRONMENT=Production \
+    Auth__Mode=Authenticated
 
 EXPOSE 8080
 

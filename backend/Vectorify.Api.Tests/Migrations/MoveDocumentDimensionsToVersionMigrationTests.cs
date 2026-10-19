@@ -28,7 +28,7 @@ public sealed class MoveDocumentDimensionsToVersionMigrationTests : IAsyncLifeti
 {
     private const string MigrationImmediatelyBeforeTheFix = "20261002170728_AddLayerPathCount";
 
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
+    private readonly TestPostgres _postgres = new();
 
     public Task InitializeAsync() => _postgres.StartAsync();
 

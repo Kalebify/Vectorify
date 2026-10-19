@@ -17,7 +17,7 @@ public sealed class AddProjectClassicTripleMigrationTests : IAsyncLifetime
 {
     private const string MigrationImmediatelyBefore = "20261003230452_AddDocumentVersionIdempotencyKey";
 
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
+    private readonly TestPostgres _postgres = new();
 
     public Task InitializeAsync() => _postgres.StartAsync();
 

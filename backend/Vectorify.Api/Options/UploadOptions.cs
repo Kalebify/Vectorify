@@ -16,6 +16,12 @@ public sealed class UploadOptions
     /// </summary>
     public long MaxFileSizeBytes { get; set; } = 15 * 1024 * 1024;
 
+    /// <summary>
+    /// Tope de píxeles de la imagen (ancho × alto) leído de su cabecera ANTES de decodificarla (M3.1-S09): protege contra bombas de descompresión (un archivo pequeño que declara
+    /// decenas de miles de píxeles por lado). 64 megapíxeles por defecto (8000 × 8000).
+    /// </summary>
+    public long MaxPixels { get; set; } = Imaging.SafeImageDecoding.DefaultMaxPixels;
+
     /// <summary>MIME types aceptados, separados por comas.</summary>
     public string AllowedContentTypes { get; set; } = "image/png,image/jpeg,image/webp";
 

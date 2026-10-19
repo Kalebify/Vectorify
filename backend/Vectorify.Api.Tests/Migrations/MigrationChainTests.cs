@@ -32,7 +32,7 @@ public sealed class MigrationChainTests : IAsyncLifetime
     // (M3.1-S02 agrego AddUserIdentities encima de AddProjectClassicTriple, asi que el upgrade cubre ambas).
     private const string SeedBaselineMigration = "20261003230452_AddDocumentVersionIdempotencyKey";
 
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
+    private readonly TestPostgres _postgres = new();
 
     public Task InitializeAsync() => _postgres.StartAsync();
 

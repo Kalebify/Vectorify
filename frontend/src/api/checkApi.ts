@@ -34,7 +34,9 @@ export function runPathCheck(
  * el resaltado sin tocar el SVG persistido en el servidor.
  */
 export async function fetchSvgText(svgUrl: string, signal?: AbortSignal): Promise<string> {
-  const response = await fetch(svgUrl, { signal });
+  // credentials: "include" (M3.1-S09): el SVG vive en la Web API (otro origen en desarrollo) y está protegido por la cookie de sesión; sin esto el navegador no la envía a otro
+  // origen y la API responde 401 (el resaltado del Laser Checker fallaba en modo Authenticated).
+  const response = await fetch(svgUrl, { signal, credentials: "include" });
   if (!response.ok) {
     throw new Error(`No se pudo descargar el SVG en ${svgUrl} (HTTP ${response.status}).`);
   }

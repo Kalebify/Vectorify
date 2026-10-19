@@ -42,7 +42,7 @@ Todas responden `Cache-Control: no-store`. En modo `Authenticated` exigen el CSR
   No se rechaza «la contraseña nueva es igual a la actual» (decide el servidor; hoy lo permite).
 - **Registro**: tras crear una cuenta **nueva** encola el correo de confirmación (fuera de la ruta de respuesta; un fallo del SMTP no rompe el registro). Un correo ya registrado no recibe nada y la respuesta es la misma 202.
 - **Login con `Auth:RequireConfirmedEmail=true`** (defecto `false`, ADR P9): una cuenta con el correo sin confirmar recibe el **mismo 401 uniforme** (código, mensaje y cabeceras) que una contraseña errónea; el reenvío sigue funcionando.
-- **Login/registro NO se limitan aquí** (S09).
+- **Login/registro** tienen sus propios límites desde M3.1-S09 (mismo limitador, ver `docs/AUTH_SECURITY_REVIEW.md` §5.1).
 
 ## 3. Correo: `IEmailSender` y `Auth:Email:Mode`
 
@@ -111,8 +111,8 @@ Las pantallas de producto siguen sin importar nada de auth (test de arquitectura
 | **Por dirección** (HMAC-SHA256 con clave aleatoria de proceso; el correo no se guarda en claro) | forgot + resend comparten contador | `AddressSendPermitLimit=5` por `AddressWindow=01:00:00` | el **mismo 202** uniforme **sin enviar** |
 | Por dirección (o id de cuenta) | reset + confirm comparten contador | `AddressVerifyPermitLimit=10` por `AddressWindow` | el mismo 400 `invalid_token` genérico (aun con un token válido) |
 
-Ventana fija, en memoria, **por instancia**. Límites conocidos: (a) tras un proxy sin `ForwardedHeaders` (S09) todas las peticiones comparten la IP del proxy y el límite por IP actúa como global; (b) varias instancias dividen el contador;
-(c) un atacante puede agotar el cupo por dirección de una víctima (negación de servicio dirigida a *su* recuperación; el cupo se renueva solo). S09 generaliza esto al resto de `/api/v1/auth/*`.
+Ventana fija, en memoria, **por instancia**. Límites conocidos: (a) tras un proxy sin `Auth__ForwardedHeaders__*` (S09, ver `docs/AUTH_SECURITY_REVIEW.md` §5.2) todas las peticiones comparten la IP del proxy y el límite por IP actúa como global; (b) varias instancias dividen el contador;
+(c) un atacante puede agotar el cupo por dirección de una víctima (negación de servicio dirigida a *su* recuperación; el cupo se renueva solo). S09 lo extendió a login y registro (`docs/AUTH_SECURITY_REVIEW.md` §5.1, con el efecto del bloqueo de cuenta como DoS).
 
 ## 7. Comportamiento con `Auth:Mode=Development`
 
@@ -156,6 +156,6 @@ sin errores de consola inesperados. Con curl: 20 pedidos por IP y el siguiente d
 
 - **Un proveedor de correo real** (entregabilidad, SPF/DKIM/DMARC, STARTTLS con un certificado real, límites del proveedor): solo se probó contra un sumidero local sin TLS. `SmtpClient` con STARTTLS no se ejercitó.
 - **Caducidad con reloj controlado**: `Microsoft.Extensions.Identity.Core` valida los tokens con `DateTimeOffset.UtcNow` (no usa `TimeProvider`), así que la caducidad se prueba con una vida de 2 s y una espera real.
-- **Tiempos de respuesta** de forgot/resend contra un atacante (no medidos), límites por instancia con varias réplicas, `ForwardedHeaders`/IP real tras un proxy (S09).
+- **Tiempos de respuesta** de forgot/resend contra un atacante (no medidos), límites por instancia con varias réplicas, `ForwardedHeaders`/IP real tras un proxy (S09: implementado, ver `docs/AUTH_SECURITY_REVIEW.md`).
 - **Navegadores reales** salvo el recorrido manual descrito en el informe de la tarjeta; no hay axe en el repo (accesibilidad verificada con Testing Library).
 - El historial del navegador puede conservar la URL original con el fragmento (antes del `replaceState`); se acepta porque el token vence y sirve una vez.

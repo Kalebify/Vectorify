@@ -17,6 +17,9 @@ RUN npm run build
 
 FROM nginx:1.27-alpine AS runtime
 COPY --from=build /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Plantilla (M3.1-S09): la imagen oficial sustituye ${API_ORIGIN} al arrancar y escribe /etc/nginx/conf.d/default.conf. El default coincide con el VITE_API_BASE_URL por defecto;
+# en cualquier otro despliegue hay que pasar API_ORIGIN (el origen de la API que el bundle fue construido para llamar) o la CSP bloquearía esas llamadas.
+COPY nginx.conf /etc/nginx/templates/default.conf.template
+ENV API_ORIGIN=http://localhost:5080
 
 EXPOSE 80

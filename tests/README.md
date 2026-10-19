@@ -179,6 +179,17 @@ usa `docker system prune` ni `volume prune`. Genera un PNG de tres colores sin d
 real (motor Python real incluido) y compara SVG/original/thumbnail por hash antes y después del reinicio y del
 restore. Ver `docs/BACKUP_RESTORE.md` para los scripts de respaldo.
 
+## Seguridad de autenticación (M3.1-S09)
+
+Detalle y resultados en `docs/AUTH_SECURITY_REVIEW.md`.
+
+- **Automatizado** (dentro de `dotnet test` / `npm test`): `AuthLoginRegisterRateLimitTests`, `ForwardedHeadersAndHstsTests`, `SecurityHeadersTests`, `ErrorHygieneTests`, `AuthLogHygieneTests` (log a nivel Trace de todas las rutas de auth),
+  `AuthThreatReviewTests` (fijación de sesión, tokens, enumeración por respuestas y tiempos), `DeploymentDefaultsTests` (Dockerfile, compose, nginx), `AuthHardeningOptionsTests`, `SafeImageDecodingTests`;
+  frontend: `src/security/*.test.ts` y `src/lib/workspaceLocation.security.test.ts`.
+- **Sin Docker** (solo máquinas sin Docker): `VECTORIFY_TEST_POSTGRES="Host=...;Port=...;Username=...;Password=...;Database=postgres" dotnet test` usa ese servidor PostgreSQL (una base nueva por clase de test, sin borrarla) en lugar de Testcontainers.
+- **Navegador real** (pila corriendo, cuenta con un proyecto guardado): `SPA_URL=... API_URL=... E2E_EMAIL=... E2E_PASSWORD=... node tests/e2e/csp_browser_check.mjs` recorre login, registro, proyectos, editor, exports y «Mi cuenta» con Chrome/Edge por DevTools y sale con 1 si hay una sola violación de CSP.
+- **Tiempos de enumeración**: `API_URL=... SPA_ORIGIN=... node tests/e2e/auth_timing_probe.mjs` (la API debe tener los límites de login/registro altos para no chocar con el 429).
+
 ## Estado de verificación
 
 M1-S01 (2026-09-24):

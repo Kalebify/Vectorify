@@ -19,6 +19,9 @@ public sealed class AssetOptions
     /// </summary>
     public long MaxFileSizeBytes { get; set; } = 15 * 1024 * 1024;
 
+    /// <summary>Tope de píxeles de una imagen raster subida como Asset (M3.1-S09); ver <see cref="UploadOptions.MaxPixels"/>.</summary>
+    public long MaxPixels { get; set; } = Imaging.SafeImageDecoding.DefaultMaxPixels;
+
     /// <summary>MIME types aceptados, separados por comas.</summary>
     public string AllowedContentTypes { get; set; } = "image/png,image/jpeg,image/webp,image/svg+xml";
 

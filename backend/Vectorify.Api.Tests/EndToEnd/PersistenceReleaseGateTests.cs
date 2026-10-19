@@ -42,7 +42,7 @@ public sealed class PersistenceReleaseGateTests : IAsyncLifetime
     private static readonly string[] PaletteHexes = ["#ff0000", "#00c800", "#0000ff"];
     private static readonly string[] Operations = ["cut", "engrave", "ignore"];
 
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
+    private readonly TestPostgres _postgres = new();
     private readonly List<PersistenceDataRoot> _dataRoots = [];
 
     public Task InitializeAsync() => _postgres.StartAsync();

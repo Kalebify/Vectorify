@@ -31,7 +31,7 @@ namespace Vectorify.Api.Tests.EndToEnd;
 /// </summary>
 public sealed class VectorDocumentEndpointsTests : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
+    private readonly TestPostgres _postgres = new();
     private readonly string _storageRoot = Path.Combine(Path.GetTempPath(), "vectorify-vectordocument-tests-" + Guid.NewGuid().ToString("n"));
     private readonly string _projectRegistryRoot = Path.Combine(Path.GetTempPath(), "vectorify-vectordocument-tests-registry-" + Guid.NewGuid().ToString("n"));
 

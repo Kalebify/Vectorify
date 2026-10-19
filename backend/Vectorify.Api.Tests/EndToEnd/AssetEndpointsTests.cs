@@ -33,7 +33,7 @@ namespace Vectorify.Api.Tests.EndToEnd;
 /// </summary>
 public sealed class AssetEndpointsTests : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
+    private readonly TestPostgres _postgres = new();
     private readonly string _storageRootPath =
         Path.Combine(Path.GetTempPath(), "vectorify-asset-tests-" + Guid.NewGuid().ToString("n"));
 

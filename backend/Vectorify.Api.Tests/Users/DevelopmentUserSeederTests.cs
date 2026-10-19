@@ -13,7 +13,7 @@ namespace Vectorify.Api.Tests.Users;
 /// </summary>
 public sealed class DevelopmentUserSeederTests : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17-alpine").Build();
+    private readonly TestPostgres _postgres = new();
 
     public async Task InitializeAsync()
     {

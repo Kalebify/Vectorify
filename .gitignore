@@ -26,6 +26,13 @@ venv/
 !.env.example
 !frontend/.env.example
 !services/python-engine/.env.example
+# Claves y certificados (M3.1-S09): el key ring de Data Protection (cifra la cookie de sesión), claves TLS/PEM y almacenes PKCS#12 jamás se versionan.
+*.pem
+*.key
+*.pfx
+*.p12
+dataprotection-keys/
+.pgpass
 
 # Editores / SO
 .vscode/*

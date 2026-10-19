@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
+using Vectorify.Api.Security;
 using Vectorify.Api.Users;
 
 namespace Vectorify.Api.Options;
@@ -108,6 +109,7 @@ public sealed class AuthOptionsValidator : IValidateOptions<AuthOptions>
         }
 
         ValidateRecovery(options, developmentAllowed, failures);
+        ValidateHardening(options, failures);
 
         return failures.Count == 0 ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(failures);
     }
@@ -159,6 +161,30 @@ public sealed class AuthOptionsValidator : IValidateOptions<AuthOptions>
         if (limits.IpWindow <= TimeSpan.Zero || limits.AddressWindow <= TimeSpan.Zero)
         {
             failures.Add("Auth:RateLimit:IpWindow y AddressWindow deben ser mayores a 0.");
+        }
+    }
+
+    /// <summary>Límites de login/registro, proxies de confianza y HSTS (M3.1-S09).</summary>
+    private static void ValidateHardening(AuthOptions options, List<string> failures)
+    {
+        var limits = options.RateLimit;
+        if (limits.LoginIpPermitLimit < 1 || limits.LoginAddressPermitLimit < 1
+            || limits.RegisterIpPermitLimit < 1 || limits.RegisterAddressPermitLimit < 1)
+        {
+            failures.Add("Auth:RateLimit:LoginIpPermitLimit, LoginAddressPermitLimit, RegisterIpPermitLimit y RegisterAddressPermitLimit deben ser al menos 1.");
+        }
+
+        if (limits.LoginIpWindow <= TimeSpan.Zero || limits.LoginAddressWindow <= TimeSpan.Zero
+            || limits.RegisterIpWindow <= TimeSpan.Zero || limits.RegisterAddressWindow <= TimeSpan.Zero)
+        {
+            failures.Add("Auth:RateLimit:LoginIpWindow, LoginAddressWindow, RegisterIpWindow y RegisterAddressWindow deben ser mayores a 0.");
+        }
+
+        failures.AddRange(ForwardedHeadersSetup.Validate(options.ForwardedHeaders));
+
+        if (options.Hsts.MaxAge <= TimeSpan.Zero)
+        {
+            failures.Add("Auth:Hsts:MaxAge debe ser mayor a 0.");
         }
     }
 
