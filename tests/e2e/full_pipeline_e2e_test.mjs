@@ -41,10 +41,14 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { enableAuthFromEnv } from "./lib/authClient.mjs";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const FIXTURES_DIR = join(ROOT, "tests", "e2e", "fixtures");
 const API = (process.env.BACKEND_URL || "http://localhost:5080").replace(/\/$/, "");
+
+// Opt-in (M3.1-S10): con E2E_AUTH=1 abre sesión (cookie jar + cabecera anti-CSRF) para correr contra una API en Auth:Mode=Authenticated. Sin E2E_AUTH no hace nada.
+await enableAuthFromEnv(API);
 
 const FIXTURES = [
   { file: "logo.png", label: "Logo (formas simples, alto contraste)", denoise: 0 },

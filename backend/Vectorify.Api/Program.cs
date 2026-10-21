@@ -59,7 +59,7 @@ builder.Logging.AddJsonConsole(options =>
 });
 
 // Modo --check-consistency (M2.2-S10): la salida es el reporte legible del comando, no logs JSON de EF/ASP.NET mezclados.
-if (ConsistencyCheckCommand.IsRequested(args))
+if (ConsistencyCheckCommand.IsRequested(args) || ReassignLegacyDataCommand.IsRequested(args))
 {
     builder.Logging.ClearProviders();
 }
@@ -656,6 +656,13 @@ var app = builder.Build();
 if (ConsistencyCheckCommand.IsRequested(args))
 {
     return await ConsistencyCheckCommand.RunAsync(app.Services, args, Console.Out);
+}
+
+// Reasignación de datos legados (M3.1-S10, ADR P10): `dotnet Vectorify.Api.dll --reassign-legacy-data --target-email=<correo> [--apply]`. DRY-RUN por defecto; no es un endpoint.
+// Igual que el verificador: va antes de migrar y termina sin levantar el servidor. Ver Vectorify.Api.Maintenance.ReassignLegacyDataCommand y docs/MVP31_RELEASE.md.
+if (ReassignLegacyDataCommand.IsRequested(args))
+{
+    return await ReassignLegacyDataCommand.RunAsync(app.Services, args, Console.Out);
 }
 
 // Aplica las migraciones de EF Core/PostgreSQL versionadas automáticamente al

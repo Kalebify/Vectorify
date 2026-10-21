@@ -966,6 +966,24 @@ verifica (navegador real, DXF en software de fabricación, rendimiento con
 documentos enormes) está en `docs/MVP3_RELEASE.md`, junto al checklist manual y
 los bugs conocidos.
 
+## MVP 3.1: autenticación y multiusuario
+
+Cuentas propias con **ASP.NET Core Identity + cookie de sesión** (`HttpOnly`, `SameSite=Lax`, CSRF con cabecera `X-Vectorify-Request` + `Origin` permitido), registro/login/logout, sesiones con caducidad y «recordarme»,
+recuperación de acceso y verificación de correo, perfil, **aislamiento por dueño en toda la API** (un proyecto ajeno es un 404 idéntico al de un id inexistente), hardening (CSP, límites de frecuencia, proxy de confianza, HSTS) y un
+E2E multiusuario. El compose del repositorio sigue siendo de **desarrollo** (`Auth__Mode=Development`, sin login, puertos en `127.0.0.1`); la imagen del backend por sí sola arranca en **Production + Authenticated** y exige la
+configuración de producción.
+
+> **Estado del release: NO LISTO PARA RELEASE.** Aunque toda la suite está verde, el hallazgo **H-1 (SixLabors.ImageSharp 2.1.13, High)** sigue abierto y bloquea el release por decisión del usuario; el documento de gate
+> lista exactamente qué lo desbloquea. Veredicto, matriz de verificación, resultados, estado de cada hallazgo, configuración/despliegue/rollback, decisiones humanas pendientes (H-1, proveedor de correo UE, verificación
+> obligatoria de correo, datos legados, supresión/exportación de cuenta, dominio y TLS, `.env.example`), límites conocidos y orden de merge de la cadena de PRs: **`docs/MVP31_RELEASE.md`**.
+
+- Probar el login real en local: `AUTH_MODE=Authenticated docker compose up --build` (o la pila aislada de pruebas, abajo). Documentos: `docs/ADR_AUTH_MVP31.md`, `docs/AUTH_SESSION_LIFECYCLE.md`, `docs/AUTH_AUTHORIZATION.md`,
+  `docs/AUTH_RECOVERY.md`, `docs/AUTH_SECURITY_REVIEW.md`.
+- **E2E multiusuario** (pila aislada `vectorify-s10`, puertos 32xxx, nunca la pila `vectify` del desarrollador): `tests/e2e/mvp31_stack.sh up`, `node tests/e2e/mvp31_auth_e2e_test.mjs` (9 escenarios),
+  `node tests/e2e/mvp31_auth_browser_test.mjs` (Chrome real, dos perfiles), `tests/e2e/mvp31_stack.sh down`. Con `E2E_AUTH=1` los E2E anónimos de siempre corren también en modo Authenticated. Ver `tests/README.md`.
+- **Datos creados antes de la autenticación** (proyectos del usuario de desarrollo y registros clásicos sin dueño): quedan huérfanos al activar el login. `scripts/reassign-legacy-data.sh|.ps1` los pasa a una cuenta real
+  (**dry-run por defecto**, `--apply` explícito, idempotente, transaccional en la base, con copia previa obligatoria). Decidir el destino es una decisión de producto; no la ejecute sobre datos reales sin haberla tomado. Detalle y límites en `docs/MVP31_RELEASE.md` §8.
+
 ## Fuera de alcance de este sprint
 
 Quitar fondo automático, threshold adaptativo (solo umbral global en este

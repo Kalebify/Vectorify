@@ -1,47 +1,44 @@
-# Estado del proyecto — 2026-10-14
+# Estado del proyecto — 2026-10-20
 
-## Qué se hizo (MVP 3)
+## Qué hemos hecho
 
-S01–S12 mergeados en `main`:
+- **MVP 3 (S01–S16)**: mergeado en `main` (PRs #44–#63). Resumen y bugs conocidos en `docs/MVP3_RELEASE.md`.
+- **MVP 3.1 (Auth)**: S01 mergeada (#64, ADR + PoC). La migración a **.NET 10** está en el PR #65 (abierto). S02–S09 implementadas, **en Test en Notion**, en ramas apiladas (cada una sobre la anterior, subidas a origin, sin PR ni merge):
 
-| # | Tarjeta | PR |
-|---|---------|-----|
-| S01 | Undo/Redo base + snapshots before/after | #44 |
-| S02 | Frame crop/rotate/flip | #45 |
-| S03 | Capas isNew + metadata de capa | #46 |
-| S04 | Servicio de geometría Python + booleanas base | #47 |
-| S05 | Path tool | #48 |
-| S06 | Clipboard | #49 |
-| S07 | Color fill + recolor | #50 |
-| S08 | Operaciones booleanas completas | #51 |
-| S09 | Offset interior/exterior (Shapely) | #56 |
-| S10 | Cut/Split (dividir + ranura) | #57 |
-| S11 | Bridges + piezas flotantes | #58 |
-| S12 | EditorCommand v1 + HistoryPanel + ejecutor IA | #59 |
+| Tarjeta | Rama (`sprint/3e8d77b2-…`) | Commit |
+|---|---|---|
+| S02 Registro + User | `m31-s02-registro-user` | `80ef41d` (+`49cbe73` PoC) |
+| S03 Login/logout | `m31-s03-login-logout` | `7366220` |
+| S04 Sesiones | `m31-s04-sesiones` | `3d7e4e2` |
+| S05 React Auth | `m31-s05-react-auth` | `6c011ed` |
+| S06 Autorización | `m31-s06-autorizacion` | `a3ed9f1` |
+| S07 Perfil | `m31-s07-perfil` | `8ca70af` |
+| S08 Recuperación | `m31-s08-recuperacion` | `51c3ed7` |
+| S09 Hardening | `m31-s09-hardening` | `df542f1` |
 
-S13 (#60), S14 (#61) y S15 (#62) mergeadas en `main`.
+- Última verificación (re-ejecutada por mí en S09): backend **2218/2218**, frontend **3732/3732**, `npm run build` y `npm audit` limpios.
+- **S10 (E2E + release gate)**: implementada y verificada (`docs/MVP31_RELEASE.md`): E2E HTTP 11/11, navegador 12/12, imagen real, herramienta de reasignación de datos legados. Backend **2224/2224**, frontend **3732/3732**, build OK. **Veredicto: NO LISTO PARA RELEASE** (H-1).
 
-## Decisiones clave
+## Decisiones tomadas
 
-- **Geometría pesada en Python/Shapely** (S04): el frontend manda anillos de polígonos, no paths SVG.
-- **EditorCommand v1** (S12): descripción declarativa sin SVG; el parche `EditorEdit` sigue siendo la fuente de reversión. Ejecutor preparado para MVP 4 (IA).
-- **Persistencia de geometría** (S13): `POST /api/v2/projects/{id}/document/editor-save` crea una `DocumentVersion` por guardado. `geometryDirty` ahora
-  significa "difiere de lo último que el servidor confirmó" (`saveMark`/`markSaved`); el undo no se reinicia al guardar, solo al restaurar una versión.
-  Con un proyecto ya guardado, SAVE es siempre un checkpoint del editor (el save clásico pisaría la geometría). Detalle en `docs/ADR_EDITOR_MVP3.md` (D5).
+- ASP.NET Core Identity + cookie; residencia UE obligatoria; sin MFA ni login social.
+- 404 uniforme para recurso ajeno o inexistente; denegar por defecto (`FallbackPolicy`); datos sin dueño inaccesibles en modo Authenticated.
+- Tokens nativos de Identity; en los enlaces del correo el token va en el fragmento de la URL; verificación de correo implementada pero **no obligatoria**.
+- Email de solo lectura en el perfil; **no** se implementó supresión ni exportación de cuenta.
+- La imagen del backend arranca por defecto en Production + Authenticated; el compose de desarrollo pide el modo desarrollo explícito y publica solo en `127.0.0.1`.
+- ImageSharp **no** se actualiza a 4.x (cambio de licencia); queda como bloqueante abierto en el gate (decisión tuya).
 
 ## Problemas abiertos
 
-- **Docker Desktop volvió** (2026-10-14): `dotnet test` completo corrió (1706 tests; los 26 E2E de `editor-save` de S13 pasan). En una corrida con la máquina saturada fallaron 8 por timeout de cliente HTTP; aislados, pasan.
-- El contrato de `editor-save` no lleva `baseVersion`: solo detecta escrituras simultáneas (409 por `xmin`), no "otra pestaña guardó antes".
-- El listado de versiones no expone el nº de capas (el endpoint es de M2.2-S06 y el spec de S13 prohíbe tocarlo): el panel muestra el tamaño en mm.
-
-- **Export** (S15): en el cliente desde el documento en memoria, sin dependencias nuevas (SVG canónico; DXF R12 en mm; PNG; ZIP stored). El PNG y los demás formatos se generaron y comprobaron en un navegador real (una imagen, S16); la **importación de DXF/SVG en LightBurn/LibreCAD/AutoCAD no se ha verificado** (ver `docs/EXPORT_FORMATOS.md`).
-- **Laser Check** (S14): en cliente; el modo `stencil` de S11 puede marcar el agujero de una "O" como isla flotante (falso Blocking).
-
-## En curso
-
-**S16 · E2E + Release Candidate** — rama `sprint/3e8d77b2-m3-s16-e2e-release-candidate`: gate implementado y verificado (E2E HTTP 10/10, recorrido jsdom, recorrido real en navegador); falta PR → merge → Notion. Detalle y bugs conocidos en `docs/MVP3_RELEASE.md`.
+- **H-1 · High · `SixLabors.ImageSharp` 2.1.13**: bloquea el release. Mitigado (solo PNG/JPEG/WEBP, tope de 64 Mpx), no corregido. Opciones en `docs/AUTH_SECURITY_REVIEW.md` §9.
+- **M3-S16 sigue Bloqueado en Notion**: LightBurn pierde las capas al importar el DXF (todas en ACI 7). Hay otra sesión corrigiéndolo; aún no ha informado.
+- Decisiones humanas pendientes: proveedor de correo de la UE (P5), verificación de correo obligatoria (P9), destino de datos legados y del usuario de desarrollo (P10), supresión/exportación de cuenta (P11), dominio y certificado TLS.
+- `.env.example` no se puede editar (regla de denegación): hay variables nuevas por añadir a mano (listadas en los IMPL de S02, S04, S08, S09).
+- Sin verificar: TLS/HSTS reales, proxy real, correo real, navegadores distintos de Chromium, axe/Lighthouse. Tests sensibles al tiempo (ManufacturingOperations, EditorShell.history, Login/Register) fallan a veces bajo carga y pasan aislados.
+- Sin relación con esto y sin commitear: `ESPECIFICACION_BOT_MT5_DEMO.md` y `mql5/`.
 
 ## Siguiente paso
 
-Cerrar S16 (MVP 3 completo). Pendiente humano: probar los DXF/SVG exportados en el software de fabricación objetivo y decidir los bugs conocidos de `docs/MVP3_RELEASE.md`.
+1. S10: pasar la tarjeta a Test en Notion (pendiente) y decidir H-12 (`vite` 8.3.1, solo desarrollo; `npm audit fix` y repetir tests/build).
+2. Tú: decidir lo de ImageSharp y revisar/mergear la cadena de PRs en orden (#65 → S02 → … → S10).
+3. Después: seguimiento del DXF de M3-S16 y retirar el PoC `backend/spikes/AuthPoc` (el ADR lo preveía tras S10).

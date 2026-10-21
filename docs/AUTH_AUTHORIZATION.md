@@ -83,6 +83,8 @@ copiada fuera del navegador no funciona sin la cookie.
 huérfanos siguen en disco/base, intactos, y son recuperables con lo propuesto abajo. Efectos secundarios a conocer: las claves de idempotencia de `document_versions` están
 prefijadas con el dueño (`{ownerId:N}:clave`); tras reasignar, un reintento *antiguo* con la misma clave del nuevo dueño no será reconocido (inofensivo: crea una versión nueva).
 
+> **Actualización M3.1-S10:** la propuesta de abajo quedó **implementada y probada** como `scripts/reassign-legacy-data.sh|.ps1` (comando `--reassign-legacy-data` de la API; dry-run por defecto, `--apply` explícito, idempotente, transaccional en la base, copia `.pre-reassign.bak` de cada sidecar). Úsela en lugar del SQL y del script `.mjs` de este apartado, que se conservan solo como explicación del modelo. Uso, prueba en pila aislada y límites: `docs/MVP31_RELEASE.md` §8. **El destino sigue siendo una decisión humana (P10).**
+
 ### Reasignación PROPUESTA (NO ejecutada; revisar, hacer copia de seguridad antes — ver `docs/BACKUP_RESTORE.md`)
 
 1. Elegir el `Users.Id` destino (la persona ya registrada): `SELECT "Id", "Email", "CreatedAt" FROM users ORDER BY "CreatedAt";`
@@ -148,7 +150,7 @@ recurso: añadirla a la lista blanca de `EndpointAuthorizationAudit` **con su ju
 ## 6. Qué no está verificado
 
 - Rendimiento bajo carga real: se verifica por conteo que hay **una** resolución de dueño por request y una sola consulta a `projects` en `/api/v2/projects/{id}`; no se midieron latencias.
-- Los E2E de `tests/e2e` solo se ejecutan en `Auth:Mode=Development` (anónimos). Con `Authenticated` esperan 401 sin sesión; adaptarlos a cookie jar es S10.
+- ~~Los E2E de `tests/e2e` solo se ejecutan en `Auth:Mode=Development`~~ (M3.1-S10): `E2E_AUTH=1` los ejecuta en `Authenticated` con cookie jar (`tests/e2e/lib/authClient.mjs`), y `tests/e2e/mvp31_auth_e2e_test.mjs` prueba el aislamiento de punta a punta contra el compose real (59 rutas). Ver `docs/MVP31_RELEASE.md`.
 - Canales fuera de la API (acceso directo a Postgres o al disco `App_Data`, backups) no pasan por esta autorización; su control es operativo.
 - Concurrencia entre dos sesiones del mismo usuario sobre el mismo recurso (conflictos `xmin`/409) conserva el comportamiento anterior; no se alteró.
 - Tiempo de respuesta como oráculo de existencia (el 404 de un ajeno y de un inexistente del flujo clásico cuestan lo mismo —un lookup en memoria—; en v2 ambos hacen la misma consulta indexada): no medido.

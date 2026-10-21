@@ -190,6 +190,49 @@ Detalle y resultados en `docs/AUTH_SECURITY_REVIEW.md`.
 - **Navegador real** (pila corriendo, cuenta con un proyecto guardado): `SPA_URL=... API_URL=... E2E_EMAIL=... E2E_PASSWORD=... node tests/e2e/csp_browser_check.mjs` recorre login, registro, proyectos, editor, exports y «Mi cuenta» con Chrome/Edge por DevTools y sale con 1 si hay una sola violación de CSP.
 - **Tiempos de enumeración**: `API_URL=... SPA_ORIGIN=... node tests/e2e/auth_timing_probe.mjs` (la API debe tener los límites de login/registro altos para no chocar con el 429).
 
+## E2E de autenticación y multiusuario (MVP 3.1 · M3.1-S10)
+
+Detalle, resultados y veredicto en `docs/MVP31_RELEASE.md`. Todo corre contra una pila `docker compose` AISLADA (proyecto `vectorify-s10`, puertos 32xxx); **nunca** contra el proyecto `vectify` del
+desarrollador (5080/5173/5432).
+
+```bash
+tests/e2e/mvp31_stack.sh up        # Authenticated + Mailpit + tiempos de sesión cortos + límites de login/registro altos (construye las imágenes)
+node tests/e2e/mvp31_auth_e2e_test.mjs          # E2E HTTP: los 9 escenarios de la tarjeta (+ 6b cookie manipulada, 6c CSRF), código de salida != 0 si algo falla
+node tests/e2e/mvp31_auth_browser_test.mjs      # Recorrido en Chrome/Edge REAL (dos perfiles: A y B) por DevTools; 0 violaciones de CSP y 0 errores de consola inesperados
+tests/e2e/mvp31_stack.sh down      # down -v --rmi local (borra contenedores, volúmenes e imágenes del proyecto)
+tests/e2e/mvp31_stack.sh leftovers # debe quedar vacío
+```
+
+- **`tests/e2e/lib/authClient.mjs`** (sin dependencias): `AuthClient` = un «navegador» (cookie jar propio, cabecera `X-Vectorify-Request` y `Origin` permitido, register/login/logout/logout-all/me,
+  cookies copiables para simular robo, `cookie:` crudo para manipularlas) y `Mailpit` (leer el correo de confirmación/recuperación y extraer el enlace). `lib/projectWorld.mjs` crea un proyecto real del dataset
+  (flujo clásico + guardado v2 + `editor-save`) con una cuenta; `lib/browserDriver.mjs` es un actor de navegador (Chrome con perfil propio + colectores de CSP/consola) sobre `lib/cdp.mjs`.
+- **Tiempos de sesión.** La pila de prueba usa `Auth__Cookie__Lifetime=20 s`, `Auth__Cookie__RememberMeLifetime=45 s`, `Auth__Session__RevalidationInterval=3 s` y `ClockSkew=5 s`
+  (variables `AUTH_COOKIE_LIFETIME`, `AUTH_COOKIE_REMEMBER_ME_LIFETIME`, `AUTH_SESSION_REVALIDATION_INTERVAL`, `AUTH_SESSION_CLOCK_SKEW` del compose); el E2E los lee de
+  `E2E_COOKIE_LIFETIME_SECONDS`, `E2E_REMEMBER_ME_LIFETIME_SECONDS` y `E2E_REVALIDATION_SECONDS` (mismos valores por defecto) y comprueba por comportamiento que coinciden. Los escenarios 7 y 8 no duermen
+  más de ~50 s. Con los defaults de producción (8 h / 5 min) esos escenarios no son ejecutables.
+- Variables del E2E: `API_URL`, `SPA_ORIGIN`, `MAILPIT_URL`, `E2E_ONLY=1,2,6` (los dependientes arrastran sus requisitos); del navegador: `SPA_URL`, `API_URL`, `CHROME_PATH`, `HEADED=1`. Sin Chrome/Edge el
+  recorrido en navegador sale con código 2 («no se da por cubierto»).
+- Cada ejecución registra cuentas con correo único (`…@vectorify.test` + sufijo aleatorio): se puede repetir sin limpiar la pila.
+
+### E2E anónimos de siempre en modo Authenticated (`E2E_AUTH=1`)
+
+`mvp3_release_e2e_test.mjs`, `full_pipeline_e2e_test.mjs` y `upload_e2e_test.mjs` siguen igual en Development (sin cookie ni cabecera). Con `E2E_AUTH=1` registran una cuenta nueva, abren sesión y reemplazan `fetch` por una
+versión que, solo para la API, añade el cookie jar, `X-Vectorify-Request` y `Origin` (`SPA_ORIGIN`; opcionalmente `E2E_EMAIL`/`E2E_PASSWORD` para usar una cuenta existente):
+
+```bash
+E2E_AUTH=1 BACKEND_URL=http://localhost:32080 SPA_ORIGIN=http://localhost:32173 node tests/e2e/mvp3_release_e2e_test.mjs
+E2E_AUTH=1 BACKEND_URL=http://localhost:32080 SPA_ORIGIN=http://localhost:32173 node tests/e2e/full_pipeline_e2e_test.mjs
+E2E_AUTH=1 BACKEND_URL=http://localhost:32080 SPA_ORIGIN=http://localhost:32173 node tests/e2e/upload_e2e_test.mjs   # sin BACKEND_URL arranca su propia API en Development, como siempre
+```
+
+`real_stack_test.py` **no se adapta** y no hace falta: levanta sus propios procesos (FastAPI + la Web API en Development, sin Postgres ni Identity) y solo consulta `/health`, `/api/v1/system/health` y CORS,
+rutas de la lista blanca anónima que no cambian con la autenticación. `smoke_test.py`/`docker_stack_test.py`/`docker_persistence_test.py` tampoco: el compose que levantan es el de desarrollo (Development).
+
+### Herramienta de reasignación de datos legados
+
+`backend/Vectorify.Api/Maintenance/ReassignLegacyDataCommand.cs` (`--reassign-legacy-data`) + `scripts/reassign-legacy-data.sh|.ps1`; tests en `ReassignLegacyDataCommandTests` (dotnet test). Uso y límites en
+`docs/MVP31_RELEASE.md`.
+
 ## Estado de verificación
 
 M1-S01 (2026-09-24):
