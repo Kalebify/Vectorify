@@ -39,6 +39,6 @@
 
 ## Siguiente paso
 
-1. S10: pasar la tarjeta a Test en Notion (pendiente) y decidir H-12 (`vite` 8.3.1, solo desarrollo; `npm audit fix` y repetir tests/build).
+1. S10 ya está en Test en Notion (commit `e71b772`, subida). Decidir H-12 (`vite` 8.3.1, solo desarrollo; `npm audit fix` y repetir tests/build).
 2. Tú: decidir lo de ImageSharp y revisar/mergear la cadena de PRs en orden (#65 → S02 → … → S10).
 3. Después: seguimiento del DXF de M3-S16 y retirar el PoC `backend/spikes/AuthPoc` (el ADR lo preveía tras S10).
