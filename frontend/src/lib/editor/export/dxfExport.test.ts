@@ -303,3 +303,41 @@ describe("export parcial y por layer", () => {
     expect(bodies[0].vertices).toBeGreaterThan(8);
   });
 });
+
+describe("color ACI por capa (LightBurn separa corte y grabado por color)", () => {
+  /** Pares (código, valor) del DXF crudo. */
+  function pairs(text: string): Array<[number, string]> {
+    const lines = text.split("\r\n");
+    const result: Array<[number, string]> = [];
+    for (let index = 0; index + 1 < lines.length; index += 2) result.push([Number(lines[index].trim()), lines[index + 1].trim()]);
+    return result;
+  }
+
+  it("asigna a cada capa el ACI más cercano a su color y todos distintos", () => {
+    const plans = planDxfLayers([layer("a", { name: "Rojo", colorHex: "#ff0000" }), layer("b", { name: "Azul", colorHex: "#0000ff" }), layer("c", { name: "Verde", colorHex: "#00ff00" })]);
+    expect(plans.map((plan) => plan.aci)).toEqual([1, 5, 3]);
+  });
+
+  it("dos capas del mismo color no comparten ACI, y ninguna cae en el 7 (el que las juntaba en C00)", () => {
+    const plans = planDxfLayers([layer("a", { name: "Uno", colorHex: "#ff0000" }), layer("b", { name: "Dos", colorHex: "#ff0000" }), layer("c", { name: "Tres", colorHex: "no-es-un-color" })]);
+    const aci = plans.map((plan) => plan.aci);
+    expect(new Set(aci).size).toBe(3);
+    expect(aci).not.toContain(7);
+    expect(aci[0]).toBe(1);
+  });
+
+  it("el DXF del dataset escribe el ACI de cada capa en la tabla LAYER y en sus polilíneas", () => {
+    const document = exportDataset();
+    const layers = orderedLayers(document.layers);
+    const plans = planDxfLayers(layers);
+    const entries = pairs(buildDxf(document, layers).text);
+    for (const plan of plans) {
+      const tableAt = entries.findIndex(([groupCode, value], index) => groupCode === 2 && value === plan.dxfName && entries[index - 1]?.[1] === "LAYER");
+      expect(tableAt).toBeGreaterThan(-1);
+      expect(entries[tableAt + 2]).toEqual([62, String(plan.aci)]);
+      const polylineAt = entries.findIndex(([groupCode, value], index) => groupCode === 8 && value === plan.dxfName && entries[index - 1]?.[1] === "POLYLINE");
+      if (polylineAt > -1) expect(entries[polylineAt + 1]).toEqual([62, String(plan.aci)]);
+    }
+    expect(new Set(plans.map((plan) => plan.aci)).size).toBe(plans.length);
+  });
+});

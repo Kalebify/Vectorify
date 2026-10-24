@@ -24,7 +24,8 @@ describe("main.tsx — orden de arranque con un enlace de recuperación", () => 
     vi.resetModules();
 
     await import("../main.tsx");
-    await screen.findByRole("heading", { name: "Elegí una contraseña nueva" });
+    // El import dinámico de main.tsx carga toda la app: bajo la carga de la suite completa supera el 1 s por defecto de findBy*.
+    await screen.findByRole("heading", { name: "Elegí una contraseña nueva" }, { timeout: 20000 });
 
     expect(window.location.hash).toBe("");
     expect(replaceState).toHaveBeenCalled();
