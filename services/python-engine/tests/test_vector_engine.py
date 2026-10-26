@@ -81,3 +81,21 @@ def test_trace_empty_mask_produces_svg_with_no_paths_without_crashing(engine):
     root = ET.fromstring(svg)
     paths = root.findall(".//{http://www.w3.org/2000/svg}path")
     assert paths == []
+
+
+def test_trace_removes_zero_area_closed_subpaths_but_preserves_holes_and_details(engine, monkeypatch):
+    import vtracer
+    raw = '<svg xmlns="http://www.w3.org/2000/svg"><path fill="#000000" transform="translate(7,9)" d="M0 0 L10 0 L10 10 L0 10 Z M2 2 L2 4 L4 4 L4 2 Z M5 5 L6 6 L5 5 Z M8 8 L9 8 L9 9 Z"/><path fill="#000000" d="M1 1 L2 2 L3 3 Z"/></svg>'
+    monkeypatch.setattr(vtracer, 'convert_raw_image_to_svg', lambda *args, **kwargs: raw)
+    svg = engine.trace(np.full((20, 20), 255, dtype=np.uint8))
+    paths = ET.fromstring(svg).findall('.//{http://www.w3.org/2000/svg}path')
+    assert len(paths) == 1
+    assert paths[0].get('d') == 'M0 0 L10 0 L10 10 L0 10 Z M2 2 L2 4 L4 4 L4 2 Z M8 8 L9 8 L9 9 Z'
+    assert paths[0].get('transform') == 'translate(7,9)'
+
+
+def test_trace_preserves_non_collinear_zero_signed_area_and_open_or_curved_paths(engine, monkeypatch):
+    import vtracer
+    raw = '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0 L4 4 L0 4 L4 0 Z"/><path d="M0 0 L4 4"/><path d="M0 0 C1 2 2 1 3 3 Z"/></svg>'
+    monkeypatch.setattr(vtracer, 'convert_raw_image_to_svg', lambda *args, **kwargs: raw)
+    assert engine.trace(np.full((20, 20), 255, dtype=np.uint8)) == raw

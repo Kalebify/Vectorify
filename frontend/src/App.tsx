@@ -210,6 +210,9 @@ interface AppProps {
 function App({ userMenu }: AppProps = {}) {
   const { status, response, errorMessage, lastCheckedAt } = useSystemHealth();
   const [activeProject, setActiveProject] = useState<UploadImageResponse | null>(null);
+  // Preprocess y Threshold arrancan al montarse: no hacerlo en segundo plano en modo color.
+  const [hasUsedMonochrome, setHasUsedMonochrome] = useState(false);
+  const [vectorizationMode, setVectorizationMode] = useState<"color" | "monochrome">("color");
   const [confirmedPalette, setConfirmedPalette] = useState<ColorPaletteResponse | null>(null);
   // paletteId del triple clásico que EditorShell necesita como prop (M2.2-S05): se mantiene
   // aparte de `confirmedPalette` porque la reapertura vía `savedProjectId` NO llama a
@@ -438,6 +441,8 @@ function App({ userMenu }: AppProps = {}) {
   };
 
   const handleProjectCreated = (project: UploadImageResponse | null) => {
+    setVectorizationMode("color");
+    setHasUsedMonochrome(false);
     setConfirmedPalette(null);
     setWorkspacePaletteId(null);
     setSavedProjectId(null);
@@ -623,12 +628,31 @@ function App({ userMenu }: AppProps = {}) {
         </section>
 
         {activeProject && (
+          <section className="upload-section" aria-labelledby="vectorization-mode-heading">
+            <h2 id="vectorization-mode-heading">Tipo de vectorización</h2>
+            <fieldset className="vectorization-mode">
+              <legend>Elegí el resultado que querés obtener</legend>
+              <label><input type="radio" name="vectorization-mode" checked={vectorizationMode === "color"}
+                onChange={() => setVectorizationMode("color")} /> Por colores</label>
+              <label><input type="radio" name="vectorization-mode" checked={vectorizationMode === "monochrome"}
+                onChange={() => { setHasUsedMonochrome(true); setVectorizationMode("monochrome"); }} /> Blanco y negro</label>
+            </fieldset>
+            <p className="upload-section__hint">
+              Por colores conserva las regiones de color en capas separadas. Blanco y negro usa un umbral de
+              luminosidad: no conserva los colores y puede perder contornos de zonas claras.
+            </p>
+          </section>
+        )}
+
+        {activeProject && (<div className="vectorization-flow" hidden={vectorizationMode !== "color"}>
+        {activeProject && (
           <section aria-labelledby="color-palette-heading" className="color-palette-section">
             <h2 id="color-palette-heading">Paleta de colores</h2>
             <p className="upload-section__hint">
               Arranca el flujo multicapa: detectá los colores dominantes de la imagen original, fusioná los que sean
-              parecidos, renombralos y confirmá la paleta. Cada color confirmado será una operación de láser distinta
-              más adelante. El original nunca se modifica.
+              parecidos, renombralos y confirmá la paleta. Después generá las capas por color, abrí el Workspace
+              y usá Exportar para descargar el SVG por colores. Revisá los grupos excluidos: un color de fondo
+              también puede aparecer dentro del dibujo, por ejemplo en los ojos blancos.
             </p>
             <ColorPalettePanel
               key={`${activeProject.projectId}-${activeProject.imageId}`}
@@ -645,7 +669,7 @@ function App({ userMenu }: AppProps = {}) {
 
             {confirmedPalette && (
               <p className="upload-section__hint">
-                Paleta confirmada.{" "}
+                Paleta confirmada. Generá las capas en el panel de abajo antes de abrir el Workspace; allí podés exportar el SVG por colores.{" "}
                 <button
                   type="button"
                   className="upload-actions__button upload-actions__button--primary"
@@ -690,6 +714,9 @@ function App({ userMenu }: AppProps = {}) {
           </section>
         )}
 
+        </div>)}
+
+        {activeProject && hasUsedMonochrome && (<div className="vectorization-flow" hidden={vectorizationMode !== "monochrome"}>
         {activeProject && (
           <section aria-labelledby="preprocess-heading" className="preprocess-section">
             <h2 id="preprocess-heading">Preprocesamiento</h2>
@@ -814,7 +841,7 @@ function App({ userMenu }: AppProps = {}) {
 
         {activeProject && readyVector && (
           <section aria-labelledby="export-heading" className="export-section">
-            <h2 id="export-heading">Exportar SVG</h2>
+            <h2 id="export-heading">Exportar SVG en blanco y negro</h2>
             <p className="upload-section__hint">
               Elegí qué versión descargar (vector, simplificación o dimensión física), revisá su
               tamaño y los issues del Laser Checker, y descargá el archivo. El Laser Checker es
@@ -829,6 +856,8 @@ function App({ userMenu }: AppProps = {}) {
             />
           </section>
         )}
+
+        </div>)}
 
         <section aria-labelledby="diagnostics-heading">
           <h2 id="diagnostics-heading">Diagnóstico del sistema</h2>

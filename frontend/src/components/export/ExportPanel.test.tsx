@@ -147,7 +147,7 @@ describe("ExportPanel — Laser Checker (informativo)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Revisar con Laser Checker" }));
     await screen.findByText("5");
 
-    const downloadLink = screen.getByRole("link", { name: "Descargar SVG" });
+    const downloadLink = screen.getByRole("link", { name: "Descargar SVG en blanco y negro" });
     expect(downloadLink).not.toHaveAttribute("aria-disabled");
     expect(downloadLink.hasAttribute("download")).toBe(true);
   });
@@ -160,7 +160,7 @@ describe("ExportPanel — descarga", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: "Última simplificación" }));
 
-    const downloadLink = screen.getByRole("link", { name: "Descargar SVG" }) as HTMLAnchorElement;
+    const downloadLink = screen.getByRole("link", { name: "Descargar SVG en blanco y negro" }) as HTMLAnchorElement;
     expect(downloadLink.getAttribute("href")).toContain(
       `/api/v1/projects/${PROJECT_ID}/images/${IMAGE_ID}/export`,
     );
@@ -175,7 +175,7 @@ describe("ExportPanel — descarga", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: "Última versión con dimensiones físicas" }));
 
-    const downloadLink = screen.getByRole("link", { name: "Descargar SVG" }) as HTMLAnchorElement;
+    const downloadLink = screen.getByRole("link", { name: "Descargar SVG en blanco y negro" }) as HTMLAnchorElement;
     expect(downloadLink.getAttribute("href")).toContain("sourceKind=dimension");
     expect(downloadLink.getAttribute("href")).toContain(`sourceId=${DIMENSION_ID}`);
     expect(fetch).not.toHaveBeenCalled();

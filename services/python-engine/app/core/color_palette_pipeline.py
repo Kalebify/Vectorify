@@ -117,20 +117,11 @@ class PaletteDetectionResult:
     groups: list[ColorGroup] = field(default_factory=list)
 
 
-def _bucket(pixels: np.ndarray, step: int) -> np.ndarray:
-    """Re-cuantiza cada canal BGR a múltiplos de `step` (posterización
-    determinista), usado únicamente como salvaguarda de rendimiento cuando
-    hay demasiados colores únicos -- ver extract_unique_colors."""
-    if step <= 1:
-        return pixels
-    return (pixels.astype(np.int32) // step * step).astype(np.uint8)
-
-
 def extract_unique_colors(
     pixels: np.ndarray, max_unique_colors: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Devuelve (colores_únicos, inverse, counts) de forma determinista
-    (np.unique con axis=0 ordena lexicográficamente, sin aleatoriedad). Si la
+    (claves BGR de 24 bits ordenadas lexicográficamente, sin aleatoriedad). Si la
     cantidad de colores únicos observados supera `max_unique_colors`
     (imágenes de tono continuo/fotografías, fuera del caso de uso principal
     de esta herramienta -- diseños gráficos para corte láser), se re-
@@ -145,19 +136,36 @@ def extract_unique_colors(
     máscara de cada cluster sin tener que volver a comparar colores píxel a
     píxel.
     """
+    # np.unique(axis=0) ordena filas estructuradas: repetirlo sobre una foto
+    # de millones de píxeles puede agotar el timeout. Una clave de 24 bits
+    # conserva exactamente el orden BGR y permite el ordenamiento numérico.
+    packed = pixels.astype(np.uint32)
+    keys = (packed[:, 0] << 16) | (packed[:, 1] << 8) | packed[:, 2]
     step = 1
-    working = pixels
+    working = keys
     while True:
-        colors, inverse, counts = np.unique(working, axis=0, return_inverse=True, return_counts=True)
+        unique, inverse, counts = np.unique(working, return_inverse=True, return_counts=True)
         # Tope de step=128 (no 256): a step=256, `canal // 256 * 256` colapsa
         # TODO canal a 0 (uint8 nunca llega a 256), perdiendo toda la
         # información de color de un plumazo. A step=128 cada canal queda en
         # como máximo 2 niveles (0/128) -- ya reduce la cardinalidad a un
         # máximo de 8 colores sin degenerar a un único color.
-        if len(colors) <= max_unique_colors or step >= 128:
-            return colors, inverse.reshape(-1), counts
+        if len(unique) <= max_unique_colors or step >= 128:
+            colors = np.column_stack([(unique >> 16) & 255, (unique >> 8) & 255, unique & 255]).astype(np.uint8)
+            inverse = inverse.reshape(-1)
+            if step > 1:
+                # El bucket solo limita el costo del clustering. Su borde inferior
+                # oscurece todos los tonos (blanco 255 -> 224 a step=32).
+                # Representar cada bucket con la media de los píxeles ORIGINALES.
+                sums = np.column_stack([
+                    np.bincount(inverse, weights=pixels[:, channel], minlength=len(colors))
+                    for channel in range(3)
+                ])
+                colors = np.rint(sums / counts[:, None]).astype(np.uint8)
+            return colors, inverse, counts
         step *= 2
-        working = _bucket(pixels, step)
+        channel_mask = 256 - step
+        working = keys & ((channel_mask << 16) | (channel_mask << 8) | channel_mask)
 
 
 class _UnionFind:
