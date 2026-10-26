@@ -147,7 +147,7 @@ export function ExportPanel({ projectId, imageId, sources }: ExportPanelProps) {
         href={exportUrl}
         download
       >
-        Descargar SVG
+        Descargar SVG en blanco y negro
       </a>
     </div>
   );
