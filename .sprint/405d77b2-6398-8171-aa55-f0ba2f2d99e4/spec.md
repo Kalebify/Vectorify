@@ -1,0 +1,91 @@
+# Agrupar sombras y variantes en colores base antes de vectorizar (una capa por familia)
+URL: https://app.notion.com/p/405d77b263988171aa55f0ba2f2d99e4
+Stack declarado: Área = Frontend, ASP.NET Core, Python, Vector, Laser (propiedad Tecnología no existe en este board; stack = el del repo: React/TS + ASP.NET Core + motor FastAPI/OpenCV)
+Prioridad: Alta · Estado inicial: Preparado · Flujo: Preparado → Doing → **Test** (nunca Done/OK)
+
+## Requerimiento (transcripción del cuerpo de la tarjeta)
+
+**Objetivo.** Agrupar luces y sombras de una misma familia antes de vectorizar para obtener una capa por color base, con número ajustable de familias, fondo independiente, preview y conservación del estilo detallado. Caso guía: reducir el pato de 36 tonos a cinco familias sin colorear los ojos de naranja ni borrar sus blancos.
+
+**Objetivo y resultado esperado.** Convertir imágenes con luces, sombras, degradados y bordes suavizados en un conjunto manejable de capas por *color base*, conservando todas las regiones de cada familia en una misma capa aunque estén separadas en el dibujo. Caso guía: el pato debe poder prepararse como cinco familias —verde, amarillo, naranja, blanco/grises y negro— en lugar de una lista de decenas de variantes. El número de familias debe poder ajustarse: **cinco es el objetivo de esta imagen, no una regla fija para todas las imágenes**.
+
+**Solicitud del usuario y problema observado.** El usuario reporta muchas filas con variantes visualmente similares de un mismo color en el panel Layers. Quiere que todas las zonas del mismo color pertenezcan a una sola capa. La imagen original tiene aproximadamente cinco colores base, pero la detección actual produce 36 tonos diferentes. Las sombras se conservan como grupos independientes y después se vectorizan en capas separadas. “Sin asignar” corresponde a la operación de fabricación pendiente; no es la causa de la fragmentación. Una capa puede contener varios objetos o piezas desconectadas sin ser una capa duplicada.
+
+**Evidencia y diagnóstico confirmado** (análisis del 2026-10-27 sobre el commit `a7978ca`, PNG original del pato 1152 × 2048):
+
+| Prueba | Resultado |
+| --- | --- |
+| Configuración actual: tolerancia 12, sin máximo de colores | 36 grupos |
+| Tolerancia 30, sin máximo | 17 grupos |
+| Tolerancia 50, sin máximo | 8 grupos |
+| Lab actual limitado directamente a cinco | Cinco grupos, pero algunas sombras de ojos terminan en naranja |
+| Prototipo de familias cromáticas con neutros separados | Cinco grupos coherentes con el objetivo visual |
+
+Las 36 máscaras raster originales tienen cero píxeles compartidos y cero sin asignar. La causa principal no son copias idénticas superpuestas, sino fragmentación por tonos. Esto no certifica que los contornos vectoriales aproximados estén libres de pequeños cruces de borde.
+
+Evidencia del prototipo (no de una implementación terminada): capas de color 36 → 5; paths 557 → 23; píxeles compartidos entre máscaras de origen 0 → 0; sin asignar 0 → 0. El SVG del prototipo tiene 23 paths; es una referencia comparativa, no un requisito de reproducir la misma serialización. Rasterizando los vectores del prototipo con el validador del proyecto se midieron 2.553 píxeles compartidos (≈0,1082 % del lienzo) y 1.808 sin cubrir (≈0,0766 %): **diferencias pendientes de evaluar y controlar; no equivalen a aprobar el archivo para fabricación.**
+
+**Alcance funcional.**
+
+1. *Dos estilos de agrupación explícitos.* **Colores base**: agrupar variantes de iluminación de una misma familia antes de generar capas. **Conservar tonos y sombras**: mantener disponible la detección detallada actual. Ofrecer ajuste del número objetivo de familias y de la intensidad de agrupación, con explicación comprensible y preview. Para proyectos nuevos, presentar Colores base como opción recomendada; la decisión de usarla como valor inicial debe documentarse y probarse; no alterar silenciosamente proyectos existentes. Mantener separado el recorrido Blanco y negro, ya corregido en el cambio anterior.
+2. *Agrupar por familia y después vectorizar la unión.* Evaluar tono, saturación y luminosidad para no tratar cada sombra como un color base nuevo. Tono como magnitud circular (rojos cercanos a ambos extremos no deben dividirse). Preservar la separación entre familias cromáticas y neutras; evitar que sombras grises de los ojos se asignen al naranja. Unir las máscaras de todos los grupos de una misma familia y trazar esa unión una sola vez por familia. Una capa por familia con múltiples piezas si corresponde (pico y pies en la capa naranja; cabeza y cuerpo en la amarilla). No fijar reglas específicas del pato, cinco grupos obligatorios, coordenadas del personaje ni una lista universal de nombres de colores. El prototipo es una referencia, no una especificación de umbrales válida para cualquier diseño.
+3. *Fondo separado del color.* Mantener la máscara de fondo independiente de la pertenencia a una familia blanca. Excluir el fondo no debe equivaler a eliminar todos los píxeles blancos del dibujo. Preservar blancos interiores legítimos (ojos) y huecos intencionales. Si una zona blanca toca un fondo blanco y el original no contiene un borde distinguible, conservar una salida segura y ofrecer revisión o corrección manual; no prometer reconstrucción semántica exacta ni borrar esas zonas en silencio. Mostrar qué área se considera fondo y permitir corregir esa decisión antes de confirmar. Si se conserva el fondo como capa técnica, distinguirlo del número de familias del dibujo.
+4. *Preview, confirmación y compatibilidad.* Comparar original y resultado agrupado antes de confirmar la paleta; mostrar cantidad de familias y piezas. Permitir identificar, seleccionar, renombrar, incluir/excluir y fusionar familias según los controles existentes. Tras confirmar, Layers y exportación usan la misma paleta agrupada, sin recuperar los 36 tonos. Persistir estilo de agrupación, parámetros efectivos y versión del algoritmo donde corresponda. Incluir esos datos en las claves de caché. No regenerar ni sobrescribir documentos guardados, geometría editada u operaciones asignadas sin una acción explícita del usuario; la compatibilidad con datos antiguos debe definirse y cubrirse con pruebas.
+
+**Plan orientativo.** (1) Congelar fixtures y métricas; errores de agrupación, fondo y cobertura como pruebas que fallen. (2) Especificar estilo, política de fondo, criterios de fusión y presupuestos geométricos; explicitar limitaciones. (3) Implementar agrupación y unión de máscaras en el motor; conservar el detallado. (4) Contratos, validación, persistencia, compatibilidad y caché de la API. (5) Controles, comparación y confirmación en el frontend; conectar con Layers y exportación. (6) Pruebas por capa, integración HTTP y E2E; revisar archivos en LightBurn y guardar evidencia.
+
+**Puntos del código a inspeccionar.** `services/python-engine/app/core/color_palette_pipeline.py`, `app/services/color_palette_service.py`, `app/models/schemas.py`; contratos, opciones, registros y endpoints ColorPalette/VectorLayer en ASP.NET Core; `frontend/src/hooks/useColorPalette.ts`, `frontend/src/components/colorPalette/ColorPalettePanel.tsx`; integración con Layers, Workspace, guardado y exportadores SVG/DXF.
+
+**Pruebas y evidencias exigidas.** Unitarias de agrupación (sombras, saturación baja, neutros, límites de tono, colores parecidos intencionales, determinismo, transparencia). Unitarias de unión de máscaras (cobertura exacta, cero píxeles compartidos, componentes separados, agujeros, fondo independiente). Integración motor/API (parámetros efectivos, caché, errores controlados, confirmación, generación y recuperación de capas). Integración de guardado (documentos antiguos, cambios de estilo, reapertura, regeneración explícita). E2E de navegador con el PNG original y fixtures adicionales; descarga real SVG/DXF y verificación de contenido. Suites completas de Python y frontend; backend si cambian contratos. Informar fallos preexistentes por separado; no presentar una ejecución incompleta como totalmente verde. Evidencia manual de importación en LightBurn, sin iniciar corte/grabado ni operar controles de máquina.
+
+**Dependencias, límites.** Relacionadas (en OK, no se reabren): detección y reducción inicial; reducción real de paleta; Layers y paleta interactiva. Base del análisis: `a7978ca` y PR #66. Fuera de alcance: redibujar el personaje con IA, interpretar semánticamente cualquier fotografía sin revisión, imponer cinco colores a todas las imágenes, cambiar autenticación o ejecutar operaciones físicas de fabricación.
+
+**Material de reproducción.** Original: `C:/Users/caleb/Downloads/pato (1).png`. Carpeta del experimento: `C:/Users/caleb/.codex/visualizations/2026/09/24/01a0d456-8d55-7b80-8a46-938f6b969980/pato-base-colors-20261027/` (`families.py`, `compare.py`, previews). SVG de referencia = prototipo, con fondo blanco conservado, sin escala física y sin aprobación para fabricar. Adjuntos: `pato-5-familias-prototipo.svg`, `analisis-colores-base-20261027.md`, `metricas-prototipo-colores-base.json`.
+
+## Criterios de aceptación (textuales de la tarjeta)
+
+- CA-01 — Selección de estilo: elegir Colores base o Conservar tonos y sombras, ajustar parámetros y revisar el preview antes de confirmar.
+- CA-02 — Caso del pato: con objetivo de cinco familias → verde, amarillo, naranja, blanco/grises y negro; todas las zonas de cada familia comparten capa; sin múltiples capas debidas solo a sombras de la misma familia.
+- CA-03 — Clasificación visual: sombras de ojos no se vuelven naranjas; pupilas diferenciadas; sombrero, cuerpo, pico y pies conservan sus familias. Validación contra referencias aprobadas, no solo contra el número de capas.
+- CA-04 — Generalización y control: casos con más y menos de cinco colores, tonos cercanos intencionales, pasteles, grises, negro/blanco, rojos que cruzan el límite circular. El usuario puede conservar diferencias intencionales (ajustes o estilo detallado).
+- CA-05 — Cobertura raster: cada píxel relevante en exactamente una familia o en la máscara de fondo; sin solapamientos ni pérdida antes del trazado. Alpha cero excluido; se respeta el contrato vigente de transparencia parcial.
+- CA-06 — Fondo y blancos: excluir el fondo no borra automáticamente blancos de ojos o detalles. Los casos ambiguos se conservan para revisión y no se aprueban como resueltos por una heurística sin evidencia.
+- CA-07 — Geometría: piezas desconectadas y agujeros válidos, alineación y dimensiones del lienzo. Sin paths vacíos, cerrados sin área ni duplicados accidentales al unir familias.
+- CA-08 — Trazado medido: registrar diferencias raster/vector, contaminación entre familias, huecos y solapamientos tras vectorizar. Definir y justificar tolerancias numéricas en esta especificación antes de aprobar QA; documentar errores que superen el presupuesto; no certificar “cero superposición” por inspección visual.
+- CA-09 — Determinismo: misma imagen, estilo, versión de algoritmo y parámetros → mismas máscaras, familias y orden.
+- CA-10 — Caché y guardado: alternar estilos/parámetros da resultados correctos; reabrir conserva la configuración; proyectos anteriores mantienen su contenido hasta regeneración explícita.
+- CA-11 — Rendimiento: PNG 1152×2048 completa la detección dentro de 20 s en el entorno local de referencia, sin aumentar el timeout. Registrar entorno, parámetros y tiempos.
+- CA-12 — E2E: carga → agrupación → revisión del fondo → confirmación → capas → edición/guardado → reapertura → exportación conserva el resultado.
+- CA-13 — Exportación: SVG y DXF conservan familias, geometría y escala declarada; ninguna exportación recupera tonos descartados o cambia al recorrido monocromo.
+- CA-14 — LightBurn: importar los archivos reales sin operar una máquina y registrar resultado (colores/capas, contornos, blancos/huecos, medidas). No marcar OK si queda pendiente.
+
+## Referencias visuales / de marca
+Adjuntos de la tarjeta (SVG prototipo, análisis, métricas JSON; las URLs notion-file expiran) y copia local de la carpeta del experimento (ver arriba). No hay marca ni diseño de UI nuevo: se reutiliza el panel ColorPalette existente.
+
+## Umbrales de calidad
+La propiedad `Umbrales` no existe en este board; los umbrales Lighthouse del sistema (sitio web desplegado) **no aplican** a esta tarjeta (no hay preview Vercel; el entregable es un PR). Se aplican los umbrales propios de la tarjeta, fijados aquí (decisión del implementador, documentada para CA-08 y CA-11):
+
+| Métrica | Presupuesto | Justificación |
+| --- | --- | --- |
+| Detección PNG 1152×2048 (CA-11) | ≤ 20 s (timeout actual `color_palette_timeout_seconds = 20`, sin tocarlo); objetivo de diseño ≤ 10 s | el prototipo + detección actual cabe holgado; se registra tiempo real |
+| Cobertura raster de máscaras (CA-05) | 0 píxeles compartidos, 0 sin asignar (exacto) | operación entera sobre etiquetas; no admite tolerancia |
+| Diferencia raster/vector por capa (CA-08) | ≤ 0,5 % del lienzo por capa (|máscara △ raster del SVG|) | el prototipo midió 0,01–0,33 % por familia; se deja ≈50 % de margen |
+| Solapamiento vectorial entre familias (CA-08) | ≤ 0,25 % del lienzo en total | prototipo 0,108 %; margen ×2,3 por redondeo/antialias de contornos |
+| Huecos vectoriales entre familias (CA-08) | ≤ 0,25 % del lienzo en total (sin contar fondo excluido) | prototipo 0,077 %; mismo margen |
+| Contaminación entre familias (CA-08) | ≤ 0,25 % del área de cada capa cae sobre píxeles de **otra** familia | ídem solapamiento, normalizado por capa |
+| Paths degenerados (CA-07) | 0 paths vacíos, 0 con área < 1 px², 0 duplicados exactos | exacto |
+| Fondo ambiguo (CA-06) | no se mide contra % : se **reporta** `ambiguous_percent` y `needs_review` | se trata de evidencia para revisión humana, no de aprobación |
+
+Estos presupuestos se verifican en `tests/test_color_families_trace.py` con el PNG real del pato (fixture versionado) y se registran en `QA_AGRUPACION_FAMILIAS.md`; si se superan, se documenta como error abierto y no se certifica.
+
+## Ambigüedades detectadas (decisiones del implementador, para revisión)
+Ninguna impide empezar. La propiedad *Tecnología* no existe (se usa el stack del repo). Decisiones que se toman y se documentan:
+
+1. **Base de la rama**: `main` no contiene `a7978ca` (PR #66, abierto sobre la rama M3.1-S10 sin mergear), que es la base del análisis. Para no depender de la pila M3.1 se corta desde `origin/main` y se hace `cherry-pick` de solo `a7978ca` y `e91fd29` (DXF con color ACI), ambos autocontenidos (sin las pruebas de auth, que no existen en main). Si #66 se mergea antes, los parches son idénticos.
+2. **Estilo por defecto**: la API (y cualquier documento/sidecar anterior) sin campo de estilo = `detailed` (comportamiento actual, nada cambia silenciosamente). El **frontend** propone `base_colors` como valor inicial para detecciones **nuevas** y la recomienda en el panel; reabrir una paleta existente muestra el estilo con que fue creada y no re-detecta.
+3. **Parámetros nuevos**: `grouping_style` (`base_colors`|`detailed`), `target_families` (1–16 o null = automático, es un **tope**: nunca se inventan familias que la imagen no tiene), `grouping_strength` (0–1, default 0,5: más alto = fusiona más), `algorithm_version` (entero, hoy 1; forma parte de caché, persistencia y respuesta). En `detailed` se ignoran los tres primeros y `max_colors` conserva su significado; en `base_colors` `max_colors` se ignora (el tope lo da `target_families`).
+4. **Clasificación**: Lab → (L, C, h). *Neutro* si C < c_n (= 8 + 10·fuerza ≈ 13) o L < 12 (tono inestable); *cromático* en otro caso. Neutros se fusionan por luminosidad (|ΔL| ≤ 10 + 15·fuerza ≈ 17,5) → negro y blanco/grises quedan separados porque sus ΔL ≫ umbral. Cromáticos se fusionan por **diferencia de tono circular** (≤ 12° + 36°·fuerza ≈ 30°), con guardas de |ΔL| ≤ 45 + 30·fuerza y |ΔC| ≤ 30 + 60·fuerza, para no confundir pasteles o grupos muy distintos de luminosidad con el mismo tono. Fusión aglomerativa por centroides Lab ponderados por píxeles (determinista; empates por índice). Después se aplica el tope `target_families` fusionando el par de familias de menor ΔE. No hay reglas del pato.
+5. **Fondo**: color de referencia = grupo detallado que más perímetro toca (≥ 50 %); píxeles con ΔE ≤ tolerancia respecto a ese color y **conectados al borde** (4-conectividad) = candidato a fondo. Cuello estrecho: se hace una apertura morfológica (radio = 1 % del lado menor, mín. 2 px); lo que quedaría conectado al fondo solo por un cuello más fino que el elemento estructurante, y no es alcanzable por dilatación limitada del fondo seguro, es **ambiguo**: se **conserva en su familia** (salida segura) y se informa `ambiguous_percent`. Además se calcula `contact_percent` = fracción del contorno del fondo en contacto con píxeles claros neutros de primer plano cercanos al color del fondo (ojos blancos junto a fondo blanco); si es > 0 → `needs_review = true` (no se resuelve semánticamente). Los blancos no conectados al borde (huecos interiores) quedan siempre en su familia. El fondo se devuelve como grupo técnico `is_background = true` (excluido por defecto, no cuenta como familia), con su máscara; el usuario lo incluye/excluye con el control existente. **Límite conocido**: un blanco de primer plano que se funde con el fondo sin borde (p. ej. el brillo superior del ojo derecho del pato) queda marcado como fondo y solo se avisa mediante `needs_review`; no se pretende reconstruirlo.
+6. **Cobertura**: etiquetas enteras por píxel → cada píxel opaco pertenece a exactamente una familia **o** al fondo; alpha 0 a ninguno.
+7. **Compatibilidad API**: campos nuevos aditivos con defaults (`ColorGroup.IsBackground=false`, etc.); sidecars JSON anteriores se rehidratan como `detailed`/`algorithm_version=0` y su clave de caché no colisiona con la de `base_colors`.
+8. **E2E con navegador/LightBurn (CA-12, CA-14)**: dependen de la pila real (PostgreSQL por Docker, que no arranca en este equipo) y de LightBurn (no automatizable). Si no se pueden ejecutar se documentan como NO VERIFICADOS en la tarjeta; no se marcan como cumplidos.

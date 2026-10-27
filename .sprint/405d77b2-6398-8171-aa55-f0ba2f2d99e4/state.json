@@ -1,0 +1,18 @@
+{
+  "card_id": "405d77b2-6398-8171-aa55-f0ba2f2d99e4",
+  "card_url": "https://app.notion.com/p/405d77b263988171aa55f0ba2f2d99e4",
+  "title": "Agrupar sombras y variantes en colores base antes de vectorizar (una capa por familia)",
+  "stack": "Frontend, ASP.NET Core, Python, Vector, Laser (stack del repo; propiedad Tecnologia inexistente)",
+  "branch": "sprint/405d77b2-colores-base-familias",
+  "column": "Doing",
+  "phase": "implement",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "pr_url": null,
+  "started_at": "2026-10-27T00:00:00Z",
+  "exceptions": [
+    "Rama cortada desde origin/main + cherry-pick de a7978ca y e91fd29 (PR #66 abierto sobre la pila M3.1-S10, no mergeado): ver spec.md, ambiguedad 1.",
+    "Sin autorizacion de merge para esta tarjeta: se abre el PR y el merge queda al usuario. Meta: tarjeta en Test (nunca Done/OK).",
+    "CA-12 (E2E navegador) y CA-14 (LightBurn) pueden quedar NO VERIFICADOS (Docker/PostgreSQL no arranca; LightBurn manual)."
+  ]
+}
