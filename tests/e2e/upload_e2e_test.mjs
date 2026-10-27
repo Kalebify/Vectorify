@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 import net from "node:net";
 
 const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
-const API_DLL = join(ROOT, "backend", "Vectorify.Api", "bin", "Debug", "net9.0", "Vectorify.Api.dll");
+const API_DLL = join(ROOT, "backend", "Vectorify.Api", "bin", "Debug", "net10.0", "Vectorify.Api.dll");
 
 // PNG 1x1 real y válido (misma firma que usan los tests unitarios de backend).
 const VALID_PNG = Buffer.from(
