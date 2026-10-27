@@ -13,12 +13,15 @@ se consultó explícitamente al usuario en el chat -- ver spec.md, "Decisión
 bloqueante resuelta con el usuario".
 """
 
+import re
+import xml.etree.ElementTree as ET
 from typing import Protocol
 
 import cv2
 import numpy as np
 
 from app.core.errors import VectorizationEngineError
+from app.core.svg_path_parsing import extract_subpaths, is_supported_path, local_name, tokenize_path_d
 
 
 class VectorEngine(Protocol):
@@ -89,4 +92,54 @@ class VtracerEngine:
         if not isinstance(svg, str) or not svg.strip():
             raise VectorizationEngineError("El motor de trazado devolvió una respuesta vacía o inválida.")
 
+        return _remove_zero_area_subpaths(svg)
+
+
+
+def _remove_zero_area_subpaths(svg: str) -> str:
+    """El trazador poligonal puede dejar contornos cerrados colineales.
+
+    No tienen relleno visible y bloquean la fabricación. Quitar SOLO esos
+    contornos (no por tamaño ni por área firmada: un cruce puede cancelarla).
+    Conservar textualmente los demás subpaths, sus huecos y transforms.
+    """
+    try:
+        root = ET.fromstring(svg)
+    except ET.ParseError:
+        return svg  # El sanitizador del servicio informa el XML inválido.
+    changed = False
+    for parent in root.iter():
+        for path in list(parent):
+            if local_name(path.tag) != "path":
+                continue
+            d = path.get("d", "")
+            commands = tokenize_path_d(d)
+            if not is_supported_path(commands):
+                continue
+            subpaths = extract_subpaths(commands)
+            chunks = re.findall(r"M[^M]*", d)
+            if len(subpaths) != len(chunks):
+                continue
+            kept = []
+            for chunk, subpath in zip(chunks, subpaths):
+                points = subpath["points"]
+                collinear = True
+                if points:
+                    origin = points[0]
+                    second = next((point for point in points if point != origin), origin)
+                    dx, dy = second[0] - origin[0], second[1] - origin[1]
+                    collinear = all(dx * (y - origin[1]) == dy * (x - origin[0]) for x, y in points)
+                if subpath["closed"] and collinear:
+                    changed = True
+                else:
+                    kept.append(chunk.strip())
+            if len(kept) == len(chunks):
+                continue
+            if kept:
+                path.set("d", " ".join(kept))
+            else:
+                parent.remove(path)
+    if not changed:
         return svg
+    ET.register_namespace("", "http://www.w3.org/2000/svg")
+    return ET.tostring(root, encoding="unicode")

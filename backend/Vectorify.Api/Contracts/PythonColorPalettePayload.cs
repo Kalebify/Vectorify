@@ -28,6 +28,10 @@ public sealed class PythonColorPalettePayload
 
     [JsonPropertyName("quantized_preview_base64")]
     public string? QuantizedPreviewBase64 { get; set; }
+
+    /// <summary>Ausente en motores anteriores a la agrupación por familias: 0 = sin versión.</summary>
+    [JsonPropertyName("algorithm_version")]
+    public int AlgorithmVersion { get; set; }
 }
 
 public sealed class PythonColorPaletteParamsPayload
@@ -40,6 +44,15 @@ public sealed class PythonColorPaletteParamsPayload
 
     [JsonPropertyName("tiny_area_ratio")]
     public double TinyAreaRatio { get; set; }
+
+    [JsonPropertyName("grouping_style")]
+    public string? GroupingStyle { get; set; }
+
+    [JsonPropertyName("target_families")]
+    public int? TargetFamilies { get; set; }
+
+    [JsonPropertyName("grouping_strength")]
+    public double? GroupingStrength { get; set; }
 }
 
 public sealed class PythonColorPaletteMetricsPayload
@@ -49,6 +62,33 @@ public sealed class PythonColorPaletteMetricsPayload
 
     [JsonPropertyName("transparent_percent")]
     public double TransparentPercent { get; set; }
+
+    [JsonPropertyName("family_count")]
+    public int? FamilyCount { get; set; }
+
+    [JsonPropertyName("piece_count")]
+    public int? PieceCount { get; set; }
+
+    [JsonPropertyName("background")]
+    public PythonBackgroundPayload? Background { get; set; }
+}
+
+public sealed class PythonBackgroundPayload
+{
+    [JsonPropertyName("pixel_count")]
+    public long PixelCount { get; set; }
+
+    [JsonPropertyName("area_percent")]
+    public double AreaPercent { get; set; }
+
+    [JsonPropertyName("ambiguous_percent")]
+    public double AmbiguousPercent { get; set; }
+
+    [JsonPropertyName("contact_percent")]
+    public double ContactPercent { get; set; }
+
+    [JsonPropertyName("needs_review")]
+    public bool NeedsReview { get; set; }
 }
 
 public sealed class PythonColorGroupPayload
@@ -73,4 +113,13 @@ public sealed class PythonColorGroupPayload
 
     [JsonPropertyName("mask_base64")]
     public string? MaskBase64 { get; set; }
+
+    [JsonPropertyName("is_background")]
+    public bool IsBackground { get; set; }
+
+    [JsonPropertyName("source_group_count")]
+    public int SourceGroupCount { get; set; } = 1;
+
+    [JsonPropertyName("piece_count")]
+    public int PieceCount { get; set; }
 }

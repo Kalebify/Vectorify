@@ -51,6 +51,7 @@ export interface LayerLike {
   locked: boolean;
   manufacturingOperation: EditableLayerMeta["manufacturingOperation"];
   isNew?: boolean;
+  isExcluded?: boolean;
 }
 
 /** Meta de las capas efectivas, con la visibilidad EFECTIVA que decida `visibleOf` (p. ej. con Isolate aplicado). */
@@ -64,6 +65,7 @@ export function toLayerMetas(layers: readonly LayerLike[], visibleOf: (layer: La
     locked: layer.locked,
     manufacturingOperation: layer.manufacturingOperation,
     isNew: layer.isNew === true,
+    ...(layer.isExcluded ? { isExcluded: true } : {}),
   }));
 }
 

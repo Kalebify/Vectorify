@@ -524,3 +524,42 @@ def test_detect_palette_transparency_case_is_unaffected_by_tiny_area_ratio():
     assert len(result.groups) == 1
     assert result.groups[0].pixel_count == 8
     assert result.transparent_pixel_count == 8
+
+
+def test_bucket_representatives_use_original_pixel_means_not_lower_edges():
+    # Fuerza dos buckets en vez de tres colores. 255 no debe convertirse en 128.
+    pixels = np.array([[0, 0, 0], [1, 1, 1], [1, 1, 1], [255, 255, 255]], dtype=np.uint8)
+    colors, inverse, counts = extract_unique_colors(pixels, max_unique_colors=2)
+    assert colors[inverse[-1]].tolist() == [255, 255, 255]
+    assert colors[inverse[0]].tolist() == [1, 1, 1]
+    assert counts.tolist() == [3, 1]
+
+
+def test_continuous_color_palette_keeps_white_and_bright_yellow():
+    shades = np.arange(128, 256, dtype=np.uint8)
+    yellow = np.column_stack([np.zeros(128, dtype=np.uint8), shades, shades])
+    pixels = np.vstack([np.full((1024, 3), 255, dtype=np.uint8), yellow])
+    result = detect_palette(pixels.reshape(1, -1, 3), None, tolerance=0.0,
+                            max_colors=None, max_unique_colors=8)
+    white = max(result.groups, key=lambda group: group.pixel_count)
+    assert white.color_bgr == (255, 255, 255)
+    assert any(group.color_bgr[0] == 0 and group.color_bgr[1] >= 239 for group in result.groups)
+
+
+
+def test_packed_color_keys_preserve_bucket_membership_order_and_weighted_means():
+    pixels = np.random.default_rng(42).integers(0, 256, size=(4000, 3), dtype=np.uint8)
+    pixels = np.vstack([pixels, pixels[:100]])  # frecuencias no uniformes
+    step = 1
+    while True:
+        bucketed = (pixels.astype(np.int32) // step * step).astype(np.uint8)
+        reference, expected_inverse, expected_counts = np.unique(
+            bucketed, axis=0, return_inverse=True, return_counts=True)
+        if len(reference) <= 512:
+            break
+        step *= 2
+    colors, inverse, counts = extract_unique_colors(pixels, max_unique_colors=512)
+    np.testing.assert_array_equal(inverse, expected_inverse.reshape(-1))
+    np.testing.assert_array_equal(counts, expected_counts)
+    for index in range(len(colors)):
+        np.testing.assert_array_equal(colors[index], np.rint(pixels[inverse == index].mean(axis=0)))

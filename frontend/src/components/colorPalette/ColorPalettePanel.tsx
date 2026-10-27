@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { getColorPalettePreviewUrl } from "../../api/colorPaletteApi";
+import { API_BASE_URL } from "../../api/httpClient";
 import { useColorPalette } from "../../hooks/useColorPalette";
 import type { ColorPaletteResponse } from "../../types/colorPalette";
 import { ColorSwatchList } from "./ColorSwatchList";
@@ -45,6 +46,11 @@ const STATUS_LABEL: Record<string, string> = {
  * colores parecidos, renombrar grupos y confirmar la paleta. Arranca el
  * flujo multicapa operando directamente sobre la imagen original YA subida
  * (M1-S02) -- no depende de ninguna otra etapa del pipeline de MVP1.
+ *
+ * Agrupación por familias (tarjeta "Agrupar sombras y variantes en colores base"): el usuario elige
+ * entre "Colores base" (una capa por familia de color, recomendado para detecciones NUEVAS) y
+ * "Conservar tonos y sombras" (cada tono detectado). Cambiar el estilo o sus parámetros no toca la
+ * paleta ya detectada: solo se aplica al pulsar "Detectar de nuevo".
  */
 export function ColorPalettePanel({
   projectId,
@@ -62,10 +68,16 @@ export function ColorPalettePanel({
     palette,
     tolerance,
     maxColors,
+    groupingStyle,
+    targetFamilies,
+    groupingStrength,
     selectedGroupIds,
     errorMessage,
     setTolerance,
     setMaxColors,
+    setGroupingStyle,
+    setTargetFamilies,
+    setGroupingStrength,
     detect,
     toggleGroupSelection,
     clearSelection,
@@ -91,12 +103,45 @@ export function ColorPalettePanel({
   const canEdit = palette !== null && !isConfirmed && !isBusy;
   const canMerge = canEdit && selectedGroupIds.length >= 2;
   const canConfirm = canEdit && palette !== null && palette.groups.length > 0;
+  const isFamilyStyle = groupingStyle === "base_colors";
+  const paletteIsFamilies = palette?.groupingStyle === "base_colors";
+  const backgroundGroup = palette?.groups.find((group) => group.isBackground) ?? null;
+  const background = palette?.background ?? null;
 
   const previewUrl = palette ? `${getColorPalettePreviewUrl(projectId, imageId, palette.paletteId)}?v=${palette.version}` : null;
+  const backgroundMaskUrl = backgroundGroup ? new URL(backgroundGroup.maskUrl, `${API_BASE_URL}/`).toString() : null;
 
   return (
     <div className="color-palette-panel">
       <div className="color-palette-controls">
+        <fieldset className="color-palette-controls__row color-palette-style" disabled={isBusy || isConfirmed}>
+          <legend>Estilo de agrupación</legend>
+          <label className="color-palette-style__option">
+            <input
+              type="radio"
+              name={`color-palette-style-${projectId}-${imageId}`}
+              checked={isFamilyStyle}
+              onChange={() => setGroupingStyle("base_colors")}
+            />
+            <span>
+              <strong>Colores base</strong> <span className="color-palette-style__badge">Recomendado</span>
+              <small>Reúne luces y sombras de un mismo color en una sola capa por familia, antes de vectorizar.</small>
+            </span>
+          </label>
+          <label className="color-palette-style__option">
+            <input
+              type="radio"
+              name={`color-palette-style-${projectId}-${imageId}`}
+              checked={!isFamilyStyle}
+              onChange={() => setGroupingStyle("detailed")}
+            />
+            <span>
+              <strong>Conservar tonos y sombras</strong>
+              <small>Mantiene cada tono detectado como grupo independiente (útil si las gradaciones importan).</small>
+            </span>
+          </label>
+        </fieldset>
+
         <div className="color-palette-controls__row">
           <div className="color-palette-controls__label-row">
             <label htmlFor="color-palette-tolerance">Tolerancia</label>
@@ -114,22 +159,65 @@ export function ColorPalettePanel({
           />
         </div>
 
-        <div className="color-palette-controls__row">
-          <label htmlFor="color-palette-max-colors">Número máximo de colores (opcional)</label>
-          <input
-            id="color-palette-max-colors"
-            type="number"
-            min={1}
-            max={64}
-            value={maxColors ?? ""}
-            disabled={isBusy}
-            placeholder="Sin límite"
-            onChange={(event) => {
-              const raw = event.target.value;
-              setMaxColors(raw === "" ? null : Number(raw));
-            }}
-          />
-        </div>
+        {isFamilyStyle ? (
+          <>
+            <div className="color-palette-controls__row">
+              <label htmlFor="color-palette-target-families">Objetivo de familias (opcional)</label>
+              <input
+                id="color-palette-target-families"
+                type="number"
+                min={1}
+                max={16}
+                value={targetFamilies ?? ""}
+                disabled={isBusy}
+                placeholder="Automático"
+                onChange={(event) => {
+                  const raw = event.target.value;
+                  setTargetFamilies(raw === "" ? null : Number(raw));
+                }}
+              />
+              <small>Es un tope, no una cuota: nunca se inventan familias que la imagen no tiene.</small>
+            </div>
+
+            <div className="color-palette-controls__row">
+              <div className="color-palette-controls__label-row">
+                <label htmlFor="color-palette-grouping-strength">Intensidad de agrupación</label>
+                <span className="color-palette-controls__value">{Math.round(groupingStrength * 100)}%</span>
+              </div>
+              <input
+                id="color-palette-grouping-strength"
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={groupingStrength}
+                disabled={isBusy}
+                onChange={(event) => setGroupingStrength(Number(event.target.value))}
+              />
+              <small>
+                Más alta fusiona sombras más distintas en la misma familia; más baja conserva diferencias intencionales
+                (pasteles, tonos cercanos).
+              </small>
+            </div>
+          </>
+        ) : (
+          <div className="color-palette-controls__row">
+            <label htmlFor="color-palette-max-colors">Número máximo de colores (opcional)</label>
+            <input
+              id="color-palette-max-colors"
+              type="number"
+              min={1}
+              max={64}
+              value={maxColors ?? ""}
+              disabled={isBusy}
+              placeholder="Sin límite"
+              onChange={(event) => {
+                const raw = event.target.value;
+                setMaxColors(raw === "" ? null : Number(raw));
+              }}
+            />
+          </div>
+        )}
 
         <div className="color-palette-controls__footer">
           <button
@@ -155,10 +243,23 @@ export function ColorPalettePanel({
       {palette && (
         <>
           <dl className="service-card__details color-palette-panel__summary">
-            <div>
-              <dt>Colores detectados</dt>
-              <dd>{palette.groups.length}</dd>
-            </div>
+            {paletteIsFamilies ? (
+              <>
+                <div>
+                  <dt>Familias del dibujo</dt>
+                  <dd>{palette.familyCount ?? palette.groups.filter((group) => !group.isBackground).length}</dd>
+                </div>
+                <div>
+                  <dt>Piezas</dt>
+                  <dd>{palette.pieceCount ?? 0}</dd>
+                </div>
+              </>
+            ) : (
+              <div>
+                <dt>Colores detectados</dt>
+                <dd>{palette.groups.length}</dd>
+              </div>
+            )}
             <div>
               <dt>Transparencia</dt>
               <dd>{palette.transparentPercent.toFixed(1)}%</dd>
@@ -184,9 +285,37 @@ export function ColorPalettePanel({
                   loading="lazy"
                 />
               )}
-              <figcaption>Preview cuantizado</figcaption>
+              <figcaption>{paletteIsFamilies ? "Resultado agrupado por familias" : "Preview cuantizado"}</figcaption>
             </figure>
           </div>
+
+          {paletteIsFamilies && background && (
+            <section className="color-palette-background" aria-label="Revisión del fondo">
+              <h3>Fondo</h3>
+              <p>
+                Se considera fondo el {background.areaPercent.toFixed(1)}% del lienzo (grupo técnico: no cuenta como
+                familia del dibujo). Los blancos interiores, como los ojos, se conservan en su familia. Podés incluir el
+                fondo como capa con el control «Excluido/Incluido» de su fila.
+              </p>
+              {background.needsReview && (
+                <p role="alert" className="color-palette-background__warning">
+                  Revisá el fondo: hay zonas claras ({background.contactPercent.toFixed(1)}% del lienzo) en contacto con
+                  el fondo
+                  {background.ambiguousPercent > 0
+                    ? ` y ${background.ambiguousPercent.toFixed(2)}% conectado solo por un cuello estrecho`
+                    : ""}
+                  . Si no existe un borde distinguible en la imagen original, no se puede garantizar la separación exacta
+                  solo por color; las zonas dudosas se conservaron en su familia en vez de borrarse.
+                </p>
+              )}
+              {backgroundMaskUrl && (
+                <figure className="color-palette-comparison__item color-palette-background__mask">
+                  <img src={backgroundMaskUrl} alt={`Máscara del fondo de ${fileName} (blanco = fondo)`} loading="lazy" />
+                  <figcaption>Máscara del fondo</figcaption>
+                </figure>
+              )}
+            </section>
+          )}
 
           <ColorSwatchList
             groups={palette.groups}
@@ -231,8 +360,9 @@ export function ColorPalettePanel({
 
       {status === "idle" && (
         <p className="color-palette-panel__hint">
-          Pulsá &quot;Detectar paleta&quot; para agrupar los colores de la imagen original. Podés ajustar la
-          tolerancia y el número máximo de colores antes de detectar, y volver a fusionar/renombrar grupos después.
+          Pulsá &quot;Detectar paleta&quot; para agrupar los colores de la imagen original. Elegí el estilo de
+          agrupación, ajustá la tolerancia y, en Colores base, el objetivo de familias y la intensidad antes de
+          detectar; después podés fusionar/renombrar grupos.
         </p>
       )}
     </div>

@@ -13,7 +13,7 @@ import { formatNumber } from "./svgExport";
  * - **Ejes**: el origen es la esquina INFERIOR-izquierda del área de trabajo y Y crece hacia arriba: `y' = alto - (y - marco.y)` (SVG tiene Y hacia abajo).
  * - **Curvas**: aplanadas a polilíneas con un error máximo de `DXF_FLATNESS_MM`; el `transform` de cada objeto se aplica a los puntos.
  * - **Huecos**: DXF no tiene relleno ni regla de relleno: cada subpath (contorno exterior o hueco) es una polilínea más. Se conserva la geometría, no el relleno.
- * - **Capas**: una capa DXF por capa del editor (nombre saneado, único, ≤ 31 caracteres). Sin color ni relleno: solo geometría.
+ * - **Capas**: una capa DXF por capa del editor (nombre saneado, único, ≤ 31 caracteres). Cada capa lleva un color ACI propio y distinto (el más cercano al suyo, group code 62), porque el software de corte (p. ej. LightBurn) separa corte y grabado por color. Sin relleno: solo geometría.
  */
 
 /** Error máximo de aplanado de las curvas, en mm (10 µm: invisible en corte y grabado láser). */
@@ -152,12 +152,74 @@ export interface DxfLayerPlan {
   layer: EditableLayerMeta;
   /** Nombre de la capa en el DXF. */
   dxfName: string;
+  /** Color ACI (1-255) de la capa, distinto del de las demás capas mientras queden colores libres. */
+  aci: number;
 }
 
-/** Nombres DXF únicos para las capas, en el orden dado (el DXF reserva la capa «0»). */
+type Rgb = readonly [number, number, number];
+
+/** Paleta ACI de AutoCAD (índices 1-255; el 7 es blanco/negro y no se asigna salvo agotar la paleta). */
+const ACI_PALETTE: ReadonlyMap<number, Rgb> = (() => {
+  const palette = new Map<number, Rgb>([
+    [1, [255, 0, 0]], [2, [255, 255, 0]], [3, [0, 255, 0]], [4, [0, 255, 255]], [5, [0, 0, 255]], [6, [255, 0, 255]], [8, [65, 65, 65]], [9, [128, 128, 128]],
+  ]);
+  const hueToRgb = (hue: number): Rgb => {
+    const sector = hue / 60;
+    const x = 1 - Math.abs((sector % 2) - 1);
+    if (sector < 1) return [1, x, 0];
+    if (sector < 2) return [x, 1, 0];
+    if (sector < 3) return [0, 1, x];
+    if (sector < 4) return [0, x, 1];
+    if (sector < 5) return [x, 0, 1];
+    return [1, 0, x];
+  };
+  // 10-249: 24 tonos de 15° × 10 variantes (brillo 100/65/50/30/15 % con saturación plena y media).
+  const brightness = [1, 0.65, 0.5, 0.3, 0.15];
+  for (let hue = 0; hue < 24; hue += 1) {
+    const [r, g, b] = hueToRgb(hue * 15);
+    brightness.forEach((value, step) => {
+      const full = (channel: number): number => Math.round(channel * value * 255);
+      const half = (channel: number): number => Math.round((channel + (1 - channel) * 0.5) * value * 255);
+      palette.set(10 + hue * 10 + step * 2, [full(r), full(g), full(b)]);
+      palette.set(11 + hue * 10 + step * 2, [half(r), half(g), half(b)]);
+    });
+  }
+  [51, 91, 132, 173, 214, 255].forEach((grey, index) => palette.set(250 + index, [grey, grey, grey]));
+  return palette;
+})();
+
+function parseHexColor(hex: string): Rgb | null {
+  const match = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim());
+  if (!match) return null;
+  const digits = match[1].length === 3 ? [...match[1]].map((digit) => digit + digit).join("") : match[1];
+  return [parseInt(digits.slice(0, 2), 16), parseInt(digits.slice(2, 4), 16), parseInt(digits.slice(4, 6), 16)];
+}
+
+/** El ACI libre más cercano al color (distancia RGB); sin color legible, el primero libre. Agotada la paleta, 7. */
+function nearestFreeAci(colorHex: string, used: ReadonlySet<number>): number {
+  const target = parseHexColor(colorHex);
+  let best = 0;
+  let bestDistance = Infinity;
+  for (const [index, rgb] of ACI_PALETTE) {
+    if (used.has(index)) continue;
+    const distance = target ? (rgb[0] - target[0]) ** 2 + (rgb[1] - target[1]) ** 2 + (rgb[2] - target[2]) ** 2 : index;
+    if (distance < bestDistance) {
+      best = index;
+      bestDistance = distance;
+    }
+  }
+  return best === 0 ? 7 : best;
+}
+
+/** Nombres DXF únicos y colores ACI distintos para las capas, en el orden dado (el DXF reserva la capa «0»). */
 export function planDxfLayers(layers: readonly EditableLayerMeta[]): DxfLayerPlan[] {
   const taken = new Set<string>(["0"]);
-  return layers.map((layer) => ({ layer, dxfName: dxfLayerName(layer.name, taken) }));
+  const usedAci = new Set<number>();
+  return layers.map((layer) => {
+    const aci = nearestFreeAci(layer.colorHex, usedAci);
+    usedAci.add(aci);
+    return { layer, dxfName: dxfLayerName(layer.name, taken), aci };
+  });
 }
 
 export interface DxfBounds {
@@ -197,7 +259,7 @@ export function dxfLayerBody(document: ExportDocument, plan: DxfLayerPlan): DxfL
     if (geometry.partial) partialObjects += 1;
     for (const polyline of geometry.polylines) {
       polylines += 1;
-      lines.push(code(0, "POLYLINE"), code(8, plan.dxfName), integer(66, 1), real(10, 0), real(20, 0), real(30, 0), integer(70, polyline.closed ? 1 : 0));
+      lines.push(code(0, "POLYLINE"), code(8, plan.dxfName), integer(62, plan.aci), integer(66, 1), real(10, 0), real(20, 0), real(30, 0), integer(70, polyline.closed ? 1 : 0));
       for (const point of polyline.points) {
         vertices += 1;
         lines.push(code(0, "VERTEX"), code(8, plan.dxfName), real(10, point.x), real(20, point.y), real(30, 0));
@@ -283,7 +345,7 @@ export function assembleDxf(plans: readonly DxfLayerPlan[], bodies: readonly Dxf
     integer(62, 7),
     code(6, "CONTINUOUS"),
   ];
-  for (const plan of plans) parts.push(code(0, "LAYER"), code(2, plan.dxfName), integer(70, 0), integer(62, 7), code(6, "CONTINUOUS"));
+  for (const plan of plans) parts.push(code(0, "LAYER"), code(2, plan.dxfName), integer(70, 0), integer(62, plan.aci), code(6, "CONTINUOUS"));
   parts.push(code(0, "ENDTAB"), code(0, "ENDSEC"), code(0, "SECTION"), code(2, "ENTITIES"));
   return `${parts.join(NEWLINE)}${NEWLINE}${bodies.map((body) => body.text).join("")}${code(0, "ENDSEC")}${NEWLINE}${code(0, "EOF")}${NEWLINE}`;
 }

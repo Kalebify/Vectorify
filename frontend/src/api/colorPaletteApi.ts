@@ -1,5 +1,5 @@
 import { API_BASE_URL, httpClient } from "./httpClient";
-import type { ColorPaletteResponse } from "../types/colorPalette";
+import type { ColorPaletteResponse, GroupingStyle } from "../types/colorPalette";
 
 function baseUrl(projectId: string, imageId: string): string {
   return `/api/v1/projects/${projectId}/images/${imageId}/color-palette`;
@@ -13,12 +13,26 @@ function baseUrl(projectId: string, imageId: string): string {
 export function detectColorPalette(
   projectId: string,
   imageId: string,
-  params: { paletteId?: string | null; tolerance?: number | null; maxColors?: number | null },
+  params: {
+    paletteId?: string | null;
+    tolerance?: number | null;
+    maxColors?: number | null;
+    groupingStyle?: GroupingStyle | null;
+    targetFamilies?: number | null;
+    groupingStrength?: number | null;
+  },
   signal?: AbortSignal,
 ): Promise<ColorPaletteResponse> {
   return httpClient.postJson<ColorPaletteResponse>(
     `${baseUrl(projectId, imageId)}/detect`,
-    { paletteId: params.paletteId ?? null, tolerance: params.tolerance ?? null, maxColors: params.maxColors ?? null },
+    {
+      paletteId: params.paletteId ?? null,
+      tolerance: params.tolerance ?? null,
+      maxColors: params.maxColors ?? null,
+      groupingStyle: params.groupingStyle ?? null,
+      targetFamilies: params.targetFamilies ?? null,
+      groupingStrength: params.groupingStrength ?? null,
+    },
     { signal },
   );
 }

@@ -26,7 +26,17 @@ public sealed record ColorGroupPayload(
     bool HasPartialAlpha,
     bool IsExcluded,
     string MaskUrl,
-    bool IsMerged);
+    bool IsMerged,
+    bool IsBackground = false,
+    int PieceCount = 0,
+    int SourceGroupCount = 1);
+
+/// <summary>
+/// Qué se considera fondo en una paleta de estilo base_colors y qué quedó en duda (ver
+/// Vectorify.Api.ColorPalette.BackgroundInfo). <see cref="NeedsReview"/> pide revisión humana: no es una aprobación.
+/// </summary>
+public sealed record ColorPaletteBackgroundPayload(
+    double AreaPercent, double AmbiguousPercent, double ContactPercent, bool NeedsReview);
 
 /// <summary>
 /// Respuesta de POST .../color-palette/detect, POST .../merge, POST
@@ -49,4 +59,11 @@ public sealed record ColorPaletteResponse(
     IReadOnlyList<ColorGroupPayload> Groups,
     string PreviewUrl,
     bool IsConfirmed,
-    bool Cached);
+    bool Cached,
+    string GroupingStyle = "detailed",
+    int? TargetFamilies = null,
+    double GroupingStrength = 0.5,
+    int AlgorithmVersion = 0,
+    int FamilyCount = 0,
+    int PieceCount = 0,
+    ColorPaletteBackgroundPayload? Background = null);

@@ -64,7 +64,7 @@ El Laser Check del diálogo es **el mismo análisis** del panel de S14 (misma in
 
 **Versión**: ASCII, AutoCAD R12 (`$ACADVER = AC1009`) por compatibilidad. Líneas con `CRLF`; cada par «código de grupo / valor» en dos líneas, código alineado a 3 columnas, enteros a 6.
 
-**Secciones**: `HEADER` (`$ACADVER`, `$INSUNITS`, `$EXTMIN`, `$EXTMAX`), `TABLES` (`LTYPE CONTINUOUS`; `LAYER`: la capa `0` y una por layer del editor, color 7, línea `CONTINUOUS`), `ENTITIES`, `EOF`.
+**Secciones**: `HEADER` (`$ACADVER`, `$INSUNITS`, `$EXTMIN`, `$EXTMAX`), `TABLES` (`LTYPE CONTINUOUS`; `LAYER`: la capa `0` y una por layer del editor, un color ACI propio por layer (ver «Capas DXF»), línea `CONTINUOUS`), `ENTITIES`, `EOF`.
 
 **Unidades y ejes**
 
@@ -85,7 +85,7 @@ El Laser Check del diálogo es **el mismo análisis** del panel de S14 (misma in
 
 - `LWPOLYLINE` (no existe en R12), `LINE`, `ARC`, `CIRCLE`, `ELLIPSE`, `SPLINE` y arcos por *bulge*: **todas las curvas se aplanan a segmentos rectos**.
 - Texto (`TEXT`/`MTEXT`), bloques (`BLOCK`/`INSERT`), cotas, `HATCH`/relleno, imágenes, sólidos 3D.
-- Color, grosor de línea y relleno del objeto: **solo geometría** (todo en color 7 / `CONTINUOUS`). Una línea con trazo se exporta como su polilínea, sin el ancho del trazo.
+- Grosor de línea y relleno del objeto: **solo geometría**. El color es el de la capa (ACI, ver «Capas DXF»), no el del objeto. Una línea con trazo se exporta como su polilínea, sin el ancho del trazo.
 - Z siempre 0; no hay extrusión ni capas 3D.
 
 **Geometría**
@@ -97,6 +97,7 @@ El Laser Check del diálogo es **el mismo análisis** del panel de S14 (misma in
 - Se descartan vértices consecutivos repetidos; un «cerrado» de 2 vértices se escribe como línea abierta; un `M` suelto no genera nada. Un path con error de sintaxis se exporta hasta donde se puede leer (como lo dibuja el editor) y se avisa.
 - Coordenadas con hasta 6 decimales (1 nm en mm).
 - **Capas DXF**: nombre de la layer saneado a `[A-Z0-9_$-]`, máximo 31 caracteres, únicas (`-2`, `-3`…), nunca vacío ni `0`. Sin la operación en el nombre.
+- **Color de capa DXF (ACI)**: cada layer recibe el color ACI (1-255) más cercano a su color (distancia RGB) y distinto del de las demás (group code 62, en la tabla `LAYER` y en cada `POLYLINE`), para que LightBurn y similares —que separan corte y grabado por color— conserven las capas. Con más layers que colores libres (255) las sobrantes caen en 7.
 
 ## 7. PNG
 

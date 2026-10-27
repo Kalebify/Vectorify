@@ -1,0 +1,19 @@
+{
+  "card_id": "405d77b2-6398-8171-aa55-f0ba2f2d99e4",
+  "card_url": "https://app.notion.com/p/405d77b263988171aa55f0ba2f2d99e4",
+  "title": "Agrupar sombras y variantes en colores base antes de vectorizar (una capa por familia)",
+  "stack": "Frontend, ASP.NET Core, Python, Vector, Laser (stack del repo; propiedad Tecnologia inexistente)",
+  "branch": "sprint/405d77b2-colores-base-familias",
+  "column": "Test",
+  "phase": "review",
+  "fix_rounds": 0,
+  "preview_url": null,
+  "pr_url": "https://github.com/Kalebify/Vectorify/pull/67",
+  "started_at": "2026-10-27T00:00:00Z",
+  "exceptions": [
+    "Rama cortada desde origin/main + cherry-pick de a7978ca y e91fd29 (PR #66 abierto sobre la pila M3.1-S10, no mergeado): ver spec.md, ambiguedad 1.",
+    "Sin autorizacion de merge para esta tarjeta: PR abierto, el merge queda al usuario. Tarjeta en Test (nunca Done/OK).",
+    "NO VERIFICADO: CA-14 (importacion real en LightBurn). Laser Check del editor en Blocking (65 islas flotantes por solape ~0,4 px entre contornos adyacentes) y contaminacion > 1 % de la validacion raster-vector preexistente: documentados, no resueltos.",
+    "E2E de navegador verificado por tramos (paleta; editor + export SVG/DXF) mas E2E HTTP continuo; no hay un unico recorrido continuo de navegador."
+  ]
+}

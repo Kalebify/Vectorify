@@ -36,4 +36,5 @@ public sealed record ColorPaletteVersion(
     int SourceHeightPx,
     string QuantizedPreviewStorageKey,
     bool IsConfirmed,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    BackgroundInfo? Background = null);

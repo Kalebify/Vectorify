@@ -569,6 +569,32 @@ class ColorPaletteParams(BaseModel):
             "valor default con evidencia empírica antes/después en el reporte del sprint)."
         ),
     )
+    grouping_style: Literal["base_colors", "detailed"] = Field(
+        "detailed",
+        description=(
+            "Estilo de agrupación. 'detailed' (default, comportamiento histórico) conserva cada tono detectado. "
+            "'base_colors' reúne luces y sombras de una misma familia de color en UN grupo por familia antes de "
+            "vectorizar y separa el fondo como grupo técnico (ver app.core.color_families)."
+        ),
+    )
+    target_families: int | None = Field(
+        None,
+        ge=1,
+        le=16,
+        description=(
+            "Solo 'base_colors': tope de familias (NO una cuota: nunca se inventan familias que la imagen no "
+            "tiene). null = automático según grouping_strength. Se ignora en 'detailed'."
+        ),
+    )
+    grouping_strength: float = Field(
+        0.5,
+        ge=0,
+        le=1,
+        description=(
+            "Solo 'base_colors': intensidad de agrupación 0-1. Más alto fusiona más (tonos más lejanos, "
+            "luminosidades y saturaciones más distintas); 0 conserva diferencias intencionales. Se ignora en 'detailed'."
+        ),
+    )
 
 
 class ColorGroupPayload(BaseModel):
@@ -593,11 +619,42 @@ class ColorGroupPayload(BaseModel):
         )
     )
     mask_base64: str = Field(description="Máscara binaria (0/255) de este grupo, codificada como PNG en base64.")
+    is_background: bool = Field(
+        False,
+        description=(
+            "True para el grupo técnico de fondo (solo 'base_colors'): máscara independiente del color, no cuenta "
+            "como familia del dibujo. Vectorify.Api lo pre-marca como excluido; el usuario puede incluirlo."
+        ),
+    )
+    source_group_count: int = Field(
+        1, ge=1, description="Cuántos tonos detallados se reunieron en este grupo (1 en 'detailed')."
+    )
+    piece_count: int = Field(
+        0, ge=0, description="Piezas (componentes 8-conexos) de la máscara del grupo; una capa puede tener varias."
+    )
+
+
+class BackgroundPayload(BaseModel):
+    """Qué se considera fondo (estilo 'base_colors') y qué quedó en duda. Es evidencia para revisión humana,
+    nunca una aprobación: `needs_review` indica que hay blancos/claros junto al fondo que el color no distingue."""
+
+    pixel_count: int = Field(ge=0)
+    area_percent: float = Field(ge=0, le=100)
+    ambiguous_pixel_count: int = Field(ge=0, description="Fondo conectado solo por un cuello estrecho: conservado en su familia.")
+    ambiguous_percent: float = Field(ge=0, le=100)
+    contact_pixel_count: int = Field(ge=0, description="Objetos claros neutros gruesos pegados al fondo seguro.")
+    contact_percent: float = Field(ge=0, le=100)
+    needs_review: bool
 
 
 class ColorPaletteMetrics(BaseModel):
     color_count: int = Field(ge=0, examples=[4])
     transparent_percent: float = Field(ge=0, le=100, examples=[0.0])
+    family_count: int = Field(
+        0, ge=0, description="Grupos del dibujo (excluye el fondo técnico). En 'detailed' = color_count."
+    )
+    piece_count: int = Field(0, ge=0, description="Suma de piezas de los grupos del dibujo (excluye el fondo).")
+    background: BackgroundPayload | None = None
 
 
 class ColorPaletteResponse(BaseModel):
@@ -610,6 +667,9 @@ class ColorPaletteResponse(BaseModel):
     height: int
     content_type: str = Field(default="image/png", examples=["image/png"])
     effective_params: ColorPaletteParams
+    algorithm_version: int = Field(
+        1, ge=1, description="Versión del algoritmo de detección/agrupación (app.core.color_families.ALGORITHM_VERSION)."
+    )
     metrics: ColorPaletteMetrics
     groups: list[ColorGroupPayload]
     quantized_preview_base64: str = Field(

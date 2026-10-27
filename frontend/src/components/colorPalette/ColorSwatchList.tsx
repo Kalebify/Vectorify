@@ -173,6 +173,18 @@ function ColorSwatchRow({
         </span>
       )}
 
+      {group.isBackground && (
+        <span className="color-swatch__badge" title="Máscara de fondo independiente del color: no cuenta como familia del dibujo">
+          Fondo técnico
+        </span>
+      )}
+
+      {!group.isBackground && (group.pieceCount ?? 0) > 0 && (group.sourceGroupCount ?? 1) > 1 && (
+        <span className="color-swatch__meta" title="Una capa puede tener varias piezas desconectadas sin ser una capa duplicada">
+          {group.pieceCount} {group.pieceCount === 1 ? "pieza" : "piezas"} · {group.sourceGroupCount} tonos
+        </span>
+      )}
+
       {group.isMerged && (
         <button
           type="button"

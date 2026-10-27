@@ -28,9 +28,12 @@ export function layerObjects(document: ExportDocument, groupId: string): readonl
   return document.objectsByLayer[groupId] ?? [];
 }
 
-/** Selección por defecto de layers a exportar: las VISIBLES y distintas de IGNORE. */
+/**
+ * Selección por defecto de layers a exportar: las VISIBLES, distintas de IGNORE y NO excluidas en la paleta (p. ej. el grupo técnico de
+ * fondo del estilo «Colores base»). Una layer excluida sigue pudiéndose elegir a mano en el diálogo de exportación.
+ */
 export function defaultExportSelection(layers: readonly EditableLayerMeta[]): Set<string> {
-  return new Set(layers.filter((layer) => layer.visible && layer.manufacturingOperation !== "ignore").map((layer) => layer.groupId));
+  return new Set(layers.filter((layer) => layer.visible && !layer.isExcluded && layer.manufacturingOperation !== "ignore").map((layer) => layer.groupId));
 }
 
 /** Las capas elegidas, en orden de pintado. Un id que no existe se ignora. */
