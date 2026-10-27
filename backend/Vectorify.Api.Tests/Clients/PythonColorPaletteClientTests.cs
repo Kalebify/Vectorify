@@ -88,6 +88,66 @@ public sealed class PythonColorPaletteClientTests
     }
 
     [Fact]
+    public async Task DetectAsync_SendsTheGroupingParametersAsPartOfTheParamsField()
+    {
+        string? capturedBody = null;
+        var client = CreateClient(async (request, _) =>
+        {
+            capturedBody = await request.Content!.ReadAsStringAsync();
+            return JsonResponse(HttpStatusCode.OK, ColorPalettePayloads.FamiliesBody());
+        });
+
+        await client.DetectAsync(
+            new MemoryStream([1, 2, 3]), "image/png", "original.png",
+            new ColorPaletteParameters(12.0, null, 0.001, "base_colors", 5, 0.4, ColorPaletteAlgorithm.CurrentVersion));
+
+        Assert.Contains("\"grouping_style\":\"base_colors\"", capturedBody, StringComparison.Ordinal);
+        Assert.Contains("\"target_families\":5", capturedBody, StringComparison.Ordinal);
+        Assert.Contains("\"grouping_strength\":0.4", capturedBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DetectAsync_WhenResponseHasFamilies_DecodesBackgroundPiecesAndAlgorithmVersion()
+    {
+        var client = CreateClient((_, _) => Task.FromResult(JsonResponse(HttpStatusCode.OK, ColorPalettePayloads.FamiliesBody())));
+
+        var result = await InvokeAsync(client);
+
+        Assert.Equal(PythonColorPaletteState.Success, result.State);
+        Assert.Equal(new[] { false, false, true }, result.Groups!.Select(g => g.IsBackground));
+        Assert.Equal(new[] { 3, 1, 1 }, result.Groups!.Select(g => g.PieceCount));
+        Assert.Equal(new[] { 11, 9, 1 }, result.Groups!.Select(g => g.SourceGroupCount));
+        Assert.Equal(new BackgroundInfo(60.0, 0.0, 20.0, true), result.Background);
+        Assert.Equal(1, result.AlgorithmVersion);
+    }
+
+    [Fact]
+    public async Task DetectAsync_WhenAnEngineWithoutFamilySupportAnswers_KeepsTheLegacyShapeAndVersionZero()
+    {
+        var client = CreateClient((_, _) => Task.FromResult(JsonResponse(HttpStatusCode.OK, ColorPalettePayloads.SuccessBody())));
+
+        var result = await InvokeAsync(client);
+
+        Assert.Equal(PythonColorPaletteState.Success, result.State);
+        Assert.False(result.Groups![0].IsBackground);
+        Assert.Equal(1, result.Groups![0].SourceGroupCount);
+        Assert.Null(result.Background);
+        Assert.Equal(0, result.AlgorithmVersion);
+    }
+
+    [Fact]
+    public async Task DetectAsync_WhenTheEngineReturnsTwoBackgroundGroups_RejectsTheResponse()
+    {
+        var body = ColorPalettePayloads.FamiliesBody().Replace(
+            "\"is_background\": false, \"source_group_count\": 9", "\"is_background\": true, \"source_group_count\": 9");
+        var client = CreateClient((_, _) => Task.FromResult(JsonResponse(HttpStatusCode.OK, body)));
+
+        var result = await InvokeAsync(client);
+
+        Assert.Equal(PythonColorPaletteState.InvalidPaletteResponse, result.State);
+    }
+
+    [Fact]
     public async Task DetectAsync_WhenPythonReturnsCorruptImage_ReturnsCorruptImageState()
     {
         var client = CreateClient((_, _) => Task.FromResult(JsonResponse(

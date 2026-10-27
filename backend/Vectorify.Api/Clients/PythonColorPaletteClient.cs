@@ -43,7 +43,15 @@ public sealed class PythonColorPaletteClient : IPythonColorPaletteClient
         form.Add(fileContent, "file", fileName);
 
         var paramsJson = JsonSerializer.Serialize(
-            new { tolerance = parameters.Tolerance, max_colors = parameters.MaxColors, tiny_area_ratio = parameters.TinyAreaRatio },
+            new
+            {
+                tolerance = parameters.Tolerance,
+                max_colors = parameters.MaxColors,
+                tiny_area_ratio = parameters.TinyAreaRatio,
+                grouping_style = parameters.GroupingStyle,
+                target_families = parameters.TargetFamilies,
+                grouping_strength = parameters.GroupingStrength,
+            },
             JsonOptions);
         form.Add(new StringContent(paramsJson), "params");
 
@@ -117,7 +125,9 @@ public sealed class PythonColorPaletteClient : IPythonColorPaletteClient
                 groups,
                 payload.Metrics!.TransparentPercent,
                 previewBytes,
-                Message: null);
+                Message: null,
+                Background: ToBackgroundInfo(payload.Metrics.Background),
+                AlgorithmVersion: payload.AlgorithmVersion);
         }
     }
 
@@ -166,6 +176,12 @@ public sealed class PythonColorPaletteClient : IPythonColorPaletteClient
             return false;
         }
 
+        if (payload.Groups!.Count(g => g.IsBackground) > 1)
+        {
+            reason = "El motor Python devolvió más de un grupo de fondo.";
+            return false;
+        }
+
         var converted = new List<PythonColorGroupResult>(payload.Groups!.Count);
         foreach (var group in payload.Groups!)
         {
@@ -205,14 +221,26 @@ public sealed class PythonColorPaletteClient : IPythonColorPaletteClient
                 return false;
             }
 
+            if (group.PieceCount < 0 || group.SourceGroupCount < 1)
+            {
+                reason = $"piece_count/source_group_count inválidos devueltos por el motor Python para el grupo {group.Id}.";
+                return false;
+            }
+
             converted.Add(new PythonColorGroupResult(
-                group.Id, group.ColorHex!, group.PixelCount, group.AreaPercent, group.HasPartialAlpha, group.TouchesBorder, maskBytes));
+                group.Id, group.ColorHex!, group.PixelCount, group.AreaPercent, group.HasPartialAlpha, group.TouchesBorder, maskBytes,
+                group.IsBackground, group.PieceCount, group.SourceGroupCount));
         }
 
         groups = converted;
         reason = null;
         return true;
     }
+
+    private static BackgroundInfo? ToBackgroundInfo(PythonBackgroundPayload? background) =>
+        background is null
+            ? null
+            : new BackgroundInfo(background.AreaPercent, background.AmbiguousPercent, background.ContactPercent, background.NeedsReview);
 
     private static bool IsValidHexColor(string? colorHex)
     {

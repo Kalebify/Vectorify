@@ -90,4 +90,40 @@ internal static class ColorPalettePayloads
             }
             """);
     }
+
+    /// <summary>
+    /// Respuesta del estilo <c>base_colors</c> (agrupación por familias): dos familias del dibujo y el
+    /// grupo técnico de fondo (último, <c>is_background</c>), con el bloque de revisión del fondo.
+    /// </summary>
+    public static string FamiliesBody(int width = 1, int height = 1, bool needsReview = true, int algorithmVersion = 1) =>
+        string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $$"""
+            {
+              "width": {{width}},
+              "height": {{height}},
+              "content_type": "image/png",
+              "effective_params": {
+                "tolerance": 12.0, "max_colors": null, "tiny_area_ratio": 0.001,
+                "grouping_style": "base_colors", "target_families": 5, "grouping_strength": 0.5
+              },
+              "algorithm_version": {{algorithmVersion}},
+              "metrics": {
+                "color_count": 3, "transparent_percent": 0.0, "family_count": 2, "piece_count": 4,
+                "background": {
+                  "pixel_count": 6, "area_percent": 60.0, "ambiguous_pixel_count": 0, "ambiguous_percent": 0.0,
+                  "contact_pixel_count": 2, "contact_percent": 20.0, "needs_review": {{(needsReview ? "true" : "false")}}
+                }
+              },
+              "groups": [
+                { "id": 0, "color_hex": "#c8551f", "pixel_count": 3, "area_percent": 30.0, "has_partial_alpha": false,
+                  "touches_border": false, "mask_base64": "{{TinyPngBase64}}", "is_background": false, "source_group_count": 11, "piece_count": 3 },
+                { "id": 1, "color_hex": "#bea90e", "pixel_count": 1, "area_percent": 10.0, "has_partial_alpha": false,
+                  "touches_border": false, "mask_base64": "{{TinyPngBase64}}", "is_background": false, "source_group_count": 9, "piece_count": 1 },
+                { "id": 2, "color_hex": "#ffffff", "pixel_count": 6, "area_percent": 60.0, "has_partial_alpha": false,
+                  "touches_border": true, "mask_base64": "{{TinyPngBase64}}", "is_background": true, "source_group_count": 1, "piece_count": 1 }
+              ],
+              "quantized_preview_base64": "{{TinyPngBase64}}"
+            }
+            """);
 }

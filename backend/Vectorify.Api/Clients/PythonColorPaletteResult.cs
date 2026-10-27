@@ -1,3 +1,5 @@
+using Vectorify.Api.ColorPalette;
+
 namespace Vectorify.Api.Clients;
 
 /// <summary>Resultado tipado, sin excepciones, de pedirle una detección de paleta de colores al motor Python.</summary>
@@ -48,7 +50,16 @@ public enum PythonColorPaletteState
 /// descendente) para PRE-marcar un fondo dominante como excluido por default.
 /// </summary>
 public sealed record PythonColorGroupResult(
-    int Id, string ColorHex, long PixelCount, double AreaPercent, bool HasPartialAlpha, bool TouchesBorder, byte[] MaskBytes);
+    int Id,
+    string ColorHex,
+    long PixelCount,
+    double AreaPercent,
+    bool HasPartialAlpha,
+    bool TouchesBorder,
+    byte[] MaskBytes,
+    bool IsBackground = false,
+    int PieceCount = 0,
+    int SourceGroupCount = 1);
 
 public sealed record PythonColorPaletteResult(
     PythonColorPaletteState State,
@@ -58,4 +69,6 @@ public sealed record PythonColorPaletteResult(
     IReadOnlyList<PythonColorGroupResult>? Groups,
     double? TransparentPercent,
     byte[]? QuantizedPreviewBytes,
-    string? Message);
+    string? Message,
+    BackgroundInfo? Background = null,
+    int AlgorithmVersion = ColorPaletteAlgorithm.CurrentVersion);

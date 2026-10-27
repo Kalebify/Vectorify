@@ -32,6 +32,13 @@ namespace Vectorify.Api.ColorPalette;
 /// flag correctamente -- la exclusión EFECTIVA aguas abajo (que M2-S03 no
 /// tenga en cuenta un grupo excluido al generar capas) es responsabilidad de
 /// esa tarjeta, no de esta.
+///
+/// Agrupación por familias (estilo <c>base_colors</c>): <see cref="IsBackground"/> marca el grupo
+/// técnico de fondo (máscara independiente del color: no cuenta como familia del dibujo y se
+/// pre-excluye; el usuario puede incluirlo), <see cref="PieceCount"/> las piezas (componentes
+/// conexos) de la máscara -- una capa puede tener varias sin ser una capa duplicada -- y
+/// <see cref="SourceGroupCount"/> cuántos tonos detallados se reunieron en el grupo. Los tres
+/// tienen un valor por defecto para que los sidecars anteriores se rehidraten sin cambios.
 /// </summary>
 public sealed record ColorGroup(
     Guid GroupId,
@@ -43,4 +50,7 @@ public sealed record ColorGroup(
     bool IsExcluded,
     IReadOnlyList<int> RawGroupIds,
     string MaskStorageKey,
-    IReadOnlyList<ColorGroup>? MergedFrom);
+    IReadOnlyList<ColorGroup>? MergedFrom,
+    bool IsBackground = false,
+    int PieceCount = 0,
+    int SourceGroupCount = 1);

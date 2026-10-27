@@ -137,6 +137,18 @@ public sealed class ColorPaletteService : IColorPaletteService
                 return new ColorPaletteResult.UpstreamError(MapErrorCode(pythonResult.State), pythonResult.Message ?? "No se pudo detectar la paleta de colores.");
             }
 
+            // Lo que REALMENTE ejecutó el motor manda: si reporta otra versión de algoritmo, el registro la
+            // conserva (y por eso nunca se reutiliza como caché de la versión vigente).
+            if (pythonResult.AlgorithmVersion != parameters.AlgorithmVersion)
+            {
+                _logger.LogWarning(
+                    "El motor Python reportó la versión de algoritmo {Reported}; se esperaba {Expected}",
+                    pythonResult.AlgorithmVersion, parameters.AlgorithmVersion);
+                parameters = parameters with { AlgorithmVersion = pythonResult.AlgorithmVersion };
+            }
+
+            var isFamilyStyle = parameters.GroupingStyle == ColorPaletteAlgorithm.BaseColors;
+            var familyNumber = 0;
             var groups = new List<ColorGroup>();
             foreach (var pythonGroup in pythonResult.Groups!)
             {
@@ -154,9 +166,16 @@ public sealed class ColorPaletteService : IColorPaletteService
                     return new ColorPaletteResult.UpstreamError("storage_failure", "No se pudo guardar la máscara de un grupo de color.");
                 }
 
+                if (isFamilyStyle && !pythonGroup.IsBackground)
+                {
+                    familyNumber++;
+                }
+
                 groups.Add(new ColorGroup(
                     groupId,
-                    Name: $"Color {groups.Count + 1}",
+                    Name: isFamilyStyle
+                        ? (pythonGroup.IsBackground ? "Fondo" : $"Familia {familyNumber}")
+                        : $"Color {groups.Count + 1}",
                     ColorHex: pythonGroup.ColorHex,
                     PixelCount: pythonGroup.PixelCount,
                     AreaPercent: pythonGroup.AreaPercent,
@@ -167,10 +186,15 @@ public sealed class ColorPaletteService : IColorPaletteService
                     // excluido, y únicamente si además toca la mayoría de su perímetro (TouchesBorder, ver
                     // ColorGroup.cs). Es solo una sugerencia inicial: SetExclusionAsync permite cambiarla en
                     // cualquier momento sin afectar el GroupId ni ningún otro grupo.
-                    IsExcluded: groups.Count == 0 && pythonGroup.TouchesBorder,
+                    // En base_colors el fondo es un grupo técnico explícito (IsBackground) y es el único pre-excluido;
+                    // los blancos interiores viven en su familia y no se excluyen.
+                    IsExcluded: isFamilyStyle ? pythonGroup.IsBackground : groups.Count == 0 && pythonGroup.TouchesBorder,
                     RawGroupIds: new[] { pythonGroup.Id },
                     MaskStorageKey: maskStorageKey,
-                    MergedFrom: null));
+                    MergedFrom: null,
+                    IsBackground: pythonGroup.IsBackground,
+                    PieceCount: pythonGroup.PieceCount,
+                    SourceGroupCount: pythonGroup.SourceGroupCount));
             }
 
             var version = _paletteRegistry.NextVersion(projectId, imageId, paletteId);
@@ -199,7 +223,8 @@ public sealed class ColorPaletteService : IColorPaletteService
                 pythonResult.Height!.Value,
                 previewStorageKey,
                 IsConfirmed: false,
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow,
+                pythonResult.Background);
 
             _paletteRegistry.Save(record);
 
@@ -281,7 +306,11 @@ public sealed class ColorPaletteService : IColorPaletteService
                 IsExcluded: selected.All(g => g.IsExcluded),
                 RawGroupIds: selected.SelectMany(g => g.RawGroupIds).ToList(),
                 MaskStorageKey: mergedMaskKey,
-                MergedFrom: selected);
+                MergedFrom: selected,
+                // Fusionar solo produce un grupo técnico de fondo si TODOS lo eran.
+                IsBackground: selected.All(g => g.IsBackground),
+                PieceCount: selected.Sum(g => g.PieceCount),
+                SourceGroupCount: selected.Sum(g => g.SourceGroupCount));
 
             var newGroups = SortGroups(latest.Groups.Where(g => !distinctIds.Contains(g.GroupId)).Append(mergedGroup));
 
@@ -500,7 +529,7 @@ public sealed class ColorPaletteService : IColorPaletteService
     /// interno del registro).
     /// </summary>
     private static IReadOnlyList<ColorGroup> SortGroups(IEnumerable<ColorGroup> groups) =>
-        groups.OrderByDescending(g => g.AreaPercent).ThenBy(g => g.Name, StringComparer.Ordinal).ToList();
+        groups.OrderBy(g => g.IsBackground).ThenByDescending(g => g.AreaPercent).ThenBy(g => g.Name, StringComparer.Ordinal).ToList();
 
     private static SemaphoreSlim SessionGate(Guid projectId, Guid imageId, Guid paletteId) =>
         _sessionLocks.GetOrAdd($"{projectId:N}/{imageId:N}/{paletteId:N}", _ => new SemaphoreSlim(1, 1));

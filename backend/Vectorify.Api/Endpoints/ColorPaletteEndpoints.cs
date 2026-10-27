@@ -240,7 +240,18 @@ public static class ColorPaletteEndpoints
         record.Groups.Select(g => ToGroupPayload(record, g)).ToList(),
         PreviewUrl: $"{ColorPaletteUrl(record.ProjectId, record.ImageId, record.PaletteId)}/preview",
         record.IsConfirmed,
-        cached);
+        cached,
+        GroupingStyle: record.DetectionParameters.GroupingStyle,
+        TargetFamilies: record.DetectionParameters.TargetFamilies,
+        GroupingStrength: record.DetectionParameters.GroupingStrength,
+        AlgorithmVersion: record.DetectionParameters.AlgorithmVersion,
+        FamilyCount: record.Groups.Count(g => !g.IsBackground),
+        PieceCount: record.Groups.Where(g => !g.IsBackground).Sum(g => g.PieceCount),
+        Background: record.Background is null
+            ? null
+            : new ColorPaletteBackgroundPayload(
+                record.Background.AreaPercent, record.Background.AmbiguousPercent,
+                record.Background.ContactPercent, record.Background.NeedsReview));
 
     private static ColorGroupPayload ToGroupPayload(ColorPaletteVersion record, ColorGroup group) => new(
         group.GroupId,
@@ -252,7 +263,10 @@ public static class ColorPaletteEndpoints
         group.HasPartialAlpha,
         group.IsExcluded,
         MaskUrl: $"{ColorPaletteUrl(record.ProjectId, record.ImageId, record.PaletteId)}/groups/{group.GroupId}/mask",
-        IsMerged: group.MergedFrom is { Count: > 0 });
+        IsMerged: group.MergedFrom is { Count: > 0 },
+        IsBackground: group.IsBackground,
+        PieceCount: group.PieceCount,
+        SourceGroupCount: group.SourceGroupCount);
 
     /// <summary>
     /// Parsea "#rrggbb" (formato ya validado aguas arriba por

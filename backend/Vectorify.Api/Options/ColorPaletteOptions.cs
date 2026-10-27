@@ -36,4 +36,16 @@ public sealed class ColorPaletteOptions
     public double DefaultTinyAreaRatio { get; set; } = 0.001;
     public double MinTinyAreaRatio { get; set; } = 0.0;
     public double MaxTinyAreaRatio { get; set; } = 0.5;
+
+    // Agrupación por familias de color base (espejo de ColorPaletteParams del motor Python).
+    // DefaultGroupingStyle es "detailed" a propósito: una petición que omite el estilo -- y
+    // cualquier paleta/documento anterior -- conserva el comportamiento histórico, nunca cambia
+    // en silencio. La propuesta "Colores base" como valor inicial es decisión del frontend para
+    // detecciones NUEVAS (ver spec.md, ambigüedad 2).
+    public string DefaultGroupingStyle { get; set; } = ColorPalette.ColorPaletteAlgorithm.Detailed;
+    public int MinTargetFamilies { get; set; } = 1;
+    public int MaxTargetFamilies { get; set; } = 16;
+    public double DefaultGroupingStrength { get; set; } = 0.5;
+    public double MinGroupingStrength { get; set; } = 0.0;
+    public double MaxGroupingStrength { get; set; } = 1.0;
 }
