@@ -77,7 +77,9 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
-__all__ = ["ColorGroup", "PaletteDetectionResult", "detect_palette"]
+from app.core import color_families
+
+__all__ = ["BackgroundReport", "ColorGroup", "PaletteDetectionResult", "detect_base_color_palette", "detect_palette"]
 
 # Umbral de "toca el borde" (M2.1-S02): fracción del perímetro total de la
 # imagen que debe pertenecer a un grupo para considerarlo "candidato a fondo"
@@ -106,6 +108,26 @@ class ColorGroup:
     has_partial_alpha: bool
     touches_border: bool
     mask: np.ndarray
+    # Agrupación por familias (estilo `base_colors`). En el estilo detallado
+    # quedan en sus defaults: nada cambia para los consumidores existentes.
+    is_background: bool = False
+    source_group_count: int = 1
+    piece_count: int = 0
+
+
+@dataclass(frozen=True)
+class BackgroundReport:
+    """Qué se considera fondo y qué quedó en duda (estilo `base_colors`):
+    `ambiguous_pixel_count` = blanco/color de fondo conectado solo por un
+    cuello estrecho, conservado en su familia; `contact_pixel_count` = objetos
+    claros neutros pegados al fondo seguro. `needs_review` es evidencia para
+    revisión humana, no una aprobación."""
+
+    pixel_count: int
+    ambiguous_pixel_count: int
+    contact_pixel_count: int
+    needs_review: bool
+    ambiguous_mask: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -115,6 +137,7 @@ class PaletteDetectionResult:
     total_pixel_count: int
     transparent_pixel_count: int
     groups: list[ColorGroup] = field(default_factory=list)
+    background: BackgroundReport | None = None
 
 
 def extract_unique_colors(
@@ -469,6 +492,143 @@ def detect_palette(
         total_pixel_count=total_pixel_count,
         transparent_pixel_count=transparent_pixel_count,
         groups=groups,
+    )
+
+
+# Una pieza de menos de este área (px) es una mota de antialiasing, no una pieza
+# del dibujo: no se cuenta (se sigue trazando si el motor la conserva).
+_MIN_PIECE_AREA_PX = 16
+
+
+def _piece_count(mask: np.ndarray) -> int:
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats((mask == 255).astype(np.uint8), connectivity=8)
+    return int(np.count_nonzero(stats[1:, cv2.CC_STAT_AREA] >= _MIN_PIECE_AREA_PX)) if count > 1 else 0
+
+
+def detect_base_color_palette(
+    bgr: np.ndarray,
+    alpha: np.ndarray | None,
+    tolerance: float,
+    max_unique_colors: int,
+    tiny_area_ratio: float = 0.0,
+    target_families: int | None = None,
+    grouping_strength: float = 0.5,
+) -> PaletteDetectionResult:
+    """Estilo "Colores base": detecta los tonos con `detect_palette` (sin
+    tope de colores), separa el fondo como máscara independiente y reúne los
+    grupos de una misma familia (luces y sombras de un color base) en UNA
+    máscara por familia ANTES de vectorizar. Cada píxel opaco queda en
+    exactamente una familia o en el fondo; alpha 0 en ninguno.
+
+    Ver app.core.color_families para los criterios de clasificación/fusión,
+    `target_families` (tope, nunca cuota) y `grouping_strength` (0-1). El
+    resultado es determinista. Los grupos se devuelven por área descendente y
+    el fondo (si existe) al final con `is_background=True`.
+    """
+    detailed = detect_palette(bgr, alpha, tolerance, None, max_unique_colors, tiny_area_ratio=tiny_area_ratio)
+    if not detailed.groups:
+        return detailed
+
+    height, width = detailed.height, detailed.width
+    relevant = np.ones((height, width), dtype=bool) if alpha is None else alpha.reshape(height, width) > 0
+    thresholds = color_families.thresholds_for(grouping_strength)
+
+    masks = [g.mask for g in detailed.groups]
+    background = color_families.detect_background(
+        masks, [g.color_bgr for g in detailed.groups], bgr, relevant, tolerance, thresholds.neutral_chroma
+    )
+    background_pixels = background.mask == 255 if background is not None else np.zeros((height, width), dtype=bool)
+
+    source_indices: list[int] = []
+    counts: list[int] = []
+    for index, group in enumerate(detailed.groups):
+        remaining = int(np.count_nonzero((group.mask == 255) & ~background_pixels))
+        if remaining > 0:
+            source_indices.append(index)
+            counts.append(remaining)
+
+    if source_indices:
+        lab = color_families.lab_features(np.array([detailed.groups[i].color_bgr for i in source_indices], dtype=np.uint8))
+        labels = color_families.cluster_families(lab, np.array(counts, dtype=np.float64), grouping_strength, target_families)
+    else:
+        labels = []
+
+    family_ids = sorted(set(labels))
+    background_label = len(family_ids)
+    label_image = np.full((height, width), -1, dtype=np.int32)
+    members_by_family: list[list[int]] = []
+    for position, family_id in enumerate(family_ids):
+        members = [source_indices[i] for i, label in enumerate(labels) if label == family_id]
+        members_by_family.append(members)
+        for member in members:
+            label_image[(detailed.groups[member].mask == 255) & ~background_pixels] = position
+    if background is not None:
+        label_image[background_pixels] = background_label
+
+    # Los anillos de antialiasing de 1-2 px entre dos regiones se reparten entre
+    # los núcleos que los flanquean (ver color_families.resolve_transition_pixels).
+    family_lightness = []
+    for position in range(len(family_ids)):
+        mask = (label_image == position).astype(np.uint8)
+        family_lightness.append(float(color_families.lab_features(np.array([cv2.mean(bgr, mask=mask)[:3]], dtype=np.float64).round().astype(np.uint8))[0, 0]))
+    if background is not None:
+        bg_color = np.array([cv2.mean(bgr, mask=background.mask)[:3]], dtype=np.float64).round().astype(np.uint8)
+        family_lightness.append(float(color_families.lab_features(bg_color)[0, 0]))
+    label_image = color_families.resolve_transition_pixels(label_image, bgr, family_lightness)
+
+    families: list[ColorGroup] = []
+    for position, members in enumerate(members_by_family):
+        mask = np.where(label_image == position, np.uint8(255), np.uint8(0))
+        pixel_count = int(np.count_nonzero(mask))
+        if pixel_count == 0:
+            continue
+        mean = cv2.mean(bgr, mask=mask)[:3]
+        families.append(
+            ColorGroup(
+                color_bgr=tuple(int(round(v)) for v in np.clip(mean, 0, 255)),  # type: ignore[arg-type]
+                pixel_count=pixel_count,
+                has_partial_alpha=any(detailed.groups[m].has_partial_alpha for m in members),
+                touches_border=_border_touch_ratio(mask) >= _BACKGROUND_BORDER_TOUCH_RATIO,
+                mask=mask,
+                source_group_count=len(members),
+                piece_count=_piece_count(mask),
+            )
+        )
+    families.sort(key=lambda g: (-g.pixel_count, g.color_bgr))
+
+    groups = list(families)
+    report: BackgroundReport | None = None
+    if background is not None:
+        bg_mask = np.where(label_image == background_label, np.uint8(255), np.uint8(0))
+        bg_mean = cv2.mean(bgr, mask=bg_mask)[:3]
+        groups.append(
+            ColorGroup(
+                color_bgr=tuple(int(round(v)) for v in np.clip(bg_mean, 0, 255)),  # type: ignore[arg-type]
+                pixel_count=int(np.count_nonzero(bg_mask)),
+                has_partial_alpha=bool(detailed.groups[background.reference_group].has_partial_alpha),
+                touches_border=True,
+                mask=bg_mask,
+                is_background=True,
+                source_group_count=1,
+                piece_count=_piece_count(bg_mask),
+            )
+        )
+        ambiguous_count = int(np.count_nonzero(background.ambiguous))
+        report = BackgroundReport(
+            pixel_count=int(np.count_nonzero(bg_mask)),
+            ambiguous_pixel_count=ambiguous_count,
+            contact_pixel_count=background.contact_pixel_count,
+            needs_review=ambiguous_count > 0 or background.contact_pixel_count > 0,
+            ambiguous_mask=background.ambiguous if ambiguous_count > 0 else None,
+        )
+
+    return PaletteDetectionResult(
+        width=width,
+        height=height,
+        total_pixel_count=detailed.total_pixel_count,
+        transparent_pixel_count=detailed.transparent_pixel_count,
+        groups=groups,
+        background=report,
     )
 
 

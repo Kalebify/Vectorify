@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 import pytest
 
+from app.core import color_families
 from app.core.color_palette_pipeline import PaletteDetectionResult
 from app.core.config import Settings
 from app.core.errors import CorruptImageError, DimensionsExceededError
@@ -27,6 +28,7 @@ from tests.support import (
     make_png_bytes,
     make_rgba_png_bytes,
     make_shadow_png_bytes,
+    make_shaded_character_png_bytes,
     make_solid_colors_png_bytes,
 )
 
@@ -233,3 +235,71 @@ def test_process_raises_timeout_error_when_detection_exceeds_budget():
 
     with pytest.raises(ColorPaletteTimeoutError):
         fast_timeout_service.process(data, ColorPaletteParams())
+
+
+# --- Agrupación por familias (estilo base_colors): contrato del servicio ---
+
+
+def test_process_base_colors_returns_families_background_last_and_family_metrics(service):
+    data = make_shaded_character_png_bytes()
+
+    result = service.process(data, ColorPaletteParams(tolerance=8.0, grouping_style="base_colors"))
+
+    assert result.effective_params.grouping_style == "base_colors"
+    assert result.algorithm_version == color_families.ALGORITHM_VERSION
+    assert result.metrics.family_count == 5
+    assert result.metrics.color_count == 6  # 5 familias + grupo técnico de fondo
+    assert [g.is_background for g in result.groups] == [False] * 5 + [True]
+    assert result.metrics.piece_count == sum(g.piece_count for g in result.groups if not g.is_background)
+    assert max(g.piece_count for g in result.groups) >= 2
+    background = result.metrics.background
+    assert background is not None
+    assert background.pixel_count == result.groups[-1].pixel_count
+    assert background.needs_review is False and background.ambiguous_pixel_count == 0
+
+
+def test_process_base_colors_masks_are_exact_partition_of_the_image(service):
+    data = make_shaded_character_png_bytes()
+
+    result = service.process(data, ColorPaletteParams(tolerance=8.0, grouping_style="base_colors"))
+
+    masks = [
+        cv2.imdecode(np.frombuffer(base64.b64decode(g.mask_base64), dtype=np.uint8), cv2.IMREAD_UNCHANGED) == 255
+        for g in result.groups
+    ]
+    stack = np.stack(masks)
+    assert int(stack.sum(axis=0).max()) == 1 and int(stack.sum(axis=0).min()) == 1
+
+
+def test_process_detailed_style_is_the_default_and_keeps_legacy_contract(service):
+    data = make_shaded_character_png_bytes()
+
+    result = service.process(data, ColorPaletteParams(tolerance=8.0))
+
+    assert result.effective_params.grouping_style == "detailed"
+    assert all(not g.is_background for g in result.groups)
+    assert result.metrics.family_count == result.metrics.color_count > 5
+    assert result.metrics.background is None
+
+
+def test_process_base_colors_ignores_max_colors_and_honors_target_families(service):
+    data = make_shaded_character_png_bytes()
+
+    result = service.process(
+        data, ColorPaletteParams(tolerance=8.0, max_colors=1, grouping_style="base_colors", target_families=3)
+    )
+
+    assert result.metrics.family_count == 3
+
+
+def test_process_base_colors_timeout_uses_the_same_budget():
+    def slow_detect(*args, **kwargs) -> PaletteDetectionResult:
+        import time
+
+        time.sleep(0.2)
+        return PaletteDetectionResult(width=1, height=1, total_pixel_count=1, transparent_pixel_count=0, groups=[])
+
+    fast_timeout_service = ColorPaletteService(Settings(color_palette_timeout_seconds=0), family_detect_fn=slow_detect)
+
+    with pytest.raises(ColorPaletteTimeoutError):
+        fast_timeout_service.process(make_png_bytes(4, 4), ColorPaletteParams(grouping_style="base_colors"))

@@ -339,3 +339,58 @@ def make_antialiased_illustration_png_bytes(width: int = 300, height: int = 300)
 
 
 NOT_AN_IMAGE = b"esto no es una imagen"
+
+
+# --- Imágenes sintéticas por familias de color (agrupación en colores base) ---
+
+WHITE = (254, 255, 255)  # BGR, ligeramente distinto de 255 puro (antialias típico de fondo renderizado)
+
+
+def lch_to_bgr(lightness: float, chroma: float, hue_deg: float) -> tuple[int, int, int]:
+    """Lab (cilíndrico) -> BGR uint8 mediante OpenCV (float32, Lab real)."""
+    a = chroma * np.cos(np.deg2rad(hue_deg))
+    b = chroma * np.sin(np.deg2rad(hue_deg))
+    lab = np.array([[[lightness, a, b]]], dtype=np.float32)
+    bgr = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)[0, 0]
+    return tuple(int(v) for v in np.clip(np.rint(bgr * 255), 0, 255))
+
+
+def blank(height: int, width: int) -> np.ndarray:
+    return np.full((height, width, 3), WHITE, dtype=np.uint8)
+
+
+def paint_rect(image, y0, y1, x0, x1, color):
+    image[y0:y1, x0:x1] = color
+
+
+def paint_ellipse(image, cx, cy, rx, ry, color):
+    cv2.ellipse(image, (cx, cy), (rx, ry), 0, 0, 360, color, -1)
+
+
+def shaded_character() -> np.ndarray:
+    """Personaje sintético: cuerpo amarillo (3 tonos) con dos piezas naranja
+    (pico y pie, 3 tonos), sombrero verde (2 tonos), pupila negra y un 'ojo'
+    blanco-gris sombreado (neutro, con tinte cálido tenue) rodeado de amarillo.
+    Fondo blanco. Ningún valor depende de un personaje real."""
+    image = blank(300, 220)
+    paint_rect(image, 80, 130, 60, 160, lch_to_bgr(80, 78, 96))    # amarillo claro
+    paint_rect(image, 130, 180, 60, 160, lch_to_bgr(70, 74, 95))   # amarillo medio
+    paint_rect(image, 180, 230, 60, 160, lch_to_bgr(56, 62, 93))   # amarillo sombra
+    paint_rect(image, 20, 55, 70, 150, lch_to_bgr(48, 55, 148))    # verde medio
+    paint_rect(image, 55, 80, 70, 150, lch_to_bgr(33, 42, 146))    # verde sombra
+    paint_rect(image, 100, 120, 160, 215, lch_to_bgr(60, 78, 50))  # naranja (pico) luz
+    paint_rect(image, 120, 135, 160, 215, lch_to_bgr(46, 63, 49))  # naranja (pico) sombra
+    paint_rect(image, 255, 285, 20, 100, lch_to_bgr(56, 70, 51))   # naranja (pie) medio
+    paint_rect(image, 285, 295, 20, 100, lch_to_bgr(36, 50, 48))   # naranja (pie) sombra oscura
+    paint_ellipse(image, 110, 150, 40, 45, lch_to_bgr(96, 2, 100)) # blanco del ojo
+    paint_ellipse(image, 110, 175, 30, 12, lch_to_bgr(84, 4, 60))  # sombra gris del ojo
+    paint_ellipse(image, 80, 162, 16, 7, lch_to_bgr(66, 9, 52))    # sombra gris cálida (no debe ser naranja)
+    paint_ellipse(image, 110, 140, 10, 16, lch_to_bgr(1, 0, 0))    # pupila
+    return image
+
+
+
+def make_shaded_character_png_bytes() -> bytes:
+    success, buffer = cv2.imencode(".png", shaded_character())
+    assert success
+    return buffer.tobytes()

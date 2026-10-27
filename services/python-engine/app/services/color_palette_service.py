@@ -18,22 +18,32 @@ from typing import Callable
 
 import imagesize
 
-from app.core import color_palette_pipeline, pipeline, threshold_pipeline
+from app.core import color_families, color_palette_pipeline, pipeline, threshold_pipeline
 from app.core.color_palette_pipeline import PaletteDetectionResult
 from app.core.config import Settings
 from app.core.errors import ColorPaletteTimeoutError, DimensionsExceededError
-from app.models.schemas import ColorGroupPayload, ColorPaletteMetrics, ColorPaletteParams, ColorPaletteResponse
+from app.models.schemas import (
+    BackgroundPayload,
+    ColorGroupPayload,
+    ColorPaletteMetrics,
+    ColorPaletteParams,
+    ColorPaletteResponse,
+)
 
 DetectFn = Callable[..., PaletteDetectionResult]
 
 
 class ColorPaletteService:
-    def __init__(self, settings: Settings, detect_fn: DetectFn | None = None) -> None:
+    def __init__(
+        self, settings: Settings, detect_fn: DetectFn | None = None, family_detect_fn: DetectFn | None = None
+    ) -> None:
         self._settings = settings
         # Inyectable (mismo criterio que SimplifyFn en SimplificationService)
         # para poder simular un clustering lento en tests de timeout sin
         # depender de que el algoritmo real tarde.
         self._detect_fn = detect_fn or color_palette_pipeline.detect_palette
+        # Estilo "Colores base": mismo presupuesto de tiempo, misma inyección.
+        self._family_detect_fn = family_detect_fn or color_palette_pipeline.detect_base_color_palette
 
     def process(self, data: bytes, params: ColorPaletteParams) -> ColorPaletteResponse:
         """Detecta la paleta de colores a partir de los bytes recibidos (la
@@ -66,9 +76,13 @@ class ColorPaletteService:
                 has_partial_alpha=group.has_partial_alpha,
                 touches_border=group.touches_border,
                 mask_base64=base64.b64encode(pipeline.encode_png(group.mask)).decode("ascii"),
+                is_background=group.is_background,
+                source_group_count=group.source_group_count,
+                piece_count=group.piece_count,
             )
             for index, group in enumerate(result.groups)
         ]
+        drawing_groups = [g for g in groups if not g.is_background]
 
         transparent_percent = (
             result.transparent_pixel_count / result.total_pixel_count * 100.0 if result.total_pixel_count else 0.0
@@ -79,7 +93,14 @@ class ColorPaletteService:
             height=result.height,
             content_type="image/png",
             effective_params=params,
-            metrics=ColorPaletteMetrics(color_count=len(groups), transparent_percent=transparent_percent),
+            algorithm_version=color_families.ALGORITHM_VERSION,
+            metrics=ColorPaletteMetrics(
+                color_count=len(groups),
+                transparent_percent=transparent_percent,
+                family_count=len(drawing_groups),
+                piece_count=sum(g.piece_count for g in drawing_groups),
+                background=_background_payload(result),
+            ),
             groups=groups,
             quantized_preview_base64=preview_base64,
         )
@@ -110,15 +131,27 @@ class ColorPaletteService:
         `with` esperaría a que el hilo colgado termine, anulando el propósito
         del timeout."""
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(
-            self._detect_fn,
-            bgr_image,
-            alpha,
-            params.tolerance,
-            params.max_colors,
-            self._settings.max_palette_unique_colors,
-            params.tiny_area_ratio,
-        )
+        if params.grouping_style == "base_colors":
+            future = executor.submit(
+                self._family_detect_fn,
+                bgr_image,
+                alpha,
+                params.tolerance,
+                self._settings.max_palette_unique_colors,
+                params.tiny_area_ratio,
+                params.target_families,
+                params.grouping_strength,
+            )
+        else:
+            future = executor.submit(
+                self._detect_fn,
+                bgr_image,
+                alpha,
+                params.tolerance,
+                params.max_colors,
+                self._settings.max_palette_unique_colors,
+                params.tiny_area_ratio,
+            )
         try:
             result = future.result(timeout=self._settings.color_palette_timeout_seconds)
         except concurrent.futures.TimeoutError as exc:
@@ -128,6 +161,22 @@ class ColorPaletteService:
             ) from exc
         executor.shutdown(wait=True)
         return result
+
+
+def _background_payload(result: PaletteDetectionResult) -> BackgroundPayload | None:
+    report = result.background
+    if report is None or not result.total_pixel_count:
+        return None
+    total = result.total_pixel_count
+    return BackgroundPayload(
+        pixel_count=report.pixel_count,
+        area_percent=report.pixel_count / total * 100.0,
+        ambiguous_pixel_count=report.ambiguous_pixel_count,
+        ambiguous_percent=report.ambiguous_pixel_count / total * 100.0,
+        contact_pixel_count=report.contact_pixel_count,
+        contact_percent=report.contact_pixel_count / total * 100.0,
+        needs_review=report.needs_review,
+    )
 
 
 def _ensure_three_channels(image):

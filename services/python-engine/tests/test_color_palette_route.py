@@ -22,6 +22,7 @@ from tests.support import (
     make_png_bytes,
     make_rgba_png_bytes,
     make_shadow_png_bytes,
+    make_shaded_character_png_bytes,
     make_solid_colors_png_bytes,
 )
 
@@ -49,6 +50,7 @@ def test_color_palette_returns_expected_contract(client):
     assert body["metrics"]["color_count"] == len(body["groups"]) == 3
     assert set(body["groups"][0].keys()) == {
         "id", "color_hex", "pixel_count", "area_percent", "has_partial_alpha", "touches_border", "mask_base64",
+        "is_background", "source_group_count", "piece_count",
     }
     for group in body["groups"]:
         assert group["color_hex"].startswith("#") and len(group["color_hex"]) == 7
@@ -221,3 +223,50 @@ def test_color_palette_touches_border_field_is_present_on_every_group(client):
     assert response.status_code == 200
     for group in response.json()["groups"]:
         assert isinstance(group["touches_border"], bool)
+
+
+# --- Agrupación por familias (base_colors): contrato HTTP ---
+
+
+def test_color_palette_base_colors_contract_exposes_families_background_and_version(client):
+    response = _post_color_palette(
+        client,
+        make_shaded_character_png_bytes(),
+        {"tolerance": 8.0, "grouping_style": "base_colors", "target_families": 5, "grouping_strength": 0.5},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["effective_params"]["grouping_style"] == "base_colors"
+    assert body["effective_params"]["target_families"] == 5
+    assert body["effective_params"]["grouping_strength"] == 0.5
+    assert body["algorithm_version"] == 1
+    assert body["metrics"]["family_count"] == 5
+    assert body["metrics"]["color_count"] == len(body["groups"]) == 6
+    assert body["metrics"]["background"]["needs_review"] is False
+    assert [g["is_background"] for g in body["groups"]] == [False] * 5 + [True]
+
+
+def test_color_palette_without_style_keeps_the_detailed_legacy_behavior(client):
+    response = _post_color_palette(client, make_shaded_character_png_bytes(), {"tolerance": 8.0})
+
+    body = response.json()
+    assert body["effective_params"]["grouping_style"] == "detailed"
+    assert body["metrics"]["background"] is None
+    assert not any(g["is_background"] for g in body["groups"])
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"grouping_style": "other"},
+        {"grouping_style": "base_colors", "target_families": 0},
+        {"grouping_style": "base_colors", "target_families": 17},
+        {"grouping_style": "base_colors", "grouping_strength": 1.5},
+        {"grouping_style": "base_colors", "grouping_strength": -0.1},
+    ],
+)
+def test_color_palette_rejects_invalid_grouping_parameters(client, params):
+    response = _post_color_palette(client, make_shaded_character_png_bytes(), params)
+
+    assert response.status_code == 422
