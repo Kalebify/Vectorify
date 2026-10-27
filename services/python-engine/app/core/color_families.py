@@ -41,7 +41,9 @@ __all__ = [
     "FamilyThresholds",
     "cluster_families",
     "detect_background",
+    "absorb_speckles",
     "lab_features",
+    "speckle_area",
     "resolve_transition_pixels",
     "thresholds_for",
 ]
@@ -404,4 +406,45 @@ def resolve_transition_pixels(
     zero_label = core_label[core_any]  # el n-ésimo píxel nulo (orden row-major) tiene la etiqueta n+1
     refined = labels.copy()
     refined[ys[candidate], xs[candidate]] = zero_label[nearest[ys[candidate], xs[candidate]] - 1]
+    return refined
+
+
+# --- Motas (piezas minúsculas) ---
+
+# Una pieza de menos área que esto es una mota de antialiasing/ruido, no una pieza del dibujo: se absorbe en la región que la rodea.
+# Relativo a los píxeles relevantes (así escala con la imagen) y con un mínimo absoluto; ver spec.md (ambigüedad 4).
+SPECKLE_AREA_RATIO = 1e-5
+SPECKLE_AREA_MIN_PX = 4
+
+
+def speckle_area(relevant_pixel_count: int) -> int:
+    return max(SPECKLE_AREA_MIN_PX, int(round(SPECKLE_AREA_RATIO * relevant_pixel_count)))
+
+
+def absorb_speckles(labels: np.ndarray, min_area: int) -> np.ndarray:
+    """Reasigna al vecino más cercano las piezas (componentes 8-conexos de una
+    etiqueta) con menos de `min_area` píxeles: motas que, al trazarse, serían
+    islas diminutas del tamaño de un grano que se caen al cortar. Las piezas
+    desconectadas de tamaño real y los agujeros no se tocan. `labels` usa -1
+    para "sin grupo" (nunca recibe etiquetas). La partición sigue siendo
+    exacta."""
+    height, width = labels.shape
+    tiny = np.zeros(labels.shape, dtype=bool)
+    for label in np.unique(labels):
+        if label < 0:
+            continue
+        count, components, stats, _ = cv2.connectedComponentsWithStats((labels == label).astype(np.uint8), connectivity=8)
+        small = [i for i in range(1, count) if stats[i, cv2.CC_STAT_AREA] < min_area]
+        if small:
+            tiny |= np.isin(components, small)
+    if not tiny.any():
+        return labels
+    valid = (labels >= 0) & ~tiny
+    if not valid.any():
+        return labels
+    source = np.where(valid, 0, 1).astype(np.uint8)
+    _distance, nearest = cv2.distanceTransformWithLabels(source, cv2.DIST_L2, 3, labelType=cv2.DIST_LABEL_PIXEL)
+    zero_label = labels[valid]  # el n-ésimo píxel nulo (orden row-major) tiene la etiqueta n+1
+    refined = labels.copy()
+    refined[tiny] = zero_label[nearest[tiny] - 1]
     return refined

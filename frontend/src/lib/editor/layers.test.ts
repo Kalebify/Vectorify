@@ -83,6 +83,19 @@ describe("layers — snapshots de estructura (undo/redo)", () => {
       { groupId: "N", name: "Nueva", colorHex: "#00ff00", order: 1, visible: true, locked: true, manufacturingOperation: "unassigned", isNew: true },
     ]);
   });
+
+  it("toLayerMetas conserva la exclusión de la paleta (fondo técnico) solo cuando es true, sin alterar el resto de las metas", () => {
+    const layers = [
+      { groupId: "F", name: "Familia 1", colorHex: "#c8551f", order: 0, visible: true, locked: false, manufacturingOperation: "cut" as const, isExcluded: false },
+      { groupId: "B", name: "Fondo", colorHex: "#ffffff", order: 1, visible: true, locked: false, manufacturingOperation: "unassigned" as const, isExcluded: true },
+    ];
+
+    const metas = toLayerMetas(layers, () => true);
+
+    expect("isExcluded" in metas[0]).toBe(false);
+    expect(metas[1].isExcluded).toBe(true);
+    expect(sameLayerMeta(metas[0], { ...metas[0] })).toBe(true);
+  });
 });
 
 describe("layers — posición de capas nuevas al reordenar", () => {

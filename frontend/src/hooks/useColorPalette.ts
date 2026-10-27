@@ -9,7 +9,7 @@ import {
 } from "../api/colorPaletteApi";
 import { ApiClientError } from "../api/httpClient";
 import type { ApiErrorResponse } from "../types/preprocess";
-import type { ColorPaletteErrorCode, ColorPaletteResponse } from "../types/colorPalette";
+import type { ColorPaletteErrorCode, ColorPaletteResponse, GroupingStyle } from "../types/colorPalette";
 
 /**
  * Estados explícitos pedidos por spec.md M2-S01: "ver paleta detectada,
@@ -49,12 +49,24 @@ export interface UseColorPaletteState {
   palette: ColorPaletteResponse | null;
   tolerance: number;
   maxColors: number | null;
+  /**
+   * Estilo de agrupación para la PRÓXIMA detección. Valor inicial `base_colors` (recomendado, solo para
+   * detecciones nuevas: nunca cambia una paleta ya detectada ni reabre documentos anteriores).
+   */
+  groupingStyle: GroupingStyle;
+  /** Tope de familias (solo `base_colors`); null = automático. */
+  targetFamilies: number | null;
+  /** Intensidad de agrupación 0-1 (solo `base_colors`). */
+  groupingStrength: number;
   /** GroupId de los grupos actualmente seleccionados para fusionar (selección múltiple). */
   selectedGroupIds: string[];
   errorCode: ColorPaletteErrorCode | null;
   errorMessage: string | null;
   setTolerance: (tolerance: number) => void;
   setMaxColors: (maxColors: number | null) => void;
+  setGroupingStyle: (style: GroupingStyle) => void;
+  setTargetFamilies: (families: number | null) => void;
+  setGroupingStrength: (strength: number) => void;
   /** Detecta (o re-detecta, si ya hay una sesión abierta) con la tolerancia/maxColors vigentes. */
   detect: () => void;
   toggleGroupSelection: (groupId: string) => void;
@@ -73,6 +85,9 @@ export function useColorPalette(projectId: string, imageId: string): UseColorPal
   const [palette, setPalette] = useState<ColorPaletteResponse | null>(null);
   const [tolerance, setTolerance] = useState(12);
   const [maxColors, setMaxColors] = useState<number | null>(null);
+  const [groupingStyle, setGroupingStyle] = useState<GroupingStyle>("base_colors");
+  const [targetFamilies, setTargetFamilies] = useState<number | null>(null);
+  const [groupingStrength, setGroupingStrength] = useState(0.5);
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
   const [errorCode, setErrorCode] = useState<ColorPaletteErrorCode | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -105,6 +120,13 @@ export function useColorPalette(projectId: string, imageId: string): UseColorPal
 
   const applyPalette = useCallback((response: ColorPaletteResponse) => {
     setPalette(response);
+    // Los controles reflejan lo que REALMENTE produjo la paleta: una respuesta sin estilo (API anterior)
+    // es una paleta detallada, nunca se presenta como "Colores base".
+    setGroupingStyle(response.groupingStyle ?? "detailed");
+    setTargetFamilies(response.targetFamilies ?? null);
+    if (typeof response.groupingStrength === "number") {
+      setGroupingStrength(response.groupingStrength);
+    }
     setSelectedGroupIds([]);
     setStatus(response.isConfirmed ? "confirmed" : "ready");
     setErrorCode(null);
@@ -139,11 +161,18 @@ export function useColorPalette(projectId: string, imageId: string): UseColorPal
       detectColorPalette(
         projectId,
         imageId,
-        { paletteId: palette && !palette.isConfirmed ? palette.paletteId : null, tolerance, maxColors },
+        {
+          paletteId: palette && !palette.isConfirmed ? palette.paletteId : null,
+          tolerance,
+          maxColors: groupingStyle === "detailed" ? maxColors : null,
+          groupingStyle,
+          targetFamilies: groupingStyle === "base_colors" ? targetFamilies : null,
+          groupingStrength: groupingStyle === "base_colors" ? groupingStrength : null,
+        },
         signal,
       ),
     );
-  }, [runRequest, projectId, imageId, palette, tolerance, maxColors]);
+  }, [runRequest, projectId, imageId, palette, tolerance, maxColors, groupingStyle, targetFamilies, groupingStrength]);
 
   const toggleGroupSelection = useCallback((groupId: string) => {
     setSelectedGroupIds((current) =>
@@ -216,11 +245,17 @@ export function useColorPalette(projectId: string, imageId: string): UseColorPal
     palette,
     tolerance,
     maxColors,
+    groupingStyle,
+    targetFamilies,
+    groupingStrength,
     selectedGroupIds,
     errorCode,
     errorMessage,
     setTolerance,
     setMaxColors,
+    setGroupingStyle,
+    setTargetFamilies,
+    setGroupingStrength,
     detect,
     toggleGroupSelection,
     clearSelection,

@@ -73,6 +73,11 @@ export interface EditableLayerMeta {
   locked: boolean;
   manufacturingOperation: ManufacturingOperationValue;
   isNew: boolean;
+  /**
+   * Excluida en la paleta de colores (p. ej. el grupo técnico de fondo del estilo «Colores base»). Solo se informa cuando es `true`
+   * (ausente = incluida): no forma parte de la identidad de la meta ni del historial, solo del valor por defecto del export.
+   */
+  isExcluded?: boolean;
 }
 
 /** Estado editable en memoria (ADR D2): objetos por capa en orden de pintado (el último queda arriba). */

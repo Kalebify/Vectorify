@@ -420,3 +420,42 @@ def test_family_union_keeps_separate_pieces_in_one_group_without_bridging_them()
     assert family.piece_count == 2
     assert family.mask[30, 70] == 0, "el hueco entre las piezas no se rellena"
     assert family.pixel_count == 2 * 35 * 50
+
+
+# --- Motas: piezas minúsculas ---
+
+
+def test_speckles_inside_a_region_are_absorbed_but_real_small_pieces_survive():
+    image = blank(200, 200)
+    paint_rect(image, 20, 180, 20, 180, lch_to_bgr(55, 60, 40))
+    paint_rect(image, 60, 61, 60, 63, lch_to_bgr(80, 70, 95))      # mota de 1x3 = 3 px < mínimo (4 px)
+    paint_rect(image, 100, 112, 100, 112, lch_to_bgr(80, 70, 95))  # pieza real de 12x12 (144 px)
+
+    result = detect(image, tolerance=6.0)
+
+    yellow = result.groups[group_index_at(result, 105, 105)]
+    orange = result.groups[group_index_at(result, 30, 30)]
+    assert yellow.pixel_count == 144 and yellow.piece_count == 1
+    assert orange.mask[60, 60] == 255 and orange.mask[60, 62] == 255, "la mota quedó en la región que la rodea"
+    stack = np.stack([g.mask == 255 for g in result.groups])
+    assert int(stack.sum(axis=0).min()) == 1 and int(stack.sum(axis=0).max()) == 1
+
+
+def test_speckle_threshold_scales_with_the_image_size():
+    from app.core.color_families import SPECKLE_AREA_MIN_PX, speckle_area
+
+    assert speckle_area(100) == SPECKLE_AREA_MIN_PX
+    assert speckle_area(2_359_296) == 24
+    assert speckle_area(10_000_000) > speckle_area(2_359_296)
+
+
+def test_speckle_absorption_never_touches_transparent_pixels():
+    image = blank(100, 100)
+    paint_rect(image, 10, 90, 10, 90, lch_to_bgr(55, 60, 40))
+    alpha = np.full((100, 100), 255, dtype=np.uint8)
+    alpha[50:52, 50:52] = 0  # un agujero transparente minúsculo
+
+    result = detect(image, alpha, tolerance=6.0)
+
+    union = np.maximum.reduce([g.mask for g in result.groups])
+    assert not np.any(union[50:52, 50:52] == 255)

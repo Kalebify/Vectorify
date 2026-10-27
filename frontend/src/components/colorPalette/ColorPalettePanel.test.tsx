@@ -103,7 +103,15 @@ describe("ColorPalettePanel — detección", () => {
       expect.objectContaining({ method: "POST" }),
     );
     const init = fetch.mock.calls[0][1] as RequestInit;
-    expect(JSON.parse(init.body as string)).toEqual({ paletteId: null, tolerance: 12, maxColors: null });
+    // Detección NUEVA: el panel propone "Colores base" (objetivo automático, intensidad 0,5).
+    expect(JSON.parse(init.body as string)).toEqual({
+      paletteId: null,
+      tolerance: 12,
+      maxColors: null,
+      groupingStyle: "base_colors",
+      targetFamilies: null,
+      groupingStrength: 0.5,
+    });
   });
 
   it("un error controlado de la Web API se muestra sin romper el panel", async () => {

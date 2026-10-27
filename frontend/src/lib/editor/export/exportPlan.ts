@@ -32,9 +32,9 @@ export const FORMAT_LABEL: Record<ExportFormat, string> = { svg: "SVG", dxf: "DX
 export const MAX_PREFLIGHT_ISSUES_SHOWN = 8;
 
 /** Por qué una layer no entra al export: oculta, operación IGNORE o simplemente no elegida (la oculta/ignorada tiene prioridad en el mensaje). */
-export type ExclusionReason = "hidden" | "ignore" | "not_selected";
+export type ExclusionReason = "hidden" | "ignore" | "excluded" | "not_selected";
 
-export const EXCLUSION_LABEL: Record<ExclusionReason, string> = { hidden: "oculta", ignore: "ignorada (operación IGNORE)", not_selected: "no seleccionada" };
+export const EXCLUSION_LABEL: Record<ExclusionReason, string> = { hidden: "oculta", ignore: "ignorada (operación IGNORE)", excluded: "excluida en la paleta (p. ej. fondo)", not_selected: "no seleccionada" };
 
 export interface PreflightLayer {
   groupId: string;
@@ -182,7 +182,7 @@ export function buildExportPreflight(document: ExportDocument, selection: Readon
 
   const layers: PreflightLayer[] = orderedLayers(document.layers).map((layer) => {
     const isIncluded = includedIds.has(layer.groupId);
-    const exclusion: ExclusionReason | null = isIncluded ? null : !layer.visible ? "hidden" : layer.manufacturingOperation === "ignore" ? "ignore" : "not_selected";
+    const exclusion: ExclusionReason | null = isIncluded ? null : !layer.visible ? "hidden" : layer.manufacturingOperation === "ignore" ? "ignore" : layer.isExcluded ? "excluded" : "not_selected";
     const objects = layerObjects(document, layer.groupId).length;
     return {
       groupId: layer.groupId,

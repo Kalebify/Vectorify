@@ -495,14 +495,11 @@ def detect_palette(
     )
 
 
-# Una pieza de menos de este área (px) es una mota de antialiasing, no una pieza
-# del dibujo: no se cuenta (se sigue trazando si el motor la conserva).
-_MIN_PIECE_AREA_PX = 16
-
-
 def _piece_count(mask: np.ndarray) -> int:
-    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats((mask == 255).astype(np.uint8), connectivity=8)
-    return int(np.count_nonzero(stats[1:, cv2.CC_STAT_AREA] >= _MIN_PIECE_AREA_PX)) if count > 1 else 0
+    """Piezas (componentes 8-conexos) de una máscara. En el estilo por familias las motas ya se
+    absorbieron (color_families.absorb_speckles), así que cada componente es una pieza real."""
+    count, _ = cv2.connectedComponents((mask == 255).astype(np.uint8), connectivity=8)
+    return max(0, count - 1)
 
 
 def detect_base_color_palette(
@@ -575,6 +572,7 @@ def detect_base_color_palette(
         bg_color = np.array([cv2.mean(bgr, mask=background.mask)[:3]], dtype=np.float64).round().astype(np.uint8)
         family_lightness.append(float(color_families.lab_features(bg_color)[0, 0]))
     label_image = color_families.resolve_transition_pixels(label_image, bgr, family_lightness)
+    label_image = color_families.absorb_speckles(label_image, color_families.speckle_area(int(np.count_nonzero(relevant))))
 
     families: list[ColorGroup] = []
     for position, members in enumerate(members_by_family):

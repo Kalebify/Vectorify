@@ -25,6 +25,29 @@ describe("selección por defecto", () => {
   });
 });
 
+describe("selección por defecto: layers excluidas de la paleta (fondo técnico)", () => {
+  function withExcludedRed(): ExportDocument {
+    const base = exportDataset();
+    return { ...base, layers: base.layers.map((layer) => (layer.groupId === IDS.rojo ? { ...layer, isExcluded: true } : layer)) };
+  }
+
+  it("una layer marcada como excluida en la paleta no entra en la selección por defecto", () => {
+    expect([...defaultExportSelection(withExcludedRed().layers)]).toEqual([IDS.grabado, IDS.sinop]);
+  });
+
+  it("el preflight explica que fue excluida en la paleta y que se puede elegir a mano", () => {
+    const document = withExcludedRed();
+
+    const byDefault = buildExportPreflight(document, defaultExportSelection(document.layers), options(), null);
+    const red = byDefault.layers.find((layer) => layer.groupId === IDS.rojo)!;
+    expect(red.included).toBe(false);
+    expect(red.exclusion).toBe("excluded");
+
+    const manual = buildExportPreflight(document, select(IDS.rojo), options(), null);
+    expect(manual.layers.find((layer) => layer.groupId === IDS.rojo)!.included).toBe(true);
+  });
+});
+
 describe("buildExportPreflight: dimensiones, layers y operaciones", () => {
   const document = exportDataset();
   const preflight = buildExportPreflight(document, defaultExportSelection(document.layers), options(), null);
