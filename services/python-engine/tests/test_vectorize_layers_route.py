@@ -365,3 +365,69 @@ def test_vectorize_layers_reorder_of_group_ids_does_not_change_any_layers_svg_or
     for group_id in forward_by_id:
         assert forward_by_id[group_id]["svg"] == backward_by_id[group_id]["svg"]
         assert forward_by_id[group_id]["metrics"] == backward_by_id[group_id]["metrics"]
+
+
+# --- Fronteras compartidas (partición por familias de color) ---
+
+
+def _partition_masks(size: int = 60) -> list[bytes]:
+    import cv2
+    import numpy as np
+
+    left = np.zeros((size, size), dtype=np.uint8)
+    right = np.zeros((size, size), dtype=np.uint8)
+    yy, xx = np.mgrid[0:size, 0:size]
+    left[xx + yy < size] = 255
+    right[xx + yy >= size] = 255
+    return [cv2.imencode(".png", mask)[1].tobytes() for mask in (left, right)]
+
+
+def test_vectorize_layers_with_shared_boundaries_has_no_contamination_between_neighbours(client):
+    response = client.post(
+        VECTORIZE_LAYERS_URL,
+        files=[("files", (f"m{i}.png", data, "image/png")) for i, data in enumerate(_partition_masks())],
+        data={"group_ids": json.dumps(["a", "b"]), "shared_boundaries": "true"},
+    )
+
+    assert response.status_code == 200
+    layers = response.json()["layers"]
+    assert [layer["group_id"] for layer in layers] == ["a", "b"]
+    for layer in layers:
+        validation = layer["raster_validation"]
+        assert validation["own_mismatch_ratio"] == 0.0
+        assert validation["contamination_ratio"] == 0.0
+
+
+def test_vectorize_layers_with_shared_boundaries_falls_back_to_independent_tracing_when_masks_share_pixels(client):
+    mask = make_square_mask_png_bytes(size=60, square=30)
+
+    response = client.post(
+        VECTORIZE_LAYERS_URL,
+        files=[("files", ("a.png", mask, "image/png")), ("files", ("b.png", mask, "image/png"))],
+        data={"group_ids": json.dumps(["a", "b"]), "shared_boundaries": "true"},
+    )
+
+    assert response.status_code == 200
+    assert [layer["group_id"] for layer in response.json()["layers"]] == ["a", "b"]
+
+
+def test_vectorize_layers_with_shared_boundaries_rejects_an_empty_mask(client):
+    import cv2
+    import numpy as np
+
+    empty = cv2.imencode(".png", np.zeros((60, 60), dtype=np.uint8))[1].tobytes()
+
+    response = client.post(
+        VECTORIZE_LAYERS_URL,
+        files=[("files", ("a.png", _partition_masks(60)[0], "image/png")), ("files", ("b.png", empty, "image/png"))],
+        data={"group_ids": json.dumps(["a", "b"]), "shared_boundaries": "true"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_vectorize_layers_without_the_flag_still_traces_each_mask_independently(client):
+    response = _post_vectorize_layers(client, _partition_masks(), ["a", "b"])
+
+    assert response.status_code == 200
+    assert len(response.json()["layers"]) == 2

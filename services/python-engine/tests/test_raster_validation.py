@@ -28,7 +28,7 @@ class TestRasterizeSvgMask:
         # Cuadrado con vértices EXACTOS en la grilla de píxeles (mismo
         # criterio que VtracerEngine mode="polygon"): debe reconstruirse
         # PIXEL A PIXEL igual a la máscara original -- confirma que el
-        # supermuestreo elimina el sesgo de +1 fila/columna de
+        # muestreo del centro del píxel elimina el sesgo de +1 fila/columna de
         # cv2.fillPoly (ver comentario de rasterize_svg_mask).
         size = 60
         mask = _square_mask(size, 15, 15, 45, 45)
@@ -160,3 +160,40 @@ class TestCompareLayerRaster:
         outcome = compare_layer_raster(reconstructed, own_mask, other, own_mismatch_tolerance=0.0, contamination_tolerance=0.0)
 
         assert outcome.own_mismatch_ratio == 0.0
+
+
+class TestRasterizerIsExactOnLargeLayers:
+    """El rasterizador ya no pierde exactitud en las capas grandes (antes el supermuestreo caía a x1 y medía un
+    sesgo de +1 fila/columna: en el pato real, geometría exacta al píxel daba 0,7-3,3 % de contaminación)."""
+
+    def test_large_rectangle_with_a_hole_round_trips_pixel_for_pixel(self):
+        width, height = 1152, 2048
+        mask = np.zeros((height, width), dtype=np.uint8)
+        mask[100:1900, 50:1100] = 255
+        mask[400:900, 300:700] = 0
+        outer = "M50,100 L1100,100 L1100,1900 L50,1900 Z"
+        hole = "M300,400 L300,900 L700,900 L700,400 Z"
+        svg = _SVG_TEMPLATE.format(w=width, h=height, d=f"{outer} {hole}")
+
+        reconstructed = rasterize_svg_mask(svg, width, height)
+
+        assert np.array_equal(reconstructed, mask)
+
+    def test_two_triangles_sharing_a_diagonal_edge_partition_the_square_without_overlap_or_gap(self):
+        size = 40
+        lower = _SVG_TEMPLATE.format(w=size, h=size, d="M0,0 L40,0 L0,40 Z")
+        upper = _SVG_TEMPLATE.format(w=size, h=size, d="M40,0 L40,40 L0,40 Z")
+
+        first = rasterize_svg_mask(lower, size, size) == 255
+        second = rasterize_svg_mask(upper, size, size) == 255
+
+        assert not np.any(first & second), "ningún píxel en las dos capas"
+        assert np.all(first | second), "ningún píxel sin cubrir"
+
+    def test_a_repeated_vertex_does_not_change_the_filled_area(self):
+        size = 20
+        svg = _square_svg(5, 5, 15, 15, size, size).replace("Z", "L5,5 Z")  # anillo con un vértice repetido
+
+        reconstructed = rasterize_svg_mask(svg, size, size)
+
+        assert int(np.count_nonzero(reconstructed)) == 100

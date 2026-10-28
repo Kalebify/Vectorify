@@ -41,8 +41,11 @@ __all__ = [
     "FamilyThresholds",
     "cluster_families",
     "detect_background",
+    "absorb_diagonal_fragments",
+    "absorb_enclosed_background",
     "absorb_speckles",
     "lab_features",
+    "polygons_mask",
     "speckle_area",
     "resolve_transition_pixels",
     "thresholds_for",
@@ -51,7 +54,7 @@ __all__ = [
 # Versión del algoritmo de agrupación por familias: forma parte de la clave de
 # caché, de la persistencia y de la respuesta. Subirla invalida paletas
 # cacheadas con otra versión (nunca se reutilizan entre versiones).
-ALGORITHM_VERSION = 1
+ALGORITHM_VERSION = 2
 
 # Fracción del perímetro que debe ocupar el color de fondo (mismo criterio que
 # color_palette_pipeline._BACKGROUND_BORDER_TOUCH_RATIO).
@@ -209,6 +212,20 @@ class BackgroundDetection:
     contact_pixel_count: int
 
 
+def polygons_mask(regions, height: int, width: int) -> np.ndarray:
+    """Máscara booleana (height x width) de la unión de las `regions` (cada una una lista de vértices (x, y) en
+    coordenadas de imagen, sobre las esquinas de los píxeles: 0..width, 0..height). Un píxel entra si su centro cae
+    dentro de alguna región; las partes fuera del lienzo se ignoran."""
+    from app.core.raster_validation import fill_even_odd
+
+    mask = np.zeros((height, width), dtype=bool)
+    for points in regions:
+        ring = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+        if len(ring) >= 3:
+            mask |= fill_even_odd([ring], width, height)
+    return mask
+
+
 def _border_labels(labels: np.ndarray) -> set[int]:
     values = np.concatenate([labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]])
     return set(int(v) for v in np.unique(values)) - {0}
@@ -240,6 +257,7 @@ def detect_background(
     relevant: np.ndarray,
     tolerance: float,
     neutral_chroma: float,
+    restored: np.ndarray | None = None,
 ) -> BackgroundDetection | None:
     """Fondo = componentes (4-conexos) conectados al borde del grupo de color
     detallado que más perímetro ocupa, siempre que ocupe >= 50 % del
@@ -253,6 +271,10 @@ def detect_background(
     mide el contacto del fondo con objetos claros neutros más gruesos que un
     anillo de antialiasing (p. ej. un ojo blanco junto a un fondo blanco): si
     existe, la revisión humana es necesaria aunque no haya cuello.
+
+    `restored` (bool, opcional): píxeles que la persona marcó como «esto NO es fondo» (ver
+    ``polygons_mask``). Se quitan del fondo seguro, no cuentan como ambiguos ni como contacto pendiente de
+    revisión y pasan a su familia por su propio color.
     """
     height, width = relevant.shape
     if not group_masks:
@@ -280,9 +302,21 @@ def detect_background(
         certain = cv2.dilate(main.astype(np.uint8), kernel).astype(bool) & region
     else:
         certain = region  # fondo más fino que el elemento estructurante: no se puede juzgar
+    if restored is not None:
+        certain &= ~restored
     ambiguous = region & ~certain
+    if restored is not None:
+        ambiguous &= ~restored
 
-    contact = _contact_pixels(bgr, relevant, certain, ambiguous, group_colors_bgr[best], tolerance, neutral_chroma)
+    contact = _contact_pixels(
+        bgr,
+        relevant if restored is None else relevant & ~restored,
+        certain,
+        ambiguous,
+        group_colors_bgr[best],
+        tolerance,
+        neutral_chroma,
+    )
 
     return BackgroundDetection(
         mask=np.where(certain, np.uint8(255), np.uint8(0)),
@@ -421,6 +455,20 @@ def speckle_area(relevant_pixel_count: int) -> int:
     return max(SPECKLE_AREA_MIN_PX, int(round(SPECKLE_AREA_RATIO * relevant_pixel_count)))
 
 
+def _reassign_to_nearest(labels: np.ndarray, moving: np.ndarray) -> np.ndarray:
+    """Cada píxel de `moving` toma la etiqueta del píxel asignado más cercano que NO se mueve (los -1 no
+    reciben ni dan etiquetas). Si no queda ninguno, `labels` no cambia."""
+    valid = (labels >= 0) & ~moving
+    if not valid.any():
+        return labels
+    source = np.where(valid, 0, 1).astype(np.uint8)
+    _distance, nearest = cv2.distanceTransformWithLabels(source, cv2.DIST_L2, 3, labelType=cv2.DIST_LABEL_PIXEL)
+    zero_label = labels[valid]  # el n-ésimo píxel nulo (orden row-major) tiene la etiqueta n+1
+    refined = labels.copy()
+    refined[moving] = zero_label[nearest[moving] - 1]
+    return refined
+
+
 def absorb_speckles(labels: np.ndarray, min_area: int) -> np.ndarray:
     """Reasigna al vecino más cercano las piezas (componentes 8-conexos de una
     etiqueta) con menos de `min_area` píxeles: motas que, al trazarse, serían
@@ -428,7 +476,6 @@ def absorb_speckles(labels: np.ndarray, min_area: int) -> np.ndarray:
     desconectadas de tamaño real y los agujeros no se tocan. `labels` usa -1
     para "sin grupo" (nunca recibe etiquetas). La partición sigue siendo
     exacta."""
-    height, width = labels.shape
     tiny = np.zeros(labels.shape, dtype=bool)
     for label in np.unique(labels):
         if label < 0:
@@ -439,12 +486,66 @@ def absorb_speckles(labels: np.ndarray, min_area: int) -> np.ndarray:
             tiny |= np.isin(components, small)
     if not tiny.any():
         return labels
-    valid = (labels >= 0) & ~tiny
-    if not valid.any():
+    return _reassign_to_nearest(labels, tiny)
+
+
+# --- Contactos solo por una esquina (conectividad 4 vs 8) ---
+
+# Un fragmento de este tamaño o menos que cuelga de una pieza solo por una esquina es ruido de antialiasing.
+DIAGONAL_FRAGMENT_MAX_PX = 3
+
+
+def absorb_enclosed_background(labels: np.ndarray, background_label: int) -> np.ndarray:
+    """El fondo es la región (4-conexa) que toca el borde del lienzo: ``detect_background`` lo garantiza al
+    detectarlo, pero el reparto de píxeles de transición y de motas puede cortar un cuello de 1 px y dejar
+    bolsas de «fondo» rodeadas de dibujo, unidas al fondo solo por una esquina. Una bolsa así es una isla de
+    material para el cortador (flotante), no fondo: sus píxeles pasan a la etiqueta más cercana. No toca las
+    componentes que tocan el borde ni las que limitan con píxeles sin grupo (alpha 0)."""
+    mask = (labels == background_label).astype(np.uint8)
+    if not mask.any():
         return labels
-    source = np.where(valid, 0, 1).astype(np.uint8)
-    _distance, nearest = cv2.distanceTransformWithLabels(source, cv2.DIST_L2, 3, labelType=cv2.DIST_LABEL_PIXEL)
-    zero_label = labels[valid]  # el n-ésimo píxel nulo (orden row-major) tiene la etiqueta n+1
-    refined = labels.copy()
-    refined[tiny] = zero_label[nearest[tiny] - 1]
-    return refined
+    count, components = cv2.connectedComponents(mask, connectivity=4)
+    if count <= 2:
+        return labels
+    outside = labels < 0
+    anchored = np.zeros(count, dtype=bool)
+    anchored[0] = True
+    border = np.zeros(labels.shape, dtype=bool)
+    border[0, :] = border[-1, :] = True
+    border[:, 0] = border[:, -1] = True
+    anchored[np.unique(components[border & (mask == 1)])] = True
+    if outside.any():
+        near_outside = cv2.dilate(outside.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
+        anchored[np.unique(components[near_outside & (mask == 1)])] = True
+    pocket = (mask == 1) & ~anchored[components]
+    if not pocket.any():
+        return labels
+    return _reassign_to_nearest(labels, pocket)
+
+
+def absorb_diagonal_fragments(labels: np.ndarray, max_area: int = DIAGONAL_FRAGMENT_MAX_PX) -> np.ndarray:
+    """Reasigna al vecino más cercano los fragmentos 4-conexos de ``max_area`` píxeles o menos que cuelgan de
+    una pieza mayor de su misma etiqueta solo por una esquina. Al trazar cada pieza sobre las esquinas de los
+    píxeles serían polígonos sueltos de 0,5-2 px²; ``absorb_speckles`` no los ve porque, contando diagonales,
+    siguen formando parte de una pieza grande. Una línea fina diagonal hecha SOLO de fragmentos así (ninguno
+    de sus píxeles tiene un vecino lateral de su etiqueta) no se toca: es un rasgo del dibujo, no ruido."""
+    tiny = np.zeros(labels.shape, dtype=bool)
+    for label in np.unique(labels):
+        if label < 0:
+            continue
+        mask = (labels == label).astype(np.uint8)
+        count4, components4, stats4, _ = cv2.connectedComponentsWithStats(mask, connectivity=4)
+        small = [i for i in range(1, count4) if stats4[i, cv2.CC_STAT_AREA] <= max_area]
+        if not small:
+            continue
+        count8, components8, _stats8, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        largest_in_piece = np.zeros(count8, dtype=np.int64)
+        np.maximum.at(largest_in_piece, components8[mask == 1], stats4[components4[mask == 1], cv2.CC_STAT_AREA])
+        for index in small:
+            pixels = components4 == index
+            piece = int(components8[pixels][0])
+            if largest_in_piece[piece] > max_area:
+                tiny |= pixels
+    if not tiny.any():
+        return labels
+    return _reassign_to_nearest(labels, tiny)

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from app.api.dependencies import get_vectorization_service
 from app.core.config import Settings, get_settings
-from app.core.errors import InvalidParametersError
+from app.core.errors import InvalidParametersError, NotAPartitionError
 from app.core.raster_validation import compare_layer_raster, rasterize_svg_mask
 from app.models.schemas import (
     ErrorResponse,
@@ -82,6 +82,15 @@ async def vectorize_mask(
 async def vectorize_layers(
     files: list[UploadFile] = File(..., description="Máscaras B/N (PNG), una por ColorGroup"),
     group_ids: str = Form(..., description="JSON array de IDs (string) de ColorGroup, mismo orden/cantidad que 'files'"),
+    shared_boundaries: bool = Form(
+        False,
+        description=(
+            "Si es true, las máscaras son una PARTICIÓN (ningún píxel en dos máscaras: p. ej. las familias de color base) "
+            "y se trazan juntas con fronteras compartidas, sin solapes ni rendijas entre capas vecinas. Si dos máscaras "
+            "comparten píxeles no hay partición: se trazan por su cuenta y se registra una advertencia. Por defecto "
+            "false: cada máscara se traza por su cuenta."
+        ),
+    ),
     service: VectorizationService = Depends(get_vectorization_service),
     settings: Settings = Depends(get_settings),
 ) -> VectorizeLayersResponse:
@@ -109,10 +118,17 @@ async def vectorize_layers(
     # (process_with_mask, M2.1-S03) -- necesaria más abajo para la
     # validación raster-vs-vector de CADA capa contra las demás.
     results: list[tuple[str, VectorizeResponse, np.ndarray]] = []
-    for group_id, file in zip(parsed_group_ids, files):
-        data = await file.read()
-        response, mask = service.process_with_mask(data)
-        results.append((group_id, response, mask))
+    datas = [await file.read() for file in files]
+    if shared_boundaries:
+        try:
+            traced = service.process_partition_with_masks(datas)
+            results = [(group_id, response, mask) for group_id, (response, mask) in zip(parsed_group_ids, traced)]
+        except NotAPartitionError as exc:
+            logger.warning("shared_boundaries solicitado pero las máscaras no son una partición (%s): se trazan por separado", exc)
+    if not results:
+        for group_id, data in zip(parsed_group_ids, datas):
+            response, mask = service.process_with_mask(data)
+            results.append((group_id, response, mask))
 
     layers: list[VectorLayerItem] = []
     for index, (group_id, result, own_mask) in enumerate(results):

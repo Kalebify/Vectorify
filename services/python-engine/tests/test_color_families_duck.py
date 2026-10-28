@@ -268,3 +268,104 @@ def test_duck_traced_geometry_has_no_empty_degenerate_or_duplicate_paths(traced)
             assert key not in seen, f"subpath duplicado en {classify(group)}"
             seen.add(key)
         assert vector.width == 1152 and vector.height == 2048
+
+
+# --- Fronteras compartidas: las familias vecinas comparten su borde (nota de QA del 28/10) ---
+
+
+@pytest.fixture(scope="module")
+def shared(result):
+    """Las seis máscaras (cinco familias + fondo) trazadas juntas, como hace /vectorize-layers con shared_boundaries."""
+    vectorizer = VectorizationService(Settings())
+    datas = [cv2.imencode(".png", group.mask)[1].tobytes() for group in result.groups]
+    return list(zip(result.groups, vectorizer.process_partition_with_masks(datas)))
+
+
+def _subjects(svg: str) -> list[dict]:
+    subpaths, _skipped = collect_document_subpaths(ET.fromstring(svg))
+    rings = [[list(point) for point in sp["points"]] + [list(sp["points"][0])] for sp in subpaths if len(sp["points"]) >= 3]
+    return [{"type": "polygon", "coordinates": rings}]
+
+
+def test_duck_shared_boundaries_leave_no_floating_pieces_between_families(shared):
+    from app.core.geometry_floating import run_floating
+
+    subjects = [s for group, (vector, _mask) in shared if not group.is_background for s in _subjects(vector.svg)]
+
+    analysis = run_floating(subjects, "stencil", 0.01)
+
+    assert analysis["floating_count"] == 0, "antes: 65 islas flotantes (rendijas entre contornos trazados por separado)"
+
+
+def test_duck_shared_boundaries_partition_the_canvas_exactly_after_tracing(shared):
+    rasters = [rasterize_svg_mask(vector.svg, 1152, 2048) == 255 for _group, (vector, _mask) in shared]
+    coverage = np.stack(rasters).sum(axis=0)
+
+    assert int((coverage > 1).sum()) == 0, "ningún píxel en dos capas tras trazar"
+    assert int((coverage == 0).sum()) == 0, "ningún píxel perdido tras trazar"
+
+
+def test_duck_shared_boundaries_pass_the_raster_vector_validation_without_warnings(shared):
+    from app.core.raster_validation import compare_layer_raster
+
+    settings = Settings()
+    masks = [mask for _group, (_vector, mask) in shared]
+    for index, (group, (vector, mask)) in enumerate(shared):
+        others = np.zeros_like(mask)
+        for other_index, other in enumerate(masks):
+            if other_index != index:
+                others = cv2.bitwise_or(others, other)
+        outcome = compare_layer_raster(
+            rasterize_svg_mask(vector.svg, 1152, 2048),
+            mask,
+            others,
+            settings.raster_validation_own_mismatch_tolerance,
+            settings.raster_validation_contamination_tolerance,
+        )
+        assert outcome.warnings == [], (classify(group), outcome.warnings)
+        assert outcome.contamination_ratio <= 0.005, (classify(group), outcome.contamination_ratio)
+
+
+def test_duck_shared_boundaries_trace_each_piece_once_and_stay_under_the_editor_complexity_limit(shared):
+    for group, (vector, _mask) in shared:
+        subpaths, _skipped = collect_document_subpaths(ET.fromstring(vector.svg))
+        assert vector.metrics.path_count >= 1
+        assert all(len(sp["points"]) <= 5_000 for sp in subpaths), classify(group)
+        keys = [tuple(sp["points"]) for sp in subpaths]
+        assert len(keys) == len(set(keys)), f"subpath duplicado en {classify(group)}"
+
+
+def test_duck_background_has_no_pockets_enclosed_by_the_drawing(result):
+    background = next(g for g in result.groups if g.is_background)
+    count, components = cv2.connectedComponents((background.mask == 255).astype(np.uint8), connectivity=4)
+    border = np.zeros(background.mask.shape, dtype=bool)
+    border[0, :] = border[-1, :] = border[:, 0] = border[:, -1] = True
+
+    anchored = set(np.unique(components[border & (background.mask == 255)])) - {0}
+
+    assert set(range(1, count)) == anchored, "toda bolsa de fondo 4-aislada es una isla flotante: debe ir a su vecino"
+
+
+# --- Corrección manual del fondo: el brillo superior del ojo derecho (nota de QA del 28/10) ---
+
+import math  # noqa: E402
+
+# Elipse que rodea el ojo derecho del pato (coordenadas del PNG original), tal como la dibujaría una persona.
+RIGHT_EYE = [(647 + 96 * math.cos(t * math.pi / 24), 644 + 185 * math.sin(t * math.pi / 24)) for t in range(48)]
+
+
+def test_duck_upper_right_eye_is_background_until_the_person_marks_it_and_then_keeps_its_own_family(duck, result):
+    corrected = detect_base_color_palette(
+        duck[:, :, :3], duck[:, :, 3], 12.0, 512, 0.001, None, 0.5, background_corrections=[RIGHT_EYE]
+    )
+
+    background_before = next(g for g in result.groups if g.is_background)
+    background_after = next(g for g in corrected.groups if g.is_background)
+    gray_after = next(g for g in corrected.groups if classify(g) == "gray")
+    assert background_before.mask[500, 650] == 255, "el brillo superior del ojo derecho se funde con el fondo"
+    assert background_after.mask[500, 650] == 0 and gray_after.mask[500, 650] == 255
+    assert background_after.mask[500, 800] == 255, "el fondo fuera de la zona marcada no cambia"
+    assert sorted(classify(g) for g in corrected.groups if not g.is_background) == ["black", "gray", "green", "orange", "yellow"]
+    stack = np.stack([g.mask == 255 for g in corrected.groups]).sum(axis=0)
+    assert int(stack.max()) == 1 and int(stack.min()) == 1, "la partición sigue siendo exacta"
+    assert corrected.background.contact_pixel_count < result.background.contact_pixel_count
