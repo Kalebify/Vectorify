@@ -11,6 +11,9 @@ internal sealed class FakePythonVectorLayerClient : IPythonVectorLayerClient
 
     public int CallCount => _callCount;
 
+    /// <summary>Valor de <c>sharedBoundaries</c> de la última llamada.</summary>
+    public bool? LastSharedBoundaries { get; private set; }
+
     /// <summary>Si se define, sustituye la respuesta default; recibe las máscaras enviadas para poder inspeccionarlas/responder en función de ellas.</summary>
     public Func<IReadOnlyList<(Guid GroupId, Stream Content, string ContentType)>, PythonVectorLayerBatchResult>? Respond { get; set; }
 
@@ -19,9 +22,11 @@ internal sealed class FakePythonVectorLayerClient : IPythonVectorLayerClient
 
     public async Task<PythonVectorLayerBatchResult> VectorizeLayersAsync(
         IReadOnlyList<(Guid GroupId, Stream Content, string ContentType)> masks,
+        bool sharedBoundaries = false,
         CancellationToken cancellationToken = default)
     {
         Interlocked.Increment(ref _callCount);
+        LastSharedBoundaries = sharedBoundaries;
         if (Delay > TimeSpan.Zero)
         {
             await Task.Delay(Delay, cancellationToken);

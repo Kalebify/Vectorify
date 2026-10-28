@@ -247,6 +247,7 @@ public static class ColorPaletteEndpoints
         AlgorithmVersion: record.DetectionParameters.AlgorithmVersion,
         FamilyCount: record.Groups.Count(g => !g.IsBackground),
         PieceCount: record.Groups.Where(g => !g.IsBackground).Sum(g => g.PieceCount),
+        BackgroundCorrections: record.DetectionParameters.BackgroundCorrections,
         Background: record.Background is null
             ? null
             : new ColorPaletteBackgroundPayload(

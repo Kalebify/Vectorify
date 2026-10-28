@@ -118,7 +118,10 @@ public sealed class VectorLayerService : IVectorLayerService
             PythonVectorLayerBatchResult pythonResult;
             try
             {
-                pythonResult = await _pythonClient.VectorizeLayersAsync(masks, cancellationToken);
+                // Una paleta por familias es una partición exacta de píxeles: sus capas se trazan juntas, con
+                // fronteras compartidas (sin solapes ni rendijas entre familias vecinas).
+                var sharedBoundaries = palette.DetectionParameters.GroupingStyle == ColorPaletteAlgorithm.BaseColors;
+                pythonResult = await _pythonClient.VectorizeLayersAsync(masks, sharedBoundaries, cancellationToken);
             }
             finally
             {
