@@ -1,5 +1,5 @@
 import { API_BASE_URL, httpClient } from "./httpClient";
-import type { ColorPaletteResponse, GroupingStyle } from "../types/colorPalette";
+import type { BackgroundCorrection, ColorPaletteResponse, GroupingStyle } from "../types/colorPalette";
 
 function baseUrl(projectId: string, imageId: string): string {
   return `/api/v1/projects/${projectId}/images/${imageId}/color-palette`;
@@ -20,6 +20,7 @@ export function detectColorPalette(
     groupingStyle?: GroupingStyle | null;
     targetFamilies?: number | null;
     groupingStrength?: number | null;
+    backgroundCorrections?: BackgroundCorrection[] | null;
   },
   signal?: AbortSignal,
 ): Promise<ColorPaletteResponse> {
@@ -32,6 +33,7 @@ export function detectColorPalette(
       groupingStyle: params.groupingStyle ?? null,
       targetFamilies: params.targetFamilies ?? null,
       groupingStrength: params.groupingStrength ?? null,
+      backgroundCorrections: params.backgroundCorrections ?? undefined,
     },
     { signal },
   );

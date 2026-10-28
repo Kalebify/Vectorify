@@ -9,7 +9,7 @@ import {
 } from "../api/colorPaletteApi";
 import { ApiClientError } from "../api/httpClient";
 import type { ApiErrorResponse } from "../types/preprocess";
-import type { ColorPaletteErrorCode, ColorPaletteResponse, GroupingStyle } from "../types/colorPalette";
+import type { BackgroundCorrection, ColorPaletteErrorCode, ColorPaletteResponse, GroupingStyle } from "../types/colorPalette";
 
 /**
  * Estados explícitos pedidos por spec.md M2-S01: "ver paleta detectada,
@@ -58,6 +58,11 @@ export interface UseColorPaletteState {
   targetFamilies: number | null;
   /** Intensidad de agrupación 0-1 (solo `base_colors`). */
   groupingStrength: number;
+  /**
+   * Zonas «esto NO es fondo» para la PRÓXIMA detección (solo `base_colors`): se dibujan sobre la imagen original y
+   * no cambian la paleta hasta volver a detectar.
+   */
+  backgroundCorrections: BackgroundCorrection[];
   /** GroupId de los grupos actualmente seleccionados para fusionar (selección múltiple). */
   selectedGroupIds: string[];
   errorCode: ColorPaletteErrorCode | null;
@@ -67,6 +72,8 @@ export interface UseColorPaletteState {
   setGroupingStyle: (style: GroupingStyle) => void;
   setTargetFamilies: (families: number | null) => void;
   setGroupingStrength: (strength: number) => void;
+  addBackgroundCorrection: (points: [number, number][]) => void;
+  removeBackgroundCorrection: (index: number) => void;
   /** Detecta (o re-detecta, si ya hay una sesión abierta) con la tolerancia/maxColors vigentes. */
   detect: () => void;
   toggleGroupSelection: (groupId: string) => void;
@@ -88,6 +95,7 @@ export function useColorPalette(projectId: string, imageId: string): UseColorPal
   const [groupingStyle, setGroupingStyle] = useState<GroupingStyle>("base_colors");
   const [targetFamilies, setTargetFamilies] = useState<number | null>(null);
   const [groupingStrength, setGroupingStrength] = useState(0.5);
+  const [backgroundCorrections, setBackgroundCorrections] = useState<BackgroundCorrection[]>([]);
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
   const [errorCode, setErrorCode] = useState<ColorPaletteErrorCode | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -127,6 +135,7 @@ export function useColorPalette(projectId: string, imageId: string): UseColorPal
     if (typeof response.groupingStrength === "number") {
       setGroupingStrength(response.groupingStrength);
     }
+    setBackgroundCorrections(response.backgroundCorrections ?? []);
     setSelectedGroupIds([]);
     setStatus(response.isConfirmed ? "confirmed" : "ready");
     setErrorCode(null);
@@ -168,11 +177,31 @@ export function useColorPalette(projectId: string, imageId: string): UseColorPal
           groupingStyle,
           targetFamilies: groupingStyle === "base_colors" ? targetFamilies : null,
           groupingStrength: groupingStyle === "base_colors" ? groupingStrength : null,
+          backgroundCorrections: groupingStyle === "base_colors" && backgroundCorrections.length > 0 ? backgroundCorrections : null,
         },
         signal,
       ),
     );
-  }, [runRequest, projectId, imageId, palette, tolerance, maxColors, groupingStyle, targetFamilies, groupingStrength]);
+  }, [
+    runRequest,
+    projectId,
+    imageId,
+    palette,
+    tolerance,
+    maxColors,
+    groupingStyle,
+    targetFamilies,
+    groupingStrength,
+    backgroundCorrections,
+  ]);
+
+  const addBackgroundCorrection = useCallback((points: [number, number][]) => {
+    setBackgroundCorrections((current) => [...current, { points }]);
+  }, []);
+
+  const removeBackgroundCorrection = useCallback((index: number) => {
+    setBackgroundCorrections((current) => current.filter((_, position) => position !== index));
+  }, []);
 
   const toggleGroupSelection = useCallback((groupId: string) => {
     setSelectedGroupIds((current) =>
@@ -248,6 +277,7 @@ export function useColorPalette(projectId: string, imageId: string): UseColorPal
     groupingStyle,
     targetFamilies,
     groupingStrength,
+    backgroundCorrections,
     selectedGroupIds,
     errorCode,
     errorMessage,
@@ -256,6 +286,8 @@ export function useColorPalette(projectId: string, imageId: string): UseColorPal
     setGroupingStyle,
     setTargetFamilies,
     setGroupingStrength,
+    addBackgroundCorrection,
+    removeBackgroundCorrection,
     detect,
     toggleGroupSelection,
     clearSelection,

@@ -3,6 +3,7 @@ import { getColorPalettePreviewUrl } from "../../api/colorPaletteApi";
 import { API_BASE_URL } from "../../api/httpClient";
 import { useColorPalette } from "../../hooks/useColorPalette";
 import type { ColorPaletteResponse } from "../../types/colorPalette";
+import { BackgroundRegionEditor } from "./BackgroundRegionEditor";
 import { ColorSwatchList } from "./ColorSwatchList";
 
 interface ColorPalettePanelProps {
@@ -71,6 +72,7 @@ export function ColorPalettePanel({
     groupingStyle,
     targetFamilies,
     groupingStrength,
+    backgroundCorrections,
     selectedGroupIds,
     errorMessage,
     setTolerance,
@@ -78,6 +80,8 @@ export function ColorPalettePanel({
     setGroupingStyle,
     setTargetFamilies,
     setGroupingStrength,
+    addBackgroundCorrection,
+    removeBackgroundCorrection,
     detect,
     toggleGroupSelection,
     clearSelection,
@@ -314,6 +318,18 @@ export function ColorPalettePanel({
                   <figcaption>Máscara del fondo</figcaption>
                 </figure>
               )}
+              <BackgroundRegionEditor
+                fileName={fileName}
+                originalUrl={originalUrl}
+                widthPx={palette.sourceWidthPx}
+                heightPx={palette.sourceHeightPx}
+                corrections={backgroundCorrections}
+                appliedCorrections={palette.backgroundCorrections ?? []}
+                disabled={isBusy || isConfirmed}
+                onAdd={addBackgroundCorrection}
+                onRemove={removeBackgroundCorrection}
+                onApply={detect}
+              />
             </section>
           )}
 
