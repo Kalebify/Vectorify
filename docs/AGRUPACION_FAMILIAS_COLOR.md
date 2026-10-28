@@ -17,7 +17,8 @@ Parámetros nuevos (solo `base_colors`; en `detailed` se normalizan y no afectan
 * `groupingStyle` — `detailed` si se omite (la API nunca cambia sola).
 * `targetFamilies` — 1–16 o `null` (automático). **Es un tope, no una cuota**: nunca se inventan familias que la imagen no tiene.
 * `groupingStrength` — 0–1 (default 0,5). Más alto fusiona sombras más distintas; 0 conserva diferencias intencionales.
-* `AlgorithmVersion` (1) — fija el algoritmo que generó la paleta; forma parte de la caché, de la persistencia y de la respuesta.
+* `backgroundCorrections` — zonas que la persona marcó como «esto NO es fondo» (ver «Corrección manual del fondo»); solo `base_colors`.
+* `AlgorithmVersion` (2) — fija el algoritmo que generó la paleta; forma parte de la caché, de la persistencia y de la respuesta. La versión 2 añade la limpieza de contactos por esquina (paso 6).
 
 En `base_colors`, `maxColors` se ignora (el tope lo da `targetFamilies`).
 
@@ -29,13 +30,41 @@ La **UI** propone «Colores base» como valor inicial para detecciones **nuevas*
 2. **Fondo** (`detect_background`): color de referencia = grupo que más perímetro ocupa (≥ 50 %); fondo = sus componentes 4-conexos conectados al borde. Una apertura morfológica (radio 1 % del lado menor, mín. 2 px) separa las «bolsas» que solo se conectan por un cuello estrecho: **no se borran**, quedan en su familia y se cuentan como ambiguas. Además se mide el contacto del fondo con objetos claros neutros más gruesos que un anillo de antialiasing (p. ej. un ojo blanco junto a un fondo blanco): si existe → `needsReview`. Los blancos que no tocan el borde (ojos rodeados de color) nunca son fondo.
 3. **Familias** (`cluster_families`): Lab → (L, C, h). Neutro si C < 8 + 10·fuerza o L < 12; neutros por salto de luminosidad (enlace simple), cromáticos por tono circular con guardas de luminosidad y croma (fusión aglomerativa por centroides). Un neutro nunca se fusiona con un cromático por umbral: solo el tope `targetFamilies` puede forzarlo, eligiendo el par de menor ΔE.
 4. **Píxeles de transición** (`resolve_transition_pixels`): los anillos de antialiasing de ≤ 4 px entre dos regiones se reasignan al núcleo más cercano si su luminosidad queda entre las de ambos (evita contornos naranjas alrededor de las pupilas). Contornos oscuros genuinos y líneas finas sobre fondo liso no se tocan.
-5. Cada píxel opaco queda en **exactamente una** familia o en el fondo; alpha 0 en ninguno (partición exacta, CA-05). Orden de presentación: área descendente, fondo al final. Determinista (CA-09).
+5. **Motas** (`absorb_speckles`): piezas de < 24 px (a 2,4 Mpx; escala con la imagen) pasan al vecino más cercano.
+6. **Contactos solo por una esquina** (versión 2): el reparto de los pasos 4–5 puede cortar un cuello de 1 px y dejar (a) «bolsas» de fondo rodeadas de dibujo, unidas al fondo solo en diagonal, y (b) fragmentos de ≤ 3 px que cuelgan de una pieza solo por una esquina. Para el cortador, (a) es una isla de material (pieza flotante) y (b) un polígono suelto de 0,5–2 px². `absorb_enclosed_background` y `absorb_diagonal_fragments` los pasan al vecino más cercano. El fondo es, por definición, lo 4-conexo al borde del lienzo (o junto a píxeles sin grupo); una línea fina diagonal hecha solo de contactos por esquina **no** se toca.
+7. Cada píxel opaco queda en **exactamente una** familia o en el fondo; alpha 0 en ninguno (partición exacta, CA-05). Orden de presentación: área descendente, fondo al final. Determinista (CA-09).
 
 No hay reglas del pato ni un número fijo de colores: los umbrales son funciones de `groupingStrength`.
 
+## Trazado con fronteras compartidas (`app/core/shared_boundaries.py`)
+
+El trazado independiente (un VTracer por máscara) aproxima cada contorno por su cuenta: dos familias vecinas acaban con bordes que se cruzan o dejan rendijas. Cerradas, las rendijas eran **65 piezas flotantes** de 0,001–0,09 mm² en el pato (Laser Check Blocking). Ahora, si la paleta es `base_colors`, la Web API pide `shared_boundaries=true` a `POST /api/v1/vectorize-layers` y el motor traza **todas las máscaras juntas**:
+
+1. Cada máscara pasa a un polígono **exacto** sobre las esquinas de los píxeles (tramos horizontales fusionados + unión): las fronteras entre vecinas ya coinciden vértice a vértice.
+2. Se insertan vértices en cada esquina entera (`segmentize`) y se simplifica el conjunto como **cobertura** (`shapely.coverage_simplify`, tolerancia 1 px): cada arista compartida se simplifica una sola vez y las dos familias reciben el mismo resultado. Solo se quitan vértices (las coordenadas siguen siendo enteras); si la cobertura saliera inválida se devuelve el contorno exacto.
+3. El SVG lleva un `<path>` por pieza conectada (con sus huecos), sin `transform`.
+
+Si las máscaras no son una partición (comparten píxeles o tienen tamaños distintos) el motor lo avisa en el log y traza cada una por separado (el comportamiento anterior): nunca falla la generación por eso. Las paletas `detailed` no cambian.
+
+Tolerancia de simplificación medida sobre el pato (5 familias + fondo): 0,75 px → 10.338 nodos; **1,0 px → 7.636 nodos, desajuste ≤ 0,32 %, contaminación ≤ 0,17 % por capa**; 2,0 px → 3.888 nodos pero ya hasta 1,2 % de desajuste.
+
+### La «contaminación» de 1,1–3,8 % era en buena parte el rasterizador
+
+La validación raster-vector (`rasterize_svg_mask`) corregía el sesgo de `cv2.fillPoly` (pinta también el borde lejano: +1 fila/columna) supermuestreando con un factor 1–8 según el tamaño de la capa; en capas grandes el factor caía a 1 y el sesgo quedaba entero. Medido: geometría **exacta al píxel** daba 0,7–3,3 % de contaminación en las capas grandes y 0 % en las chicas. Ahora se rasteriza con un relleno por líneas de barrido par-impar que muestrea el **centro de cada píxel** (con un desempate para centros sobre una arista diagonal compartida). La tolerancia (1 %) **no se tocó**. Con el rasterizador corregido, el trazado independiente anterior ya medía 0,55–1,85 %, y el nuevo 0,03–0,17 %.
+
+## Corrección manual del fondo
+
+El color solo no puede separar un blanco del dibujo que se funde con el fondo sin borde (el brillo superior del ojo derecho del pato). En vez de adivinar, la persona **lo corrige antes de confirmar**: en «Revisión del fondo → Corregir el fondo» dibuja sobre la imagen original el contorno de la zona (clics = vértices; «Cerrar zona», «Deshacer vértice», «Quitar zona n») y pulsa «Aplicar zonas y detectar de nuevo». Nada cambia hasta entonces.
+
+* Contrato: `backgroundCorrections: [{ "points": [[x, y], …] }]` en píxeles de la imagen original (0..ancho, 0..alto). Validación: máx. 32 zonas, 3–500 vértices, números finitos (|x| ≤ 100 000); solo `base_colors` (en `detailed` se ignoran y no afectan a la caché).
+* Efecto (`detect_background(..., restored)`): los píxeles de **fondo seguro** cuyo centro cae dentro de alguna zona dejan de ser fondo y pasan a su familia por su propio color (el blanco del ojo → familia blanco/gris). No crea familias, no toca lo que ya era dibujo y no cuenta como «contacto pendiente de revisión». La partición sigue siendo exacta.
+* Caché/persistencia: las zonas forman parte de los parámetros efectivos y de la clave de caché (huella SHA-256 de las coordenadas a 3 decimales); se devuelven en la respuesta, de modo que reabrir la paleta las conserva. Quitar las zonas vuelve a la paleta original desde caché.
+* Límite honesto: la frontera de la zona la define el dibujo de la persona; los píxeles de fondo reales que queden dentro de un contorno holgado pasarán a la familia blanca.
+
 ## Contratos
 
-* Motor Python: `ColorPaletteParams` (+`grouping_style`, `target_families`, `grouping_strength`), `ColorGroupPayload` (+`is_background`, `source_group_count`, `piece_count`), `ColorPaletteMetrics` (+`family_count`, `piece_count`, `background`), respuesta (+`algorithm_version`).
+* `POST /api/v1/vectorize-layers` (motor): campo opcional `shared_boundaries` (false por defecto). La Web API lo envía en `true` solo si la paleta es `base_colors`.
+* Motor Python: `ColorPaletteParams` (+`grouping_style`, `target_families`, `grouping_strength`, `background_corrections`), `ColorGroupPayload` (+`is_background`, `source_group_count`, `piece_count`), `ColorPaletteMetrics` (+`family_count`, `piece_count`, `background`), respuesta (+`algorithm_version`).
 * ASP.NET Core: `ColorPaletteDetectRequest` (+`GroupingStyle`, `TargetFamilies`, `GroupingStrength`), `ColorPaletteParameters` (+estilo, parámetros, `AlgorithmVersion`; todos con defaults que reproducen el comportamiento histórico), `ColorGroup` (+`IsBackground`, `PieceCount`, `SourceGroupCount`), `ColorPaletteVersion` (+`Background`), respuesta HTTP (+`groupingStyle`, `targetFamilies`, `groupingStrength`, `algorithmVersion`, `familyCount`, `pieceCount`, `background`; por grupo +`isBackground`, `pieceCount`, `sourceGroupCount`).
 * El fondo técnico se pre-excluye (`IsExcluded`), se llama «Fondo», se ordena al final y **no cuenta como familia**; incluirlo es una acción explícita del usuario (control Incluido/Excluido existente). Las capas se generan por grupo como siempre.
 * Exportación: la selección **por defecto** del diálogo de exportación omite las capas excluidas en la paleta (el fondo técnico); se pueden elegir a mano (el preflight lo explica: «excluida en la paleta»). Esto también aplica a documentos anteriores con grupos excluidos (cambia solo el valor por defecto de la selección, no el documento guardado).
@@ -81,12 +110,29 @@ Pila propia (`docker compose -p vectorify-families-20261027`, puertos 33xxx, vol
 * Navegador (editor, documento guardado): 6 capas, fondo «Ignorada»; exportación real por el diálogo:
   * **SVG** `pato_documento.svg`, 25.985 bytes, `width="150mm" height="266.666667mm" viewBox="0 0 1152 2048" data-units="mm"`, **5 grupos** (una capa por familia) con **5 rellenos** (`#c8551f #bea90e #cac0bc #0f7739 #040303`), 77 paths (versión previa a la absorción de motas), sin duplicados ni subpaths de área < 1 px². El fondo no se exporta; no reaparecen los 36 tonos.
   * **DXF** `pato_documento.dxf`: `$INSUNITS 4` (mm), 5 capas (`NARANJA-PICO-Y-PIES`, `FAMILIA-2…5`), 69 polilíneas, extensión 17,2–137,6 × 0–231,4 mm dentro de 150 × 266,7 mm (56 objetos tras absorber motas).
-* Laser Check del editor sobre las 5 familias: **Blocking** (65 islas flotantes tras absorber motas; 116 antes). Son caras diminutas (0,001–0,09 mm²) que aparecen donde los contornos de familias vecinas se solapan ≈0,3 px al trazarse por separado; el editor exige confirmación explícita para exportar y se confirmó solo en esta pila de prueba. **No se resuelve en esta tarjeta** (necesita contornos que compartan borde exacto) y no se certifica «sin piezas flotantes».
-* La validación raster-vector que ya existía (`rasterValidation`, advertir sin bloquear) marca **fuera de tolerancia de contaminación (1 %)** las 5 capas de familia (1,1–3,8 % del área de cada capa; 0,2–0,5 px de profundidad media) y dentro de tolerancia el desajuste propio (1,2–5,4 % < 15 %). La tolerancia relativa vigente no se modificó; el presupuesto de esta tarjeta (px de contorno) sí se cumple.
+* _(Superado el 28/10: ver «Verificación del 28/10».)_ Laser Check del editor sobre las 5 familias: **Blocking** (65 islas flotantes tras absorber motas; 116 antes). Son caras diminutas (0,001–0,09 mm²) que aparecen donde los contornos de familias vecinas se solapan ≈0,3 px al trazarse por separado; el editor exige confirmación explícita para exportar y se confirmó solo en esta pila de prueba. **No se resuelve en esta tarjeta** (necesita contornos que compartan borde exacto) y no se certifica «sin piezas flotantes».
+* _(Superado el 28/10: la cifra venía en buena parte del rasterizador; ver arriba.)_ La validación raster-vector que ya existía (`rasterValidation`, advertir sin bloquear) marca **fuera de tolerancia de contaminación (1 %)** las 5 capas de familia (1,1–3,8 % del área de cada capa; 0,2–0,5 px de profundidad media) y dentro de tolerancia el desajuste propio (1,2–5,4 % < 15 %). La tolerancia relativa vigente no se modificó; el presupuesto de esta tarjeta (px de contorno) sí se cumple.
+
+## Verificación del 28/10/2026 (nota de QA sobre el commit 115c5d3)
+
+La QA dejó la tarjeta en Bloqueado por tres defectos reales. Estado tras esta corrección:
+
+| Defecto de QA | Antes | Ahora | Cómo se midió |
+| --- | --- | --- | --- |
+| 65 piezas flotantes (Laser Check Blocking) | 65 | **0** entre familias | `POST /api/v2/geometry/floating` (modo `stencil`, el del Laser Check) sobre los SVG reales de las 5 capas, pila real (E2E); también en pytest con `run_floating`. Los 65 se reprodujeron primero con los SVG de la pila de QA |
+| Contaminación relativa 1,058–3,702 % | 1,06–3,70 % (medido) | **0,03–0,17 %**, sin advertencias | `rasterValidation` de cada capa en la pila real |
+| Brillo superior del ojo derecho como fondo | fondo sin remedio | corregible por la persona antes de confirmar | zona de ejemplo: 13.237 px pasan del fondo a la familia blanca/gris; verificado en el panel real |
+
+Causa de las 65 islas: **57 eran rendijas entre contornos vecinos trazados por separado** y **8 eran bolsas de «fondo»** (1–65 px², una de ellas una costura de 1×65 px) unidas al fondo solo por esquinas, creadas por el reparto de píxeles de transición (ver «Algoritmo», paso 6).
+
+Cifras del E2E real (`tests/e2e/color_families_e2e_test.mjs`, PNG original, backend local + motor Python y Postgres en contenedores aislados): detección 3,0 s (límite 20 s); con zona 2,3 s; caché 12 ms; 60 paths en las 5 familias (antes 56); capas en 0,9 s; las 6 capas dentro de tolerancia (contaminación 0,009–0,17 %).
 
 ## Límites conocidos (no se aprueban como resueltos)
 
-* **Fondo ambiguo**: un blanco de primer plano que se funde con el fondo sin borde distinguible (el brillo superior del ojo derecho del pato) queda dentro del fondo; no se detecta como cuello ni se «reconstruye»: el sistema solo avisa con `needsReview` (el pato lo activa: ≈3,4 % del lienzo de claros en contacto con el fondo). El usuario ve el área de fondo y su máscara y puede incluirla como capa.
+* **Piezas flotantes**: «0 entre familias» describe la unión de las 5 capas en modo `stencil`. Una pieza que sea intencionalmente una isla de material (p. ej. el interior de una «O» sin fondo) seguiría marcándose; en el pato no hay ninguna.
+* **Fragmentos de ≤ 3 px y costuras de 1 px** se asignan al vecino más cercano: un detalle real tan pequeño se pierde (a 150 mm de ancho, 1 px = 0,13 mm, por debajo de cualquier ancho de corte). Las líneas diagonales finas hechas solo de contactos por esquina se conservan.
+
+* **Fondo ambiguo**: un blanco de primer plano que se funde con el fondo sin borde distinguible (el brillo superior del ojo derecho del pato) queda dentro del fondo por defecto; no se «reconstruye» solo: el sistema avisa con `needsReview` (el pato lo activa) y la persona **lo corrige dibujando la zona** (ver «Corrección manual del fondo»). Sin esa corrección el resultado sigue siendo el de la detección automática.
 * Los anillos/halos de antialiasing se reparten entre vecinos; una línea de ≤ 4 px entre dos colores cuyo brillo cae entre ambos se considera transición.
 * Los umbrales son heurísticos de luminosidad/croma/tono, validados con el pato y con casos sintéticos (rojos que cruzan 0°/360°, pasteles, grises, negro/blanco, tonos cercanos intencionales, más y menos de cinco colores); no se probó con fotografías.
 * **NO VERIFICADO**: importación real en LightBurn (CA-14: requiere la aplicación de escritorio; los archivos reales SVG/DXF quedaron generados y verificados por contenido, no abiertos en LightBurn). El E2E de navegador cubrió abrir el documento guardado → exportar SVG/DXF, y por separado subir → paleta; no se automatizó un único recorrido continuo subida → paleta → capas → editor en una sola sesión de navegador (el tramo capas → guardado → reapertura se verificó por HTTP).
