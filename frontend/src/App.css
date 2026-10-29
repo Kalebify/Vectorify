@@ -2373,3 +2373,86 @@ main {
   border-radius: 8px;
 }
 .vectorization-mode label { display: flex; align-items: center; gap: 6px; }
+
+.color-palette-regions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.color-palette-regions h4 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.color-palette-regions__canvas {
+  position: relative;
+  margin: 0;
+  max-width: 320px;
+}
+
+.color-palette-regions__canvas img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+}
+
+.color-palette-regions__overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.color-palette-regions__overlay--drawing {
+  cursor: crosshair;
+}
+
+.color-palette-regions__zone {
+  fill: rgb(37 99 235 / 0.25);
+  stroke: rgb(37 99 235);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.color-palette-regions__draft {
+  stroke: rgb(220 38 38);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.color-palette-regions__vertex {
+  fill: rgb(220 38 38);
+}
+
+.color-palette-regions__actions,
+.color-palette-regions__list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-palette-regions__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.color-palette-regions__hint,
+.color-palette-regions__pending {
+  margin: 0;
+  font-size: 13px;
+}
+
+.color-palette-regions__pending {
+  border-left: 3px solid var(--accent-border, #b45309);
+  padding-left: 10px;
+}

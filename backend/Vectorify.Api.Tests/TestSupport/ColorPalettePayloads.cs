@@ -95,7 +95,7 @@ internal static class ColorPalettePayloads
     /// Respuesta del estilo <c>base_colors</c> (agrupación por familias): dos familias del dibujo y el
     /// grupo técnico de fondo (último, <c>is_background</c>), con el bloque de revisión del fondo.
     /// </summary>
-    public static string FamiliesBody(int width = 1, int height = 1, bool needsReview = true, int algorithmVersion = 1) =>
+    public static string FamiliesBody(int width = 1, int height = 1, bool needsReview = true, int algorithmVersion = Vectorify.Api.ColorPalette.ColorPaletteAlgorithm.CurrentVersion) =>
         string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
             $$"""

@@ -66,4 +66,5 @@ public sealed record ColorPaletteResponse(
     int AlgorithmVersion = 0,
     int FamilyCount = 0,
     int PieceCount = 0,
-    ColorPaletteBackgroundPayload? Background = null);
+    ColorPaletteBackgroundPayload? Background = null,
+    IReadOnlyList<Vectorify.Api.ColorPalette.BackgroundCorrection>? BackgroundCorrections = null);

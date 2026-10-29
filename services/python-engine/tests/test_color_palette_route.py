@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 import pytest
 
+from app.core import color_families
 from app.core.config import Settings, get_settings
 from app.main import app
 from tests.support import (
@@ -240,7 +241,7 @@ def test_color_palette_base_colors_contract_exposes_families_background_and_vers
     assert body["effective_params"]["grouping_style"] == "base_colors"
     assert body["effective_params"]["target_families"] == 5
     assert body["effective_params"]["grouping_strength"] == 0.5
-    assert body["algorithm_version"] == 1
+    assert body["algorithm_version"] == color_families.ALGORITHM_VERSION
     assert body["metrics"]["family_count"] == 5
     assert body["metrics"]["color_count"] == len(body["groups"]) == 6
     assert body["metrics"]["background"]["needs_review"] is False
@@ -270,3 +271,41 @@ def test_color_palette_rejects_invalid_grouping_parameters(client, params):
     response = _post_color_palette(client, make_shaded_character_png_bytes(), params)
 
     assert response.status_code == 422
+
+
+# --- Corrección manual del fondo ---
+
+
+def test_color_palette_accepts_background_corrections_and_echoes_them_in_the_effective_params(client):
+    region = {"points": [[0, 0], [4, 0], [4, 4], [0, 4]]}
+
+    response = _post_color_palette(
+        client,
+        make_shaded_character_png_bytes(),
+        {"tolerance": 8.0, "grouping_style": "base_colors", "background_corrections": [region]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["effective_params"]["background_corrections"] == [{"points": [[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]}]
+
+
+@pytest.mark.parametrize(
+    "corrections",
+    [
+        [{"points": [[0, 0], [1, 1]]}],                       # menos de 3 vértices
+        [{"points": [[0, 0], [1, 1], [2, "x"]]}],             # no numérico
+        [{"points": [[0, 0], [1, 1], [1e12, 2]]}],            # fuera de rango
+        [{"points": [[0, 0, 0], [1, 1, 1], [2, 2, 2]]}],      # no es (x, y)
+        [{"points": [[0, 0], [1, 0], [1, 1]]}] * 33,          # demasiadas zonas
+        [{"points": [[0, 0]] * 501}],                         # demasiados vértices
+    ],
+)
+def test_color_palette_rejects_invalid_background_corrections(client, corrections):
+    response = _post_color_palette(
+        client,
+        make_shaded_character_png_bytes(),
+        {"tolerance": 8.0, "grouping_style": "base_colors", "background_corrections": corrections},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_parameters"

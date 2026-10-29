@@ -10,7 +10,11 @@ namespace Vectorify.Api.ColorPalette;
 /// </summary>
 public static class ColorPaletteAlgorithm
 {
-    public const int CurrentVersion = 1;
+    /// <remarks>
+    /// 2: las bolsas de fondo rodeadas de dibujo y los fragmentos que cuelgan de una pieza solo por una esquina
+    /// pasan a la etiqueta vecina (antes quedaban como islas flotantes y polígonos de 0,5-2 px²).
+    /// </remarks>
+    public const int CurrentVersion = 2;
 
     /// <summary>Conserva cada tono detectado (comportamiento histórico, valor por defecto de la API).</summary>
     public const string Detailed = "detailed";

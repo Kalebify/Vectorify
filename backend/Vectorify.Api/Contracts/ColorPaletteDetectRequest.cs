@@ -18,6 +18,9 @@ namespace Vectorify.Api.Contracts;
 /// o "base_colors"), <see cref="TargetFamilies"/> (tope de familias, solo base_colors; null =
 /// automático) y <see cref="GroupingStrength"/> (0-1, solo base_colors). En "detailed" los dos
 /// últimos se ignoran; en "base_colors" se ignora <see cref="MaxColors"/>.
+///
+/// <see cref="BackgroundCorrections"/> (solo base_colors): zonas que la persona marcó como «esto NO es fondo»;
+/// esos píxeles dejan de ser fondo y pasan a su familia por su color (ver <c>BackgroundCorrection</c>).
 /// </summary>
 public sealed record ColorPaletteDetectRequest(
     Guid? PaletteId,
@@ -26,4 +29,5 @@ public sealed record ColorPaletteDetectRequest(
     double? TinyAreaRatio = null,
     string? GroupingStyle = null,
     int? TargetFamilies = null,
-    double? GroupingStrength = null);
+    double? GroupingStrength = null,
+    IReadOnlyList<Vectorify.Api.ColorPalette.BackgroundCorrection>? BackgroundCorrections = null);

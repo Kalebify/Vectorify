@@ -107,6 +107,28 @@ public sealed class PythonColorPaletteClientTests
     }
 
     [Fact]
+    public async Task DetectAsync_SendsTheMarkedZonesAsBackgroundCorrections_OrAnEmptyListWhenThereAreNone()
+    {
+        var bodies = new List<string>();
+        var client = CreateClient(async (request, _) =>
+        {
+            bodies.Add(await request.Content!.ReadAsStringAsync());
+            return JsonResponse(HttpStatusCode.OK, ColorPalettePayloads.FamiliesBody());
+        });
+        var zone = new BackgroundCorrection([[1.0, 2.0], [8.5, 2.0], [8.0, 9.0]]);
+
+        await client.DetectAsync(
+            new MemoryStream([1]), "image/png", "original.png",
+            new ColorPaletteParameters(12.0, null, 0.001, "base_colors", 5, 0.4, ColorPaletteAlgorithm.CurrentVersion, [zone]));
+        await client.DetectAsync(
+            new MemoryStream([1]), "image/png", "original.png",
+            new ColorPaletteParameters(12.0, null, 0.001, "base_colors", 5, 0.4, ColorPaletteAlgorithm.CurrentVersion));
+
+        Assert.Contains("\"background_corrections\":[{\"points\":[[1,2],[8.5,2],[8,9]]}]", bodies[0], StringComparison.Ordinal);
+        Assert.Contains("\"background_corrections\":[]", bodies[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DetectAsync_WhenResponseHasFamilies_DecodesBackgroundPiecesAndAlgorithmVersion()
     {
         var client = CreateClient((_, _) => Task.FromResult(JsonResponse(HttpStatusCode.OK, ColorPalettePayloads.FamiliesBody())));
@@ -118,7 +140,7 @@ public sealed class PythonColorPaletteClientTests
         Assert.Equal(new[] { 3, 1, 1 }, result.Groups!.Select(g => g.PieceCount));
         Assert.Equal(new[] { 11, 9, 1 }, result.Groups!.Select(g => g.SourceGroupCount));
         Assert.Equal(new BackgroundInfo(60.0, 0.0, 20.0, true), result.Background);
-        Assert.Equal(1, result.AlgorithmVersion);
+        Assert.Equal(Vectorify.Api.ColorPalette.ColorPaletteAlgorithm.CurrentVersion, result.AlgorithmVersion);
     }
 
     [Fact]

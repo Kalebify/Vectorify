@@ -51,6 +51,9 @@ public sealed class PythonColorPaletteClient : IPythonColorPaletteClient
                 grouping_style = parameters.GroupingStyle,
                 target_families = parameters.TargetFamilies,
                 grouping_strength = parameters.GroupingStrength,
+                background_corrections = (parameters.BackgroundCorrections ?? [])
+                    .Select(correction => new { points = correction.Points })
+                    .ToList(),
             },
             JsonOptions);
         form.Add(new StringContent(paramsJson), "params");

@@ -41,6 +41,12 @@ public sealed class FakePythonPreprocessServer : IAsyncDisposable
     public int VectorizeLayersRequestCount => _vectorizeLayersRequestCount;
     public int ComponentsRequestCount => _componentsRequestCount;
 
+    /// <summary>Campo <c>params</c> (JSON) de la última petición a /api/v1/color-palette.</summary>
+    public string? LastColorPaletteParams { get; private set; }
+
+    /// <summary>Si la última petición a /api/v1/vectorize-layers pidió fronteras compartidas.</summary>
+    public bool? LastVectorizeLayersSharedBoundaries { get; private set; }
+
     private FakePythonPreprocessServer(WebApplication app)
     {
         _app = app;
@@ -102,6 +108,8 @@ public sealed class FakePythonPreprocessServer : IAsyncDisposable
         app.MapPost("/api/v1/color-palette", async context =>
         {
             var count = Interlocked.Increment(ref server._colorPaletteRequestCount);
+            var paletteForm = await context.Request.ReadFormAsync(context.RequestAborted);
+            server.LastColorPaletteParams = paletteForm["params"].ToString();
             var (statusCode, body) = (respondColorPalette ?? (_ => (200, ColorPalettePayloads.SuccessBody())))(count);
             context.Response.StatusCode = statusCode;
             context.Response.ContentType = "application/json";
@@ -113,6 +121,7 @@ public sealed class FakePythonPreprocessServer : IAsyncDisposable
             var count = Interlocked.Increment(ref server._vectorizeLayersRequestCount);
             var form = await context.Request.ReadFormAsync(context.RequestAborted);
             var groupIdsJson = form["group_ids"].ToString();
+            server.LastVectorizeLayersSharedBoundaries = form["shared_boundaries"].ToString() == "true";
             var groupIds = string.IsNullOrEmpty(groupIdsJson)
                 ? new List<string>()
                 : System.Text.Json.JsonSerializer.Deserialize<List<string>>(groupIdsJson) ?? new List<string>();

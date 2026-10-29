@@ -17,7 +17,8 @@ namespace Vectorify.Api.ColorPalette;
 /// <see cref="GroupingStyle"/> (<c>detailed</c> por defecto, también para todo registro
 /// persistido antes de existir el campo, o <c>base_colors</c>), <see cref="TargetFamilies"/>
 /// (tope de familias, solo <c>base_colors</c>), <see cref="GroupingStrength"/> (0-1, solo
-/// <c>base_colors</c>) y <see cref="AlgorithmVersion"/> (0 = paleta anterior a la versión).
+/// <c>base_colors</c>), <see cref="AlgorithmVersion"/> (0 = paleta anterior a la versión) y
+/// <see cref="BackgroundCorrections"/> (zonas «esto NO es fondo», solo <c>base_colors</c>; null = ninguna).
 /// Los valores por defecto de los campos nuevos reproducen el comportamiento histórico, de modo
 /// que los sidecars JSON anteriores se rehidratan como paletas detalladas sin modificarse.
 /// </summary>
@@ -28,7 +29,8 @@ public sealed record ColorPaletteParameters(
     string GroupingStyle = ColorPaletteAlgorithm.Detailed,
     int? TargetFamilies = null,
     double GroupingStrength = 0.5,
-    int AlgorithmVersion = 0)
+    int AlgorithmVersion = 0,
+    IReadOnlyList<BackgroundCorrection>? BackgroundCorrections = null)
 {
     /// <summary>Clave estable para deduplicar/cachear detecciones -- ver ColorPaletteVersion.</summary>
     public string ToCacheKey() =>
@@ -38,5 +40,6 @@ public sealed record ColorPaletteParameters(
         $"style={GroupingStyle};" +
         $"targetFamilies={TargetFamilies?.ToString(CultureInfo.InvariantCulture) ?? "auto"};" +
         $"strength={GroupingStrength.ToString("F6", CultureInfo.InvariantCulture)};" +
-        $"algorithm={AlgorithmVersion.ToString(CultureInfo.InvariantCulture)}";
+        $"algorithm={AlgorithmVersion.ToString(CultureInfo.InvariantCulture)};" +
+        $"corrections={BackgroundCorrection.Fingerprint(BackgroundCorrections)}";
 }

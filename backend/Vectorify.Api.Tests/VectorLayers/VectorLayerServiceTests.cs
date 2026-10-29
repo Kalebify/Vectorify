@@ -126,6 +126,51 @@ public sealed class VectorLayerServiceTests
         Assert.Equal(confirmed.Groups.Count, svgKeys.Count);
     }
 
+    // ---- Fronteras compartidas: una paleta por familias es una partición exacta de píxeles ----
+
+    [Fact]
+    public async Task GenerateLayersAsync_WhenPaletteIsBaseColors_AsksPythonToTraceTheLayersWithSharedBoundaries()
+    {
+        var paletteClient = new FakePythonColorPaletteClient { Respond = () => FamiliesPaletteResult() };
+        var (service, paletteService, _, _, _, pythonClient) = CreateService(paletteClient);
+        var detected = Assert.IsType<ColorPaletteResult.Ready>(await paletteService.DetectAsync(
+            ProjectId, ImageId, new ColorPaletteDetectRequest(null, null, null, GroupingStyle: ColorPaletteAlgorithm.BaseColors), CancellationToken.None)).Record;
+        var confirmed = Assert.IsType<ColorPaletteResult.Ready>(
+            await paletteService.ConfirmAsync(ProjectId, ImageId, detected.PaletteId, CancellationToken.None)).Record;
+
+        var result = await service.GenerateLayersAsync(ProjectId, ImageId, confirmed.PaletteId, CancellationToken.None);
+
+        Assert.IsType<VectorLayerSetResult.Ready>(result);
+        Assert.True(pythonClient.LastSharedBoundaries);
+    }
+
+    [Fact]
+    public async Task GenerateLayersAsync_WhenPaletteIsDetailed_KeepsTracingEachMaskIndependently()
+    {
+        var (service, paletteService, _, _, _, pythonClient) = CreateService();
+        var confirmed = await DetectAndConfirmPaletteAsync(paletteService);
+
+        await service.GenerateLayersAsync(ProjectId, ImageId, confirmed.PaletteId, CancellationToken.None);
+
+        Assert.False(pythonClient.LastSharedBoundaries);
+    }
+
+    // 4x4: dos familias (mitades) y un fondo técnico; las máscaras de la prueba no se envían a Python real.
+    private static PythonColorPaletteResult FamiliesPaletteResult() => new(
+        PythonColorPaletteState.Success,
+        Width: 4,
+        Height: 4,
+        ContentType: "image/png",
+        Groups: new[]
+        {
+            new PythonColorGroupResult(0, "#c8551f", 8, 50.0, false, false, ColorPalettePngs.LeftHalfMask(4, 4), PieceCount: 1, SourceGroupCount: 3),
+            new PythonColorGroupResult(1, "#bea90e", 8, 50.0, false, false, ColorPalettePngs.RightHalfMask(4, 4), PieceCount: 1, SourceGroupCount: 2),
+        },
+        TransparentPercent: 0,
+        QuantizedPreviewBytes: ColorPalettePngs.TransparentPreview(4, 4),
+        Message: null,
+        AlgorithmVersion: ColorPaletteAlgorithm.CurrentVersion);
+
     // ---- Regresión M2.1-S01: el SVG persistido de cada capa tiene el color REAL, no negro ----
 
     /// <summary>
