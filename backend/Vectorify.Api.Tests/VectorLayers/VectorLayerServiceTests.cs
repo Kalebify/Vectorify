@@ -145,14 +145,38 @@ public sealed class VectorLayerServiceTests
     }
 
     [Fact]
-    public async Task GenerateLayersAsync_WhenPaletteIsDetailed_KeepsTracingEachMaskIndependently()
+    public async Task GenerateLayersAsync_WhenPaletteIsDetailed_UsesSharedBoundariesToPreserveThinLettering()
     {
         var (service, paletteService, _, _, _, pythonClient) = CreateService();
         var confirmed = await DetectAndConfirmPaletteAsync(paletteService);
 
         await service.GenerateLayersAsync(ProjectId, ImageId, confirmed.PaletteId, CancellationToken.None);
 
-        Assert.False(pythonClient.LastSharedBoundaries);
+        Assert.True(pythonClient.LastSharedBoundaries);
+    }
+
+    [Fact]
+    public async Task GenerateLayersAsync_WhenCachedTracingIsObsolete_RegeneratesOnceWithoutReusingOldVectors()
+    {
+        var (service, paletteService, _, registry, _, pythonClient) = CreateService();
+        var confirmed = await DetectAndConfirmPaletteAsync(paletteService);
+        var first = Assert.IsType<VectorLayerSetResult.Ready>(await service.GenerateLayersAsync(
+            ProjectId, ImageId, confirmed.PaletteId, CancellationToken.None));
+        registry.Save(first.Record with { TracingAlgorithmVersion = 0 });
+
+        var regenerated = Assert.IsType<VectorLayerSetResult.Ready>(await service.GenerateLayersAsync(
+            ProjectId, ImageId, confirmed.PaletteId, CancellationToken.None));
+        Assert.False(regenerated.FromCache);
+        Assert.NotEqual(first.Record.LayerSetId, regenerated.Record.LayerSetId);
+        Assert.Equal(VectorLayerService.CurrentTracingAlgorithmVersion, regenerated.Record.TracingAlgorithmVersion);
+        Assert.Equal(2, pythonClient.CallCount);
+        Assert.Equal(first.Record.Version + 1, regenerated.Record.Version);
+
+        var cached = Assert.IsType<VectorLayerSetResult.Ready>(await service.GenerateLayersAsync(
+            ProjectId, ImageId, confirmed.PaletteId, CancellationToken.None));
+        Assert.True(cached.FromCache);
+        Assert.Equal(regenerated.Record.LayerSetId, cached.Record.LayerSetId);
+        Assert.Equal(2, pythonClient.CallCount);
     }
 
     // 4x4: dos familias (mitades) y un fondo técnico; las máscaras de la prueba no se envían a Python real.

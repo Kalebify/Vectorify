@@ -110,7 +110,11 @@ public sealed class PersistentVectorLayerSetRegistry : IVectorLayerSetRegistry
                 }
 
                 var sessionKey = (record.ProjectId, record.ImageId, record.PaletteId);
-                _byParams[(record.ProjectId, record.ImageId, record.PaletteId, record.PaletteVersion)] = record;
+                var paramsKey = (record.ProjectId, record.ImageId, record.PaletteId, record.PaletteVersion);
+                if (!_byParams.TryGetValue(paramsKey, out var byParams) || record.Version > byParams.Version)
+                {
+                    _byParams[paramsKey] = record;
+                }
 
                 if (!_latest.TryGetValue(sessionKey, out var currentLatest) || record.Version > currentLatest.Version)
                 {
