@@ -45,38 +45,71 @@ from app.core.svg_path_parsing import collect_document_subpaths
 # Un subpath de menos de 3 puntos no delimita ningún área rellenable.
 _MIN_POINTS_FOR_FILL = 3
 
-# `cv2.fillPoly` rasteriza un polígono incluyendo su borde LEJANO (columna/fila
-# máxima) además del cercano -- confirmado empíricamente (ver reporte del
-# sprint, "Rasterización: sesgo sistemático de +1 fila/columna"): un cuadrado
-# de 30x30 vectorizado con vértices exactos en la grilla de píxeles (M0,0
-# L30,0 L30,30 L0,30, mismo criterio de VtracerEngine mode="polygon") se
-# rasteriza de vuelta como 31x31 (961 en vez de 900 píxeles) si se rellena
-# directo a la resolución final -- un sesgo sistemático que por sí solo ya
-# supera cualquier tolerancia razonable en formas chicas (una capa de 4x4
-# píxeles mide >50% de "mismatch" solo por este artefacto, no por ningún
-# error real de trazado). Se corrige rasterizando a una resolución
-# SUPERMUESTREADA (factor `scale`, cada píxel final se subdivide en
-# `scale`x`scale` subpíxeles) y reduciendo con `cv2.INTER_AREA` (promedio de
-# cobertura) + umbral al 50% -- el resultado converge al criterio correcto
-# "el píxeld entra si su CENTRO cae dentro del polígono", eliminando el sesgo
-# de borde inclusive de `cv2.fillPoly` (verificado: mismatch 0 en el caso de
-# arriba con `scale=8`, ver reporte del sprint).
-_MIN_SUPERSAMPLE_SCALE = 1
-_MAX_SUPERSAMPLE_SCALE = 8
+# Criterio de rasterizado: un píxel entra si su CENTRO cae dentro del polígono (regla par-impar). `cv2.fillPoly`
+# no sirve para esto: también pinta los píxeles que cruza el borde (un cuadrado de 30x30 con vértices exactos
+# en la grilla sale de 31x31, 961 píxeles en vez de 900) y cualquier capa mediría un sesgo de +1 fila/columna.
+# Antes se corregía supermuestreando (factor 1-8 según el tamaño de la capa), pero en las capas grandes el
+# factor caía a 1 y el sesgo quedaba entero: en el pato real, geometría EXACTA al píxel medía 0,7-3,3 % de
+# «contaminación» y «desajuste» solo por el rasterizador, y 0 % en las capas chicas (factor 8). Ahora se
+# rellena por líneas de barrido (`fill_even_odd`), exacto y sin supermuestreo.
+#
+# El punto de muestreo es el centro del píxel movido una fracción de px (`_SAMPLE_OFFSET_*`, primos distintos
+# en x e y): un centro que cae justo SOBRE una arista diagonal compartida pertenece así a un único polígono
+# (sin desempate, dos capas vecinas contarían ese píxel las dos).
+_SAMPLE_OFFSET_X = 0.5 - 1.0 / 997.0
+_SAMPLE_OFFSET_Y = 0.5 - 1.0 / 1009.0
 
-# Presupuesto de píxeles supermuestreados (ancho*alto*scale^2 del recorte al
-# bounding box de la capa, NO del lienzo completo -- ver más abajo): acota el
-# costo/memoria de la corrección de arriba para capas grandes (ej. un fondo
-# que cubre casi todo el lienzo) sin imponerle el mismo factor de escala x8
-# que necesita una capa chica -- 4_000_000 es del mismo orden que
-# max_svg_output_bytes/max_image_pixels ya usados como límites de este motor
-# (ver app.core.config.Settings), suficiente para llegar a scale=8 en capas
-# de hasta ~250x250 px y degradar gradualmente el factor de escala (nunca por
-# debajo de 1, nunca sin rasterizar del todo) en capas más grandes -- donde
-# el sesgo relativo de +1 fila/columna ya es naturalmente chico frente al
-# área total (confirmado empíricamente: un cuadrado de 200x120 sin ninguna
-# corrección ya mide solo ~1.7% de mismatch, contra ~6.8% en uno de 30x30).
-_SUPERSAMPLE_PIXEL_BUDGET = 4_000_000
+
+def fill_even_odd(rings: list[np.ndarray], width: int, height: int) -> np.ndarray:
+    """Máscara booleana (height x width) de los píxeles cuyo punto de muestreo cae dentro de `rings` (coordenadas
+    locales del recorte, cada anillo un array Nx2; se cierra solo) según la regla par-impar."""
+    rows: list[np.ndarray] = []
+    crossings: list[np.ndarray] = []
+    for ring in rings:
+        start = ring.astype(np.float64)
+        end = np.roll(start, -1, axis=0)
+        keep = start[:, 1] != end[:, 1]
+        if not keep.any():
+            continue
+        x0, y0 = start[keep, 0], start[keep, 1]
+        x1, y1 = end[keep, 0], end[keep, 1]
+        low = np.minimum(y0, y1)
+        high = np.maximum(y0, y1)
+        # Filas cuyo punto de muestreo `row + _SAMPLE_OFFSET_Y` cae en [low, high).
+        first = np.maximum(np.ceil(low - _SAMPLE_OFFSET_Y).astype(np.int64), 0)
+        last = np.minimum(np.ceil(high - _SAMPLE_OFFSET_Y).astype(np.int64), height)
+        counts = np.maximum(last - first, 0)
+        total = int(counts.sum())
+        if total == 0:
+            continue
+        edge = np.repeat(np.arange(first.size), counts)
+        offsets = np.arange(total) - np.repeat(np.cumsum(counts) - counts, counts)
+        row = first[edge] + offsets
+        sample_y = row + _SAMPLE_OFFSET_Y
+        slope = (x1[edge] - x0[edge]) / (y1[edge] - y0[edge])
+        rows.append(row)
+        crossings.append(x0[edge] + (sample_y - y0[edge]) * slope)
+    if not rows:
+        return np.zeros((height, width), dtype=bool)
+
+    row = np.concatenate(rows)
+    crossing = np.concatenate(crossings)
+    order = np.lexsort((crossing, row))
+    row, crossing = row[order], crossing[order]
+    # Dentro de cada fila, los cruces ordenados se emparejan (1.º-2.º, 3.º-4.º, ...): tramos rellenos.
+    new_row = np.ones(row.size, dtype=bool)
+    new_row[1:] = row[1:] != row[:-1]
+    group_start = np.nonzero(new_row)[0]
+    rank = np.arange(row.size) - np.repeat(group_start, np.diff(np.append(group_start, row.size)))
+    opening = (rank % 2 == 0) & (np.arange(row.size) + 1 < row.size)
+    opening[:-1] &= row[1:] == row[:-1]
+    starts = np.nonzero(opening)[0]
+    first_col = np.clip(np.ceil(crossing[starts] - _SAMPLE_OFFSET_X).astype(np.int64), 0, width)
+    last_col = np.clip(np.ceil(crossing[starts + 1] - _SAMPLE_OFFSET_X).astype(np.int64), 0, width)
+    delta = np.zeros((height, width + 1), dtype=np.int32)
+    np.add.at(delta, (row[starts], first_col), 1)
+    np.add.at(delta, (row[starts], last_col), -1)
+    return np.cumsum(delta[:, :width], axis=1) > 0
 
 
 def rasterize_svg_mask(svg_text: str, width: int, height: int) -> np.ndarray:
@@ -99,11 +132,10 @@ def rasterize_svg_mask(svg_text: str, width: int, height: int) -> np.ndarray:
     duplicar ese cálculo de profundidad/contención (privado a ese módulo),
     solo para rasterizar.
 
-    Solo se rasteriza (a resolución supermuestreada, ver constantes de
+    Solo se rasteriza (muestreando el centro de cada píxel, ver constantes de
     arriba) el recorte del RECTÁNGULO delimitador de todos los subpaths de
     esta capa (expandido 1px de margen, recortado al lienzo) -- el resto del
-    lienzo es 0/background por construcción, así que no hace falta
-    supermuestrear área que de entrada no tiene geometría.
+    lienzo es 0/background por construcción.
     """
     root = ET.fromstring(svg_text)
     subpaths, _ = collect_document_subpaths(root)
@@ -122,23 +154,11 @@ def rasterize_svg_mask(svg_text: str, width: int, height: int) -> np.ndarray:
     bbox_width = max(1, max_x - min_x)
     bbox_height = max(1, max_y - min_y)
 
-    scale = int(math.floor(math.sqrt(_SUPERSAMPLE_PIXEL_BUDGET / (bbox_width * bbox_height))))
-    scale = max(_MIN_SUPERSAMPLE_SCALE, min(_MAX_SUPERSAMPLE_SCALE, scale))
-
-    big_width, big_height = bbox_width * scale, bbox_height * scale
-    supersampled = np.zeros((big_height, big_width), dtype=np.uint8)
-    for subpath in fillable:
-        polygon = np.array(
-            [[round((x - min_x) * scale), round((y - min_y) * scale)] for x, y in subpath["points"]],
-            dtype=np.int32,
-        )
-        layer = np.zeros((big_height, big_width), dtype=np.uint8)
-        cv2.fillPoly(layer, [polygon], 255)
-        supersampled = cv2.bitwise_xor(supersampled, layer)
-
-    downsampled = cv2.resize(supersampled, (bbox_width, bbox_height), interpolation=cv2.INTER_AREA)
-    _, bbox_mask = cv2.threshold(downsampled, 127, 255, cv2.THRESH_BINARY)
-    mask[min_y:max_y, min_x:max_x] = bbox_mask
+    rings = [
+        np.array([[x - min_x, y - min_y] for x, y in subpath["points"]], dtype=np.float64) for subpath in fillable
+    ]
+    accumulated = np.where(fill_even_odd(rings, bbox_width, bbox_height), np.uint8(255), np.uint8(0))
+    mask[min_y:max_y, min_x:max_x] = accumulated
 
     return mask
 

@@ -19,8 +19,15 @@ public interface IPythonVectorLayerClient
     /// corrupta/vacía, SVG demasiado grande, respuesta inválida, error HTTP)
     /// se traduce a un <see cref="PythonVectorLayerBatchResult"/> con el
     /// estado correspondiente.
+    /// <para>
+    /// <paramref name="sharedBoundaries"/>: las máscaras son una PARTICIÓN (ningún píxel en dos
+    /// máscaras, p. ej. las familias de color base) y el motor las traza juntas con fronteras
+    /// compartidas: dos capas vecinas no se solapan ni dejan rendijas (que, cerradas, eran piezas
+    /// flotantes). Si las máscaras comparten píxeles el motor las traza por separado.
+    /// </para>
     /// </summary>
     Task<PythonVectorLayerBatchResult> VectorizeLayersAsync(
         IReadOnlyList<(Guid GroupId, Stream Content, string ContentType)> masks,
+        bool sharedBoundaries = false,
         CancellationToken cancellationToken = default);
 }

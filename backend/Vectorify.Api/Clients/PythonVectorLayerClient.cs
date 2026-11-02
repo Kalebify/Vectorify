@@ -38,6 +38,7 @@ public sealed class PythonVectorLayerClient : IPythonVectorLayerClient
 
     public async Task<PythonVectorLayerBatchResult> VectorizeLayersAsync(
         IReadOnlyList<(Guid GroupId, Stream Content, string ContentType)> masks,
+        bool sharedBoundaries = false,
         CancellationToken cancellationToken = default)
     {
         using var form = new MultipartFormDataContent();
@@ -50,6 +51,10 @@ public sealed class PythonVectorLayerClient : IPythonVectorLayerClient
 
         var groupIdsJson = JsonSerializer.Serialize(masks.Select(m => m.GroupId.ToString("N")).ToList(), JsonOptions);
         form.Add(new StringContent(groupIdsJson), "group_ids");
+        if (sharedBoundaries)
+        {
+            form.Add(new StringContent("true"), "shared_boundaries");
+        }
 
         HttpResponseMessage response;
         try

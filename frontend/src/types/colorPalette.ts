@@ -52,6 +52,11 @@ export type GroupingStyle = "base_colors" | "detailed";
  * Qué se considera fondo (estilo `base_colors`) y qué quedó en duda. `needsReview` pide revisión
  * humana (claros pegados al fondo que el color no distingue): nunca es una aprobación.
  */
+/** Zona que la persona marcó como «esto NO es fondo»: polígono en píxeles de la imagen original (0..ancho, 0..alto). */
+export interface BackgroundCorrection {
+  points: [number, number][];
+}
+
 export interface PaletteBackground {
   areaPercent: number;
   ambiguousPercent: number;
@@ -86,6 +91,8 @@ export interface ColorPaletteResponse {
   familyCount?: number;
   pieceCount?: number;
   background?: PaletteBackground | null;
+  /** Zonas «esto NO es fondo» con las que se generó la paleta (solo `base_colors`); ausente/null = ninguna. */
+  backgroundCorrections?: BackgroundCorrection[] | null;
 }
 
 /**

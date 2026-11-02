@@ -26,4 +26,7 @@ public sealed record VectorLayerSetVersion(
     IReadOnlyList<VectorLayer> Layers,
     int SourceWidthPx,
     int SourceHeightPx,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    // Older persisted versions deserialize as 0 and remain readable, but must
+    // be regenerated rather than reused after the tracing algorithm changes.
+    int TracingAlgorithmVersion = 0);

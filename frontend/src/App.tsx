@@ -14,6 +14,7 @@ import { DimensionPanel, type DimensionSourceOption } from "./components/dimensi
 import { EditorShell } from "./components/editor/EditorShell";
 import { ExportPanel, type ExportSourceOption } from "./components/export/ExportPanel";
 import { LayersPanel } from "./components/layers/LayersPanel";
+import { OpenWorkspaceButton } from "./components/layers/OpenWorkspaceButton";
 import { ProjectsDashboard } from "./components/projects/ProjectsDashboard";
 import { PreprocessPanel } from "./components/preprocess/PreprocessPanel";
 import { SimplifyPanel } from "./components/simplify/SimplifyPanel";
@@ -432,7 +433,9 @@ function App() {
     clearWorkspaceRecoveryPointer();
   };
 
-  const handleProjectCreated = (project: UploadImageResponse | null) => {
+  // UploadPanel uses this callback in its success effect. Keep it stable so
+  // changing modes or downstream settings does not restart the same project.
+  const handleProjectCreated = useCallback((project: UploadImageResponse | null) => {
     setVectorizationMode("color");
     setHasUsedMonochrome(false);
     setConfirmedPalette(null);
@@ -446,7 +449,7 @@ function App() {
     setReadySimplification(null);
     setReadyDimension(null);
     setActiveProject(project);
-  };
+  }, []);
 
   // M2-S02 (Layers) consume la paleta CONFIRMADA de M2-S01: recién ahí se
   // activa el panel de capas. Independiente del resto del pipeline de MVP1
@@ -658,11 +661,14 @@ function App() {
 
             {confirmedPalette && (
               <p className="upload-section__hint">
-                Paleta confirmada. Generá las capas en el panel de abajo antes de abrir el Workspace; allí podés exportar el SVG por colores.{" "}
-                <button
-                  type="button"
-                  className="upload-actions__button upload-actions__button--primary"
-                  onClick={() => {
+                Paleta confirmada. Al abrir el Workspace se preparan las capas que falten; allí podés exportar el SVG por colores.{" "}
+                <OpenWorkspaceButton
+                  key={`${activeProject.projectId}-${activeProject.imageId}-${confirmedPalette.paletteId}-${confirmedPalette.version}`}
+                  projectId={activeProject.projectId}
+                  imageId={activeProject.imageId}
+                  paletteId={confirmedPalette.paletteId}
+                  paletteVersion={confirmedPalette.version}
+                  onReady={() => {
                     // La URL se actualiza ACÁ (no en un efecto) para que un reload
                     // inmediatamente después reconstruya la misma sesión (M2.1-S08,
                     // spec.md punto 4 del alcance) -- no solo un deep-link pegado a mano.
@@ -673,9 +679,7 @@ function App() {
                     });
                     setIsWorkspaceOpen(true);
                   }}
-                >
-                  Abrir en el Workspace
-                </button>
+                />
               </p>
             )}
           </section>
@@ -733,7 +737,7 @@ function App() {
               máscara binaria apta para vectorizar. El preview preprocesado nunca se modifica.
             </p>
             <ThresholdPanel
-              key={`${activeProject.projectId}-${activeProject.imageId}-${readyPreview.previewId}`}
+              key={`${activeProject.projectId}-${activeProject.imageId}`}
               projectId={activeProject.projectId}
               imageId={activeProject.imageId}
               fileName={activeProject.filename}

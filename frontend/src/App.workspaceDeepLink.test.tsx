@@ -273,7 +273,7 @@ describe("App — reapertura del Workspace por URL (M2.1-S08)", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Abrir en el Workspace" }));
 
-    expect(window.location.search).toContain(`projectId=${PROJECT_ID}`);
+    await waitFor(() => expect(window.location.search).toContain(`projectId=${PROJECT_ID}`));
     expect(window.location.search).toContain(`imageId=${IMAGE_ID}`);
     expect(window.location.search).toContain(`paletteId=${PALETTE_ID}`);
   });

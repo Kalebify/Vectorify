@@ -535,6 +535,16 @@ class PhysicalUnionResponse(BaseModel):
     bridge_count: int = Field(ge=0)
 
 
+class BackgroundCorrection(BaseModel):
+    """Zona que la persona marcó como «esto NO es fondo»: polígono en coordenadas de imagen (0..ancho, 0..alto),
+    sobre las esquinas de los píxeles. Los píxeles de fondo cuyo centro cae dentro pasan a su familia por color."""
+
+    points: list[tuple[
+        Annotated[float, Field(allow_inf_nan=False, ge=-100_000, le=100_000)],
+        Annotated[float, Field(allow_inf_nan=False, ge=-100_000, le=100_000)],
+    ]] = Field(min_length=3, max_length=500)
+
+
 class ColorPaletteParams(BaseModel):
     """Parámetros de detección/reducción de paleta de colores (M2-S01):
     tolerancia de fusión automática (distancia euclídea en espacio Lab, ver
@@ -593,6 +603,15 @@ class ColorPaletteParams(BaseModel):
         description=(
             "Solo 'base_colors': intensidad de agrupación 0-1. Más alto fusiona más (tonos más lejanos, "
             "luminosidades y saturaciones más distintas); 0 conserva diferencias intencionales. Se ignora en 'detailed'."
+        ),
+    )
+    background_corrections: list[BackgroundCorrection] = Field(
+        default_factory=list,
+        max_length=32,
+        description=(
+            "Solo 'base_colors': zonas que la persona marcó como «esto NO es fondo» (un blanco del dibujo que se funde "
+            "con el fondo sin borde distinguible). Se quitan del fondo y pasan a su familia por su propio color; nunca se "
+            "reconstruye ni se borra nada en silencio. Se ignora en 'detailed'."
         ),
     )
 

@@ -35,6 +35,13 @@ class InvalidParametersError(PreprocessingError):
     code = "invalid_parameters"
 
 
+class NotAPartitionError(PreprocessingError):
+    """Las máscaras no son una partición (comparten píxeles o tienen dimensiones distintas): no pueden
+    trazarse con fronteras compartidas. El llamador recurre al trazado independiente."""
+
+    code = "not_a_partition"
+
+
 class EmptyMaskError(PreprocessingError):
     """La máscara recibida no tiene ningún píxel de foreground (blanco): no hay
     nada que vectorizar. Ver spec.md M1-S05, "Pruebas": "máscara vacía (sin

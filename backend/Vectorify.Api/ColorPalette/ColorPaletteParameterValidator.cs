@@ -84,8 +84,15 @@ public sealed class ColorPaletteParameterValidator : IColorPaletteParameterValid
                 $"groupingStrength debe estar en el rango [{_options.MinGroupingStrength}, {_options.MaxGroupingStrength}].");
         }
 
+        var correctionsError = BackgroundCorrection.Validate(request.BackgroundCorrections);
+        if (correctionsError is not null)
+        {
+            return ColorPaletteParameterValidationResult.Failure("invalid_parameters", correctionsError);
+        }
+
         // En base_colors el tope lo da targetFamilies: maxColors no aplica y se normaliza a null.
         return ColorPaletteParameterValidationResult.Success(new ColorPaletteParameters(
-            tolerance, MaxColors: null, tinyAreaRatio, style, request.TargetFamilies, strength, ColorPaletteAlgorithm.CurrentVersion));
+            tolerance, MaxColors: null, tinyAreaRatio, style, request.TargetFamilies, strength, ColorPaletteAlgorithm.CurrentVersion,
+            BackgroundCorrection.Normalize(request.BackgroundCorrections)));
     }
 }

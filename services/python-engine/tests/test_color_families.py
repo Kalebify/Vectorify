@@ -459,3 +459,167 @@ def test_speckle_absorption_never_touches_transparent_pixels():
 
     union = np.maximum.reduce([g.mask for g in result.groups])
     assert not np.any(union[50:52, 50:52] == 255)
+
+
+# --- Contactos solo por una esquina (conectividad 4 vs 8) ---
+
+from app.core import color_families  # noqa: E402
+
+
+def _labels(size=12) -> np.ndarray:
+    return np.zeros((size, size), dtype=np.int32)
+
+
+def test_enclosed_background_pocket_joined_to_the_background_only_by_a_corner_goes_to_the_neighbour():
+    labels = _labels()  # 0 = fondo
+    labels[3:9, 3:9] = 1  # dibujo
+    labels[3, 3] = 0      # esquina del dibujo: toca el fondo exterior por un lado (4-conexo)
+    labels[4, 4] = 0      # unida a esa esquina solo en diagonal
+    labels[5, 5] = 0      # y esta a la anterior solo en diagonal
+
+    refined = color_families.absorb_enclosed_background(labels, background_label=0)
+
+    assert refined[4, 4] == 1 and refined[5, 5] == 1, "la cadena diagonal no es fondo"
+    assert refined[3, 3] == 0 and refined[0, 0] == 0, "el fondo conectado al borde por un lado no se toca"
+
+
+def test_background_touching_the_canvas_border_is_never_a_pocket():
+    labels = _labels()
+    labels[:, :4] = 1  # el fondo (0) llega a dos bordes
+
+    refined = color_families.absorb_enclosed_background(labels, background_label=0)
+
+    assert np.array_equal(refined, labels)
+
+
+def test_background_next_to_transparent_pixels_is_not_a_pocket():
+    labels = _labels()
+    labels[:] = 1
+    labels[4:8, 4:8] = 0       # fondo que no toca el borde...
+    labels[3, 4:8] = -1        # ...pero limita con píxeles sin grupo (alpha 0)
+
+    refined = color_families.absorb_enclosed_background(labels, background_label=0)
+
+    assert np.array_equal(refined, labels)
+
+
+def test_enclosed_background_pocket_absorption_keeps_the_partition_exact():
+    labels = _labels()
+    labels[2:10, 2:10] = 1
+    labels[5:7, 5:7] = 0
+    labels[4, 4] = 0
+
+    refined = color_families.absorb_enclosed_background(labels, background_label=0)
+
+    assert int((refined < 0).sum()) == 0
+    assert set(np.unique(refined)) == {0, 1}
+
+
+def test_diagonal_fragment_hanging_from_a_piece_is_absorbed():
+    labels = _labels()
+    labels[2:8, 2:8] = 1
+    labels[8, 8] = 1   # un píxel que toca la pieza solo por la esquina
+
+    refined = color_families.absorb_diagonal_fragments(labels)
+
+    assert refined[8, 8] == 0
+    assert int((refined == 1).sum()) == 36
+
+
+def test_a_thin_diagonal_line_made_only_of_corner_contacts_is_kept():
+    labels = _labels(20)
+    for i in range(2, 18):
+        labels[i, i] = 1   # línea de 1 px en diagonal: ningún píxel tiene un vecino lateral de su etiqueta
+
+    refined = color_families.absorb_diagonal_fragments(labels)
+
+    assert np.array_equal(refined, labels)
+
+
+def test_fragments_larger_than_the_limit_are_real_pieces_and_stay():
+    labels = _labels()
+    labels[2:8, 2:8] = 1
+    labels[8:10, 8:10] = 1   # 4 px > 3: pieza real unida por una esquina
+
+    refined = color_families.absorb_diagonal_fragments(labels)
+
+    assert np.array_equal(refined, labels)
+
+
+def test_diagonal_fragment_absorption_never_touches_unassigned_pixels():
+    labels = _labels()
+    labels[2:8, 2:8] = 1
+    labels[8, 8] = 1
+    labels[9:, :] = -1
+
+    refined = color_families.absorb_diagonal_fragments(labels)
+
+    assert int((refined < 0).sum()) == int((labels < 0).sum())
+    assert refined[8, 8] == 0
+
+
+# --- Corrección manual del fondo («esto NO es fondo») ---
+
+
+def _ellipse_polygon(cx, cy, rx, ry, count=48):
+    return [(cx + rx * np.cos(2 * np.pi * i / count), cy + ry * np.sin(2 * np.pi * i / count)) for i in range(count)]
+
+
+def _figure_with_white_merging_into_the_background():
+    """Círculo naranja con un blanco que se funde con el fondo SIN borde: la mitad exterior de la elipse blanca."""
+    image = blank(200, 200)
+    paint_ellipse(image, 80, 100, 55, 55, lch_to_bgr(55, 60, 50))
+    paint_ellipse(image, 80, 100, 18, 30, (250, 250, 250))  # ojo interior (rodeado de naranja)
+    image[70:130, 120:190] = WHITE
+    paint_ellipse(image, 130, 100, 20, 30, WHITE)           # la parte blanca del dibujo se toca con el fondo
+    return image
+
+
+def test_marked_region_leaves_the_background_and_joins_the_family_of_its_own_colour():
+    image = _figure_with_white_merging_into_the_background()
+    without = detect(image)
+    polygon = _ellipse_polygon(130, 100, 22, 32)
+
+    corrected = detect_base_color_palette(
+        image, None, tolerance=8.0, max_unique_colors=512, tiny_area_ratio=0.0,
+        target_families=None, grouping_strength=0.5, background_corrections=[polygon],
+    )
+
+    background_without = next(g for g in without.groups if g.is_background)
+    background_corrected = next(g for g in corrected.groups if g.is_background)
+    assert background_without.mask[100, 130] == 255, "sin corrección el blanco queda como fondo"
+    assert background_corrected.mask[100, 130] == 0, "con la zona marcada ya no es fondo"
+    assert group_index_at(corrected, 130, 100) != -1 and not corrected.groups[group_index_at(corrected, 130, 100)].is_background
+    assert background_corrected.mask[100, 190] == 255, "el fondo fuera de la zona marcada sigue siendo fondo"
+    assert background_corrected.pixel_count < background_without.pixel_count
+
+
+def test_corrections_keep_the_partition_exact_and_are_deterministic():
+    image = _figure_with_white_merging_into_the_background()
+    polygon = _ellipse_polygon(130, 100, 22, 32)
+
+    def run():
+        return detect_base_color_palette(
+            image, None, tolerance=8.0, max_unique_colors=512, tiny_area_ratio=0.0,
+            target_families=None, grouping_strength=0.5, background_corrections=[polygon],
+        )
+
+    first, second = run(), run()
+
+    stack = np.stack([g.mask == 255 for g in first.groups])
+    assert int(stack.sum(axis=0).min()) == 1 and int(stack.sum(axis=0).max()) == 1
+    for a, b in zip(first.groups, second.groups):
+        assert np.array_equal(a.mask, b.mask)
+
+
+def test_a_region_outside_the_canvas_or_without_background_changes_nothing():
+    image = _figure_with_white_merging_into_the_background()
+    baseline = detect(image)
+
+    far_away = detect_base_color_palette(
+        image, None, tolerance=8.0, max_unique_colors=512, tiny_area_ratio=0.0,
+        target_families=None, grouping_strength=0.5, background_corrections=[[(500, 500), (600, 500), (600, 600)]],
+    )
+
+    for a, b in zip(baseline.groups, far_away.groups):
+        assert np.array_equal(a.mask, b.mask)

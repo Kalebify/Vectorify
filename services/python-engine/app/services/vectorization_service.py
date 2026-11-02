@@ -15,11 +15,12 @@ import cv2
 import imagesize
 import numpy as np
 
-from app.core import pipeline, threshold_pipeline
+from app.core import pipeline, shared_boundaries, threshold_pipeline
 from app.core.config import Settings
 from app.core.errors import (
     DimensionsExceededError,
     EmptyMaskError,
+    NotAPartitionError,
     SvgOutputTooLargeError,
     VectorizationTimeoutError,
 )
@@ -54,6 +55,31 @@ class VectorizationService:
         app.api.routes.vectorize.vectorize_layers (comparar el SVG resultante
         contra la MISMA máscara que lo generó, no una re-decodificada aparte
         que podría divergir sutilmente del binarizado real)."""
+        mask = self._decode_mask(data)
+        raw_svg = self._trace_with_timeout(mask)
+        return self._build_response(raw_svg, mask), mask
+
+    def process_partition_with_masks(
+        self, datas: list[bytes], simplify_tolerance: float = shared_boundaries.DEFAULT_SIMPLIFY_TOLERANCE_PX
+    ) -> list[tuple[VectorizeResponse, np.ndarray]]:
+        """Vectoriza un conjunto de máscaras DISJUNTAS (la partición por familias de color) con fronteras
+        compartidas: la frontera entre dos máscaras vecinas se calcula una sola vez (app.core.shared_boundaries),
+        así que sus capas no se solapan ni dejan rendijas. Mismas validaciones que `process_with_mask` para cada
+        máscara; si no son una partición (dimensiones distintas o algún píxel compartido) lanza
+        `NotAPartitionError` y el llamador decide si recurre al trazado independiente."""
+        masks = [self._decode_mask(data) for data in datas]
+        if len({mask.shape for mask in masks}) > 1:
+            raise NotAPartitionError("las máscaras tienen dimensiones distintas")
+        if not shared_boundaries.are_disjoint(masks):
+            raise NotAPartitionError("las máscaras comparten píxeles")
+        polygons = self._run_with_timeout(shared_boundaries.trace_polygons, masks, simplify_tolerance)
+        height, width = masks[0].shape[:2]
+        return [
+            (self._build_response(shared_boundaries.polygon_to_svg(polygon, width, height), mask), mask)
+            for polygon, mask in zip(polygons, masks)
+        ]
+
+    def _decode_mask(self, data: bytes) -> np.ndarray:
         self._reject_if_header_dimensions_exceed_limits(data)
 
         image = pipeline.read_image_safely(data)
@@ -77,8 +103,9 @@ class VectorizationService:
             raise EmptyMaskError(
                 "La máscara no contiene ningún píxel de foreground (blanco): no hay nada para vectorizar."
             )
+        return mask
 
-        raw_svg = self._trace_with_timeout(mask)
+    def _build_response(self, raw_svg: str, mask: np.ndarray) -> VectorizeResponse:
         sanitized_svg = sanitize_svg(raw_svg)
 
         encoded_size = len(sanitized_svg.encode("utf-8"))
@@ -91,7 +118,7 @@ class VectorizationService:
         stats = compute_svg_stats(sanitized_svg)
         height, width = mask.shape[:2]
 
-        response = VectorizeResponse(
+        return VectorizeResponse(
             svg=sanitized_svg,
             content_type="image/svg+xml",
             width=width,
@@ -102,9 +129,11 @@ class VectorizationService:
                 bounds=VectorBounds(**stats["bounds"]),
             ),
         )
-        return response, mask
 
     def _trace_with_timeout(self, mask: np.ndarray) -> str:
+        return self._run_with_timeout(self._engine.trace, mask)
+
+    def _run_with_timeout(self, function, *args):
         """Aplica Vectorize:TimeoutSeconds (vectorize_timeout_seconds) al
         trazado. VTracer es una llamada nativa (Rust) síncrona sin mecanismo
         de cancelación cooperativa: el timeout se implementa ejecutando el
@@ -122,7 +151,7 @@ class VectorizationService:
         limitaciones".
         """
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(self._engine.trace, mask)
+        future = executor.submit(function, *args)
         try:
             result = future.result(timeout=self._settings.vectorize_timeout_seconds)
         except concurrent.futures.TimeoutError as exc:

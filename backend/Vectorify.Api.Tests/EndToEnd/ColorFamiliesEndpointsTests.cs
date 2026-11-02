@@ -72,6 +72,58 @@ public sealed class ColorFamiliesEndpointsTests : IDisposable
     }
 
     [Fact]
+    public async Task Detect_WithMarkedZones_SendsThemToThePythonEngineAndTheEchoSurvivesReopening()
+    {
+        await using var python = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.FamiliesBody()));
+        await using var factory = CreateFactory(python.BaseUrl);
+        var client = factory.CreateClient();
+        var upload = await UploadAsync(client);
+        var zone = new BackgroundCorrection([[1.0, 1.0], [8.0, 1.0], [8.0, 8.0]]);
+
+        var response = await client.PostAsJsonAsync(
+            $"{Root(upload)}/detect", new ColorPaletteDetectRequest(null, null, null, null, "base_colors", 5, 0.5, [zone]));
+        var palette = (await response.Content.ReadFromJsonAsync<ColorPaletteResponse>())!;
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Single(palette.BackgroundCorrections!);
+        Assert.Equal(new[] { 1.0, 1.0 }, palette.BackgroundCorrections![0].Points[0]);
+        Assert.Contains("\"background_corrections\":[{\"points\":[[1,1],[8,1],[8,8]]}]", python.LastColorPaletteParams, StringComparison.Ordinal);
+        var reopened = (await client.GetFromJsonAsync<ColorPaletteResponse>($"{Root(upload)}/{palette.PaletteId}"))!;
+        Assert.Equal(3, reopened.BackgroundCorrections![0].Points.Count);
+    }
+
+    [Fact]
+    public async Task Detect_WithoutMarkedZones_ReportsNone()
+    {
+        await using var python = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.FamiliesBody()));
+        await using var factory = CreateFactory(python.BaseUrl);
+        var client = factory.CreateClient();
+        var upload = await UploadAsync(client);
+
+        var palette = await DetectFamiliesAsync(client, upload);
+
+        Assert.Null(palette.BackgroundCorrections);
+    }
+
+    [Fact]
+    public async Task Detect_WithTooManyZones_ReturnsBadRequest()
+    {
+        await using var python = await FakePythonPreprocessServer.StartAsync(
+            _ => (200, "{}"), respondColorPalette: _ => (200, ColorPalettePayloads.FamiliesBody()));
+        await using var factory = CreateFactory(python.BaseUrl);
+        var client = factory.CreateClient();
+        var upload = await UploadAsync(client);
+        var zones = Enumerable.Repeat(new BackgroundCorrection([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]), BackgroundCorrection.MaxRegions + 1).ToList();
+
+        var response = await client.PostAsJsonAsync(
+            $"{Root(upload)}/detect", new ColorPaletteDetectRequest(null, null, null, null, "base_colors", 5, 0.5, zones));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Detect_WithoutStyle_KeepsTheDetailedBehaviorAndReportsNoBackground()
     {
         await using var python = await FakePythonPreprocessServer.StartAsync(

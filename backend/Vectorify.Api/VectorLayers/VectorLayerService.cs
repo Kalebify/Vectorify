@@ -29,6 +29,7 @@ namespace Vectorify.Api.VectorLayers;
 /// </summary>
 public sealed class VectorLayerService : IVectorLayerService
 {
+    public const int CurrentTracingAlgorithmVersion = 1;
     private readonly IColorPaletteService _colorPaletteService;
     private readonly IVectorLayerSetRegistry _layerSetRegistry;
     private readonly IVectorVersionRegistry _vectorRegistry;
@@ -80,7 +81,7 @@ public sealed class VectorLayerService : IVectorLayerService
             // registra como una versión NUEVA del historial -- mismo criterio que
             // VectorizationService/ColorPaletteService.
             var cached = _layerSetRegistry.FindByParams(projectId, imageId, paletteId, palette.Version);
-            if (cached is not null)
+            if (cached is not null && cached.TracingAlgorithmVersion == CurrentTracingAlgorithmVersion)
             {
                 var cachedVersion = _layerSetRegistry.NextVersion(projectId, imageId, paletteId);
                 var cachedRecord = cached with { Version = cachedVersion, CreatedAt = DateTimeOffset.UtcNow };
@@ -118,7 +119,10 @@ public sealed class VectorLayerService : IVectorLayerService
             PythonVectorLayerBatchResult pythonResult;
             try
             {
-                pythonResult = await _pythonClient.VectorizeLayersAsync(masks, cancellationToken);
+                // Both detailed palettes and base families partition the source pixels.
+                // Trace adjacent colors together: independent contours leave gaps in thin lettering.
+                // Python validates disjointness and falls back if imported masks overlap.
+                pythonResult = await _pythonClient.VectorizeLayersAsync(masks, sharedBoundaries: true, cancellationToken);
             }
             finally
             {
@@ -230,7 +234,8 @@ public sealed class VectorLayerService : IVectorLayerService
                 layers,
                 palette.SourceWidthPx,
                 palette.SourceHeightPx,
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow,
+                TracingAlgorithmVersion: CurrentTracingAlgorithmVersion);
             _layerSetRegistry.Save(record);
 
             _logger.LogInformation(

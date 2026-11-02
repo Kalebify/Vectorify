@@ -72,6 +72,7 @@ determinista de arriba ya lo hace):
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 import cv2
@@ -510,6 +511,7 @@ def detect_base_color_palette(
     tiny_area_ratio: float = 0.0,
     target_families: int | None = None,
     grouping_strength: float = 0.5,
+    background_corrections: Sequence[Sequence[tuple[float, float]]] = (),
 ) -> PaletteDetectionResult:
     """Estilo "Colores base": detecta los tonos con `detect_palette` (sin
     tope de colores), separa el fondo como máscara independiente y reúne los
@@ -531,8 +533,11 @@ def detect_base_color_palette(
     thresholds = color_families.thresholds_for(grouping_strength)
 
     masks = [g.mask for g in detailed.groups]
+    # Zonas que la persona marcó como «esto NO es fondo» (p. ej. un blanco del dibujo que se funde con el fondo
+    # sin borde): salen del fondo y pasan a su familia por su color. Sin zonas, el comportamiento no cambia.
+    restored = color_families.polygons_mask(background_corrections, height, width) if background_corrections else None
     background = color_families.detect_background(
-        masks, [g.color_bgr for g in detailed.groups], bgr, relevant, tolerance, thresholds.neutral_chroma
+        masks, [g.color_bgr for g in detailed.groups], bgr, relevant, tolerance, thresholds.neutral_chroma, restored
     )
     background_pixels = background.mask == 255 if background is not None else np.zeros((height, width), dtype=bool)
 
@@ -573,6 +578,9 @@ def detect_base_color_palette(
         family_lightness.append(float(color_families.lab_features(bg_color)[0, 0]))
     label_image = color_families.resolve_transition_pixels(label_image, bgr, family_lightness)
     label_image = color_families.absorb_speckles(label_image, color_families.speckle_area(int(np.count_nonzero(relevant))))
+    if background is not None:
+        label_image = color_families.absorb_enclosed_background(label_image, background_label)
+    label_image = color_families.absorb_diagonal_fragments(label_image)
 
     families: list[ColorGroup] = []
     for position, members in enumerate(members_by_family):

@@ -99,6 +99,92 @@ public sealed class ColorFamilyGroupingTests : IDisposable
         Assert.Equal("invalid_parameters", result.ErrorCode);
     }
 
+    // ---- Zonas «esto NO es fondo» (corrección manual del fondo) ----
+
+    private static BackgroundCorrection Zone(params (double X, double Y)[] points) =>
+        new(points.Select(p => (IReadOnlyList<double>)new[] { p.X, p.Y }).ToList());
+
+    private static ColorPaletteDetectRequest WithZones(params BackgroundCorrection[] zones) =>
+        new(null, null, null, null, "base_colors", 5, 0.5, zones);
+
+    [Fact]
+    public void Validate_BaseColors_KeepsTheMarkedZonesInTheEffectiveParameters()
+    {
+        var zone = Zone((1, 1), (8, 1), (8, 8));
+
+        var result = CreateValidator().Validate(WithZones(zone));
+
+        Assert.True(result.IsValid);
+        Assert.Equal(new[] { zone }, result.Parameters!.BackgroundCorrections);
+    }
+
+    [Fact]
+    public void Validate_BaseColors_WithoutZones_NormalizesToNullSoTheCacheKeyIsStable()
+    {
+        var none = CreateValidator().Validate(BaseColors(target: 5)).Parameters!;
+        var empty = CreateValidator().Validate(WithZones()).Parameters!;
+
+        Assert.Null(none.BackgroundCorrections);
+        Assert.Null(empty.BackgroundCorrections);
+        Assert.Equal(none.ToCacheKey(), empty.ToCacheKey());
+        Assert.EndsWith("corrections=none", none.ToCacheKey(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Validate_Detailed_IgnoresTheMarkedZones()
+    {
+        var request = new ColorPaletteDetectRequest(null, null, null, null, "detailed", null, null, [Zone((1, 1), (8, 1), (8, 8))]);
+
+        var result = CreateValidator().Validate(request);
+
+        Assert.True(result.IsValid);
+        Assert.Null(result.Parameters!.BackgroundCorrections);
+    }
+
+    [Fact]
+    public void Validate_BaseColors_DoesNotCountTheZonesTowardsAnyOtherParameter()
+    {
+        var result = CreateValidator().Validate(WithZones(Zone((0, 0), (5, 0), (5, 5))));
+
+        Assert.Equal(5, result.Parameters!.TargetFamilies);
+        Assert.Equal(0.5, result.Parameters.GroupingStrength);
+    }
+
+    public static IEnumerable<object[]> InvalidZones()
+    {
+        yield return new object[] { new[] { Zone((0, 0), (1, 1)) } };                                          // menos de 3 vértices
+        yield return new object[] { new[] { Zone((0, 0), (1, 1), (double.NaN, 2)) } };                         // no finito
+        yield return new object[] { new[] { Zone((0, 0), (1, 1), (double.PositiveInfinity, 2)) } };
+        yield return new object[] { new[] { Zone((0, 0), (1, 1), (1e9, 2)) } };                                // fuera de rango
+        yield return new object[] { new[] { new BackgroundCorrection([[0.0, 0.0], [1.0, 1.0], [1.0, 2.0, 3.0]]) } };  // no es [x, y]
+        yield return new object[] { Enumerable.Repeat(Zone((0, 0), (1, 0), (1, 1)), BackgroundCorrection.MaxRegions + 1).ToArray() };
+        yield return new object[] { new[] { Zone(Enumerable.Range(0, BackgroundCorrection.MaxPoints + 1).Select(i => ((double)i, (double)i)).ToArray()) } };
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidZones))]
+    public void Validate_WithInvalidZones_ReturnsInvalidParameters(BackgroundCorrection[] zones)
+    {
+        var result = CreateValidator().Validate(WithZones(zones));
+
+        Assert.False(result.IsValid);
+        Assert.Equal("invalid_parameters", result.ErrorCode);
+    }
+
+    [Fact]
+    public void CacheKey_ChangesWithTheMarkedZonesAndNotWithTheirInsignificantDecimals()
+    {
+        var baseline = new ColorPaletteParameters(12, null, 0.001, "base_colors", 5, 0.5, 2);
+        var one = baseline with { BackgroundCorrections = [Zone((1, 1), (8, 1), (8, 8))] };
+        var sameWithNoise = baseline with { BackgroundCorrections = [Zone((1.0001, 1), (8, 1.0004), (8, 8))] };
+        var other = baseline with { BackgroundCorrections = [Zone((1, 1), (8, 1), (8, 9))] };
+        var two = baseline with { BackgroundCorrections = [Zone((1, 1), (8, 1), (8, 8)), Zone((2, 2), (3, 2), (3, 3))] };
+
+        Assert.NotEqual(baseline.ToCacheKey(), one.ToCacheKey());
+        Assert.Equal(one.ToCacheKey(), sameWithNoise.ToCacheKey());
+        Assert.Equal(4, new[] { baseline, one, other, two }.Select(p => p.ToCacheKey()).Distinct().Count());
+    }
+
     // ---- Clave de caché ----
 
     [Fact]

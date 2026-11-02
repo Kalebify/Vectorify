@@ -90,6 +90,25 @@ public sealed class PythonVectorLayerClientTests
         Assert.Empty(layerA.RasterValidation.Warnings);
     }
 
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public async Task VectorizeLayersAsync_SendsTheSharedBoundariesFlagOnlyWhenRequested(bool sharedBoundaries, bool expectedInBody)
+    {
+        string? body = null;
+        var client = CreateClient(async (request, _) =>
+        {
+            body = await request.Content!.ReadAsStringAsync();
+            return JsonResponse(HttpStatusCode.OK, SuccessBody(GroupA, GroupB));
+        });
+
+        var result = await client.VectorizeLayersAsync(SampleMasks(), sharedBoundaries);
+
+        Assert.Equal(PythonVectorLayerState.Success, result.State);
+        Assert.NotNull(body);
+        Assert.Equal(expectedInBody, body!.Contains("name=shared_boundaries"));
+    }
+
     [Fact]
     public async Task VectorizeLayersAsync_WhenRasterValidationHasWarnings_PropagatesThemVerbatim()
     {

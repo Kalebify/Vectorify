@@ -261,3 +261,113 @@ describe("ColorPalettePanel — familias, piezas y fondo (CA-02, CA-06)", () => 
     expect(JSON.parse(String(init.body))).toEqual({ groupId: "g3", isExcluded: false });
   });
 });
+
+describe("ColorPalettePanel — corrección manual del fondo (nota de QA del 28/10)", () => {
+  async function detected(overrides: Record<string, unknown> = {}) {
+    const fetch = vi.fn(() => Promise.resolve(respond(familiesPalette(overrides))));
+    vi.stubGlobal("fetch", fetch);
+    renderPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Detectar paleta" }));
+    await waitFor(() => expect(screen.getByText("Familias del dibujo")).toBeInTheDocument());
+    return fetch;
+  }
+
+  function overlay(): SVGSVGElement {
+    return screen.getByRole("img", { name: "Zonas marcadas como no fondo" }) as unknown as SVGSVGElement;
+  }
+
+  function drawZone(points: [number, number][]) {
+    fireEvent.click(screen.getByRole("button", { name: "Marcar zona que NO es fondo" }));
+    const svg = overlay();
+    // jsdom no calcula el layout: el recuadro de la superposición es de 100x100 px sobre una imagen de 10x10.
+    svg.getBoundingClientRect = () => ({ left: 0, top: 0, width: 100, height: 100, right: 100, bottom: 100, x: 0, y: 0, toJSON: () => ({}) });
+    for (const [x, y] of points) {
+      fireEvent.click(svg, { clientX: x * 10, clientY: y * 10 });
+    }
+  }
+
+  it("ofrece corregir el fondo sobre la imagen original sin cambiar nada hasta aplicar", async () => {
+    const fetch = await detected();
+
+    const review = screen.getByRole("region", { name: "Revisión del fondo" });
+    expect(within(review).getByRole("heading", { name: "Corregir el fondo" })).toBeInTheDocument();
+    expect(within(review).getByText(/Nada cambia hasta que apliques las zonas/)).toBeInTheDocument();
+    expect(within(review).getByRole("button", { name: "Aplicar zonas y detectar de nuevo" })).toBeDisabled();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("dibuja una zona con clic, la cierra con tres vértices o más y la deja como pendiente", async () => {
+    await detected();
+
+    drawZone([[1, 1], [8, 1]]);
+    const close = screen.getByRole("button", { name: /Cerrar zona/ });
+    expect(close).toBeDisabled();
+    fireEvent.click(overlay(), { clientX: 80, clientY: 80 });
+    expect(close).toBeEnabled();
+    fireEvent.click(close);
+
+    const list = screen.getByRole("list", { name: "Zonas marcadas como no fondo" });
+    expect(within(list).getByText(/Zona 1 · 3 vértices/)).toBeInTheDocument();
+    expect(screen.getByText(/Hay zonas sin aplicar/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Aplicar zonas y detectar de nuevo" })).toBeEnabled();
+  });
+
+  it("aplicar envía las zonas en píxeles de la imagen y pide re-detectar la misma sesión", async () => {
+    const fetch = await detected();
+    drawZone([[1, 1], [8, 1], [8, 8]]);
+    fireEvent.click(screen.getByRole("button", { name: /Cerrar zona/ }));
+    fetch.mockResolvedValueOnce(
+      respond(familiesPalette({ version: 2, backgroundCorrections: [{ points: [[1, 1], [8, 1], [8, 8]] }] })),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Aplicar zonas y detectar de nuevo" }));
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    expect(lastBody(fetch)).toMatchObject({
+      paletteId: PALETTE_ID,
+      groupingStyle: "base_colors",
+      backgroundCorrections: [{ points: [[1, 1], [8, 1], [8, 8]] }],
+    });
+    await waitFor(() => expect(screen.queryByText(/Hay zonas sin aplicar/)).not.toBeInTheDocument());
+    expect(screen.getByText(/Zona 1 · 3 vértices/)).toBeInTheDocument();
+  });
+
+  it("quitar una zona la saca de la próxima detección y puede deshacerse un vértice o cancelar el dibujo", async () => {
+    const fetch = await detected({ backgroundCorrections: [{ points: [[1, 1], [8, 1], [8, 8]] }] });
+    expect(screen.getByText(/Zona 1 · 3 vértices/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Marcar zona que NO es fondo" }));
+    fireEvent.click(overlay(), { clientX: 10, clientY: 10 });
+    expect(screen.getByRole("button", { name: /Cerrar zona \(1 vértices\)/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Deshacer vértice" }));
+    expect(screen.getByRole("button", { name: /Cerrar zona \(0 vértices\)/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(screen.getByRole("button", { name: "Marcar zona que NO es fondo" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Quitar zona 1" }));
+    expect(screen.queryByRole("list", { name: "Zonas marcadas como no fondo" })).not.toBeInTheDocument();
+    fetch.mockResolvedValueOnce(respond(familiesPalette({ version: 2 })));
+    fireEvent.click(screen.getByRole("button", { name: "Aplicar zonas y detectar de nuevo" }));
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    expect(lastBody(fetch).backgroundCorrections).toBeUndefined();
+  });
+
+  it("la detección normal sin zonas no envía correcciones y en estilo detallado nunca se envían", async () => {
+    const fetch = await detected();
+    fetch.mockResolvedValueOnce(respond(familiesPalette({ version: 2 })));
+
+    fireEvent.click(screen.getByRole("button", { name: "Detectar de nuevo" }));
+
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    expect(lastBody(fetch).backgroundCorrections).toBeUndefined();
+  });
+
+  it("con la paleta confirmada no se puede dibujar ni aplicar nada", async () => {
+    await detected({ isConfirmed: true, backgroundCorrections: [{ points: [[1, 1], [8, 1], [8, 8]] }] });
+
+    expect(screen.getByRole("button", { name: "Marcar zona que NO es fondo" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Quitar zona 1" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Aplicar zonas y detectar de nuevo" })).toBeDisabled();
+  });
+});

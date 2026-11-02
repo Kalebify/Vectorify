@@ -141,6 +141,7 @@ class ColorPaletteService:
                 params.tiny_area_ratio,
                 params.target_families,
                 params.grouping_strength,
+                [correction.points for correction in params.background_corrections],
             )
         else:
             future = executor.submit(
