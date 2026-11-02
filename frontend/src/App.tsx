@@ -432,7 +432,9 @@ function App() {
     clearWorkspaceRecoveryPointer();
   };
 
-  const handleProjectCreated = (project: UploadImageResponse | null) => {
+  // UploadPanel uses this callback in its success effect. Keep it stable so
+  // changing modes or downstream settings does not restart the same project.
+  const handleProjectCreated = useCallback((project: UploadImageResponse | null) => {
     setVectorizationMode("color");
     setHasUsedMonochrome(false);
     setConfirmedPalette(null);
@@ -446,7 +448,7 @@ function App() {
     setReadySimplification(null);
     setReadyDimension(null);
     setActiveProject(project);
-  };
+  }, []);
 
   // M2-S02 (Layers) consume la paleta CONFIRMADA de M2-S01: recién ahí se
   // activa el panel de capas. Independiente del resto del pipeline de MVP1
@@ -733,7 +735,7 @@ function App() {
               máscara binaria apta para vectorizar. El preview preprocesado nunca se modifica.
             </p>
             <ThresholdPanel
-              key={`${activeProject.projectId}-${activeProject.imageId}-${readyPreview.previewId}`}
+              key={`${activeProject.projectId}-${activeProject.imageId}`}
               projectId={activeProject.projectId}
               imageId={activeProject.imageId}
               fileName={activeProject.filename}
